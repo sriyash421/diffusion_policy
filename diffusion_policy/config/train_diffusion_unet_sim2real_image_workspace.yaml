@@ -110,7 +110,7 @@ training:
   gradient_accumulate_every: 1
   use_ema: True
   freeze_encoder: False
-  mixed_precision: no
+  # mixed_precision: no
   # training loop control
   # in epochs
   rollout_every: 50

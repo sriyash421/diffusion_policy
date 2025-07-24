@@ -67,7 +67,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # accelerator
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = Accelerator(
-            mixed_precision=cfg.training.mixed_precision,
+            # mixed_precision=cfg.training.mixed_precision,
             kwargs_handlers=[ddp_kwargs]
         )
         # do not save optimizer if resume=False
