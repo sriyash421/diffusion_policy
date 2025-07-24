@@ -21,10 +21,7 @@ from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
 
 DEFAULT_OBS_KEY_MAP = {
     # robot
-    'ActualTCPPose': 'end_effector_pose',
-    'ActualTCPSpeed': 'end_effector_vel',
     'ActualQ': 'arm_joint_pos',
-    'ActualQd': 'arm_joint_vel',
     # timestamps
     'step_idx': 'step_idx',
     'timestamp': 'timestamp'
@@ -51,7 +48,7 @@ class RealEnv:
             tcp_offset=0.13,
             init_joints=False,
             # gripper
-            gripper_ip="192.168.1.2",
+            gripper_ip="192.168.1.10",
             gripper_port=63352,
             # video capture params
             video_capture_fps=30,
@@ -283,8 +280,13 @@ class RealEnv:
                     this_idx = is_before_idxs[-1]
                 this_idxs.append(this_idx)
             # remap key
-            camera_obs[f'camera_{camera_idx}'] = value['color'][this_idxs]
-
+            if camera_idx == 0:
+                camera_obs[f'front_rgb'] = value['color'][this_idxs]
+            elif camera_idx == 1:
+                camera_obs[f'side_rgb'] = value['color'][this_idxs]
+            else:
+                camera_obs[f'wrist_rgb'] = value['color'][this_idxs]
+        
         # align robot obs
         robot_timestamps = last_robot_data['robot_receive_timestamp']
         this_timestamps = robot_timestamps
@@ -312,9 +314,48 @@ class RealEnv:
                 robot_timestamps
             )
 
+        # still need to test if this works
+        last_actions = dict()
+        if self.action_accumulator is not None and self.action_accumulator.actions.shape[0] > 0:
+            action_timestamps = self.action_accumulator.actual_timestamps
+            this_timestamps = action_timestamps
+            this_idxs = list()
+            for t in obs_align_timestamps:
+                is_before_idxs = np.nonzero(this_timestamps < t)[0]
+                this_idx = 0
+                if len(is_before_idxs) > 0:
+                    this_idx = is_before_idxs[-1]
+                this_idxs.append(this_idx)
+            
+            if(len(this_idxs) > self.action_accumulator.actions.shape[0]):
+                last_actions_raw = self.action_accumulator.actions[this_idxs[:self.action_accumulator.actions.shape[0]]]
+            else:
+                last_actions_raw = self.action_accumulator.actions[this_idxs]
+
+            if last_actions_raw.shape[0] < self.n_obs_steps:
+                pad_size = self.n_obs_steps - last_actions_raw.shape[0]
+                last_actions_raw = np.pad(
+                    last_actions_raw, 
+                    ((pad_size, 0), (0, 0)), 
+                    mode='constant', 
+                    constant_values=0.0
+                )
+
+            last_actions = {
+                'last_arm_action': last_actions_raw[:,:6],
+                'last_gripper_action': last_actions_raw[:,6:7] 
+            }
+        else:
+            placeholder = np.zeros((self.n_obs_steps, 7))
+            last_actions = {
+                'last_arm_action': placeholder[:,:6],
+                'last_gripper_action': placeholder[:,6:7]
+            }
+        
         # return obs
         obs_data = dict(camera_obs)
         obs_data.update(robot_obs)
+        obs_data.update(last_actions)
         obs_data['timestamp'] = obs_align_timestamps
         return obs_data
     
@@ -387,7 +428,6 @@ class RealEnv:
                 joints=new_joint_actions[i],
                 duration=1.0
             )
-        
         # record unified actions
         if self.action_accumulator is not None:
             self.action_accumulator.put(

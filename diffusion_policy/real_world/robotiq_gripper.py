@@ -58,8 +58,8 @@ class RobotiqGripper:
         :param socket_timeout: Timeout for blocking socket operations.
         """
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((hostname, port))
         self.socket.settimeout(socket_timeout)
+        self.socket.connect((hostname, port))
 
     def disconnect(self) -> None:
         """Closes the connection with the gripper."""
@@ -289,20 +289,20 @@ class RobotiqGripper:
         final_pos = self._get_var(self.POS)
         final_obj = cur_obj
         return final_pos, RobotiqGripper.ObjectStatus(final_obj)
-    
+
 
 if __name__ == "__main__":
     # Example usage
     gripper = RobotiqGripper()
     print("Connecting to gripper...")
-    gripper.connect("192.168.1.2", 63352)  # Replace with your gripper's IP and port
+    gripper.connect("192.168.1.10", 63352)  # Replace with your gripper's IP and port
     print("Connected to gripper.")
     gripper.activate()
 
     # Move to open position
-    position, status = gripper.move_and_wait_for_pos(gripper.get_open_position(), 64, 1)
+    position, status = gripper.move_and_wait_for_pos(gripper.get_open_position(), 64, 255)
     print(f"Moved to open position: {position}, Status: {status.name}")
 
     # Move to closed position
-    position, status = gripper.move_and_wait_for_pos(gripper.get_closed_position(), 64, 1)
+    position, status = gripper.move_and_wait_for_pos(gripper.get_closed_position(), 64, 255)
     print(f"Moved to closed position: {position}, Status: {status.name}")

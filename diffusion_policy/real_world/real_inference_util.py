@@ -1,6 +1,7 @@
 from typing import Dict, Callable, Tuple
 import numpy as np
 from diffusion_policy.common.cv2_util import get_image_transform
+import matplotlib.pyplot as plt
 
 def get_real_obs_dict(
         env_obs: Dict[str, np.ndarray], 
@@ -46,6 +47,62 @@ def get_real_obs_resolution(
         shape = attr.get('shape')
         if type == 'rgb':
             co,ho,wo = shape
+            if out_res is None:
+                out_res = (wo, ho)
+            assert out_res == (wo, ho)
+    return out_res
+
+def get_real_obs_ours(
+        env_obs: Dict[str, np.ndarray], 
+        shape_meta: dict,
+        ) -> Dict[str, np.ndarray]:
+    obs_dict_np = dict()
+    obs_shape_meta = shape_meta['all_shapes']
+    for key, attr in obs_shape_meta.items():
+        if 'rgb' in key:
+            this_imgs_in = env_obs[key]
+            t,hi,wi,ci = this_imgs_in.shape
+            co,ho,wo = attr
+            assert ci == co
+            out_imgs = this_imgs_in
+            if (ho != hi) or (wo != wi) or (this_imgs_in.dtype == np.uint8):
+                tf = get_image_transform(
+                    input_res=(wi,hi), 
+                    output_res=(wo,ho), 
+                    bgr_to_rgb=False)
+                out_imgs = np.stack([tf(x) for x in this_imgs_in])
+                if this_imgs_in.dtype == np.uint8:
+                    out_imgs = out_imgs.astype(np.float32) / 255
+            # THWC to TCHW
+            obs_dict_np[key] = np.moveaxis(out_imgs, -1, 1)[0]
+
+            img_np = np.moveaxis(obs_dict_np[key], 0, -1)  # C H W → H W C
+            # plt.figure(figsize=(5,5))
+            # plt.imshow(img_np)
+            # plt.title(f"{key} | {env_obs_key}")
+            # plt.axis('off')
+            # plt.show()
+        else:
+            if key == "last_gripper_action":
+                obs_dict_np['last_gripper_action'] = env_obs[key][-1]
+            else:
+                obs_dict_np[key] = env_obs[key]
+            # if 'pose' in key and shape == (2,):
+            #     # take X,Y coordinates
+            #     this_data_in = this_data_in[...,[0,1]]
+            # TODO: last_arm_action should be action, not achieved observation
+            
+    return obs_dict_np
+
+
+def get_real_obs_resolution_ours(
+        shape_meta: dict
+        ) -> Tuple[int, int]:
+    out_res = None
+    obs_shape_meta = shape_meta['all_shapes']
+    for key, attr in obs_shape_meta.items():
+        if 'rgb' in key:
+            co,ho,wo = attr
             if out_res is None:
                 out_res = (wo, ho)
             assert out_res == (wo, ho)

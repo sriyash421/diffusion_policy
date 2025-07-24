@@ -51,7 +51,8 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
             MelloInterface(**mello_kwargs) as mello, \
             RealEnv(
                 output_dir=output, 
-                robot_ip=robot_ip, 
+                robot_ip=robot_ip,
+                gripper_ip=robot_ip,  # Assuming gripper is on the same IP
                 # recording resolution
                 obs_image_resolution=(640,480),
                 frequency=frequency,
