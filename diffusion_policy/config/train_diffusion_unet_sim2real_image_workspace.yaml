@@ -39,7 +39,7 @@ policy:
     shape_meta: ${shape_meta}
     rgb_model:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet50
+      name: resnet18
       weights: IMAGENET1K_V1
       feature_dim: 128
     resize_shape: null
@@ -78,14 +78,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 128
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 128
   num_workers: 8
   shuffle: False
   pin_memory: True
