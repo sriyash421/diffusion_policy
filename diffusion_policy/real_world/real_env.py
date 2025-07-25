@@ -283,9 +283,9 @@ class RealEnv:
             if camera_idx == 0:
                 camera_obs[f'front_rgb'] = value['color'][this_idxs]
             elif camera_idx == 1:
-                camera_obs[f'side_rgb'] = value['color'][this_idxs]
-            else:
                 camera_obs[f'wrist_rgb'] = value['color'][this_idxs]
+            else:
+                camera_obs[f'side_rgb'] = value['color'][this_idxs]
         
         # align robot obs
         robot_timestamps = last_robot_data['robot_receive_timestamp']
@@ -346,10 +346,11 @@ class RealEnv:
                 'last_gripper_action': last_actions_raw[:,6:7] 
             }
         else:
-            placeholder = np.zeros((self.n_obs_steps, 7))
+            values = self.robot.get_state()['ActualQ']
+            obs_array = np.tile(values, (self.n_obs_steps, 1))
             last_actions = {
-                'last_arm_action': placeholder[:,:6],
-                'last_gripper_action': placeholder[:,6:7]
+                'last_arm_action': obs_array[:,:6],
+                'last_gripper_action': np.zeros((self.n_obs_steps, 1))
             }
         
         # return obs
@@ -390,7 +391,8 @@ class RealEnv:
             raise ValueError(f"Actions must have 7 dimensions (6 joints + 1 gripper), got shape {actions.shape}")
 
         # Separate joint and gripper actions
-        joint_actions = actions[:, :6]
+        joint_actions = (actions * (0.02,0.02,0.02,0.02,0.02,0.2,1.0))[:, :6]  # Joint positions
+        joint_actions += self.robot.get_state()['ActualQ']
         gripper_actions = actions[:, 6]
 
         # convert action to joint positions

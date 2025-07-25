@@ -168,7 +168,6 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
 
                         # get obs
-                        print('get_obs')
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
                         print(f'Obs latency {time.time() - obs_timestamps[-1]}')
@@ -216,21 +215,21 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         print(f"Submitted {len(this_target_poses)} steps of actions.")
 
                         # visualize
-                        episode_id = env.replay_buffer.n_episodes
-                        vis_img = obs[f'camera_{vis_camera_idx}'][-1]
-                        text = 'Episode: {}, Time: {:.1f}'.format(
-                            episode_id, time.monotonic() - t_start
-                        )
-                        cv2.putText(
-                            vis_img,
-                            text,
-                            (10,20),
-                            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                            fontScale=0.5,
-                            thickness=1,
-                            color=(255,255,255)
-                        )
-                        cv2.imshow('default', vis_img[...,::-1])
+                        # episode_id = env.replay_buffer.n_episodes
+                        # vis_img = obs[f'camera_{vis_camera_idx}'][-1]
+                        # text = 'Episode: {}, Time: {:.1f}'.format(
+                        #     episode_id, time.monotonic() - t_start
+                        # )
+                        # cv2.putText(
+                        #     vis_img,
+                        #     text,
+                        #     (10,20),
+                        #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        #     fontScale=0.5,
+                        #     thickness=1,
+                        #     color=(255,255,255)
+                        # )
+                        # cv2.imshow('default', vis_img[...,::-1])
 
 
                         key_stroke = cv2.pollKey()
