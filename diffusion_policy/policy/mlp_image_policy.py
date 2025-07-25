@@ -36,8 +36,9 @@ class MLPImagePolicy(BaseImagePolicy):
         input_dim = obs_feature_dim * n_obs_steps
         output_dim = action_dim * 2  # mean and log_std
         self.mlp = mlp(input_dim, hidden_dim, output_dim, hidden_depth)
-        self.log_std_min = -20
-        self.log_std_max = 2
+        self.init_std = 0.3
+        self.mean_limits = (-9.0, 9.0)
+        self.std_limits = (0.007, 7.5)
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         assert 'past_action' not in obs_dict
@@ -57,15 +58,17 @@ class MLPImagePolicy(BaseImagePolicy):
         mlp_input = nobs_features.reshape(B, -1)
         # Predict mean and log_std
         mlp_out = self.mlp(mlp_input)
-        mean, log_std = torch.chunk(mlp_out, 2, dim=-1)
-        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        mean, std_param = torch.chunk(mlp_out, 2, dim=-1)
+        mean = torch.clamp(mean, min=self.mean_limits[0], max=self.mean_limits[1])
+        std = F.softplus(std_param) * (self.init_std / F.softplus(torch.zeros(1, device=std_param.device)))
+        std = torch.clamp(std, min=self.std_limits[0], max=self.std_limits[1])
         action_pred = self.normalizer['action'].unnormalize(mean)
         action = action_pred  # deterministic: mean
         return {
             'action': action,
             'action_pred': action_pred,
             'mean': mean,
-            'log_std': log_std
+            'log_std': std_param
         }
 
     def set_normalizer(self, normalizer: LinearNormalizer):
@@ -90,10 +93,11 @@ class MLPImagePolicy(BaseImagePolicy):
         target = nactions[:, To-1:To+Ta-1]
         # Predict mean and log_std
         mlp_out = self.mlp(mlp_input)
-        mean, log_std = torch.chunk(mlp_out, 2, dim=-1)
-        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-        std = log_std.exp()
-        dist = torch.distributions.Normal(mean, std)
+        mean, std_param = torch.chunk(mlp_out, 2, dim=-1)
+        mean = torch.clamp(mean, min=self.mean_limits[0], max=self.mean_limits[1])
+        std = F.softplus(std_param) * (self.init_std / F.softplus(torch.zeros(1, device=std_param.device)))
+        std = torch.clamp(std, min=self.std_limits[0], max=self.std_limits[1])
+        dist = torch.distributions.Independent(torch.distributions.Normal(mean, std), 1)
         log_prob = dist.log_prob(target)
         loss = -log_prob.sum(dim=-1).mean()
         return loss 
