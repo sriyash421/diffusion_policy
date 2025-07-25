@@ -16,7 +16,7 @@ class MLPImagePolicy(BaseImagePolicy):
             n_action_steps: int,
             n_obs_steps: int,
             hidden_dim: int = 512,
-            hidden_depth: int = 2,
+            hidden_depth: int = 4,
             **kwargs):
         assert n_action_steps == 1, "MLPImagePolicy only supports n_action_steps=1"
         
