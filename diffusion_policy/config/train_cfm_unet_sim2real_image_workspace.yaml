@@ -102,7 +102,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: cfm_policy_sim2real_image
+  project: diffusion_policy_sim2real_image
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
