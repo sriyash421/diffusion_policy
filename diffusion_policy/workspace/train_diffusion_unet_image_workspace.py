@@ -186,7 +186,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                        raw_loss, log_dict = self.accelerator.unwrap_model(self.model).compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
@@ -204,6 +204,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             'epoch': self.epoch,
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
+                        step_log.update(log_dict)
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:

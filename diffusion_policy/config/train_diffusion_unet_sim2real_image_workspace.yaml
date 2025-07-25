@@ -68,6 +68,7 @@ policy:
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
+  aux_loss_weight: 1.0
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel

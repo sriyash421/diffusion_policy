@@ -41,6 +41,10 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.lowdim_keys = [
             k for k, v in shape_meta['obs'].items()
             if v.get('type', 'low_dim') == 'low_dim']
+        if shape_meta.get('auxiliary_obs', None) is not None:
+            self.lowdim_keys.extend([
+                k for k, v in shape_meta['auxiliary_obs'].items()
+            ])
 
         # Create key_first_k for performance optimization
         key_first_k = dict()
