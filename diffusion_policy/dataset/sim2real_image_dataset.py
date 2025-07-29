@@ -85,6 +85,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         z = zarr.open(dataset_path, mode='r')
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
+        reward_arr = z['data']['rewards']
         episode_ends = z['meta']['episode_ends']
 
         # Create replay buffer
@@ -102,6 +103,12 @@ class Sim2RealImageDataset(BaseImageDataset):
             replay_buffer.root['data']['action'] = action_arr[:]
         else:
             replay_buffer.root['data']['action'] = action_arr
+
+        # Add rewards
+        if use_cache:
+            replay_buffer.root['data']['reward'] = reward_arr[:]
+        else:
+            replay_buffer.root['data']['reward'] = reward_arr
 
         # Add episode metadata
         if use_cache:
@@ -131,8 +138,11 @@ class Sim2RealImageDataset(BaseImageDataset):
         for key in self.lowdim_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
                 self.replay_buffer[key])
+        # don't normalize rgb, obs_encoder has image_net norm
         for key in self.rgb_keys:
-            normalizer[key] = get_image_range_normalizer()
+            normalizer[key] = SingleFieldLinearNormalizer.create_identity()
+        # for key in self.rgb_keys:
+        #     normalizer[key] = get_image_range_normalizer()
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
@@ -171,9 +181,11 @@ class Sim2RealImageDataset(BaseImageDataset):
         # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
             action = action[self.n_latency_steps:]
+        reward = data['reward'].astype(np.float32)
 
         torch_data = {
             'obs': dict_apply(obs_dict, torch.from_numpy),
-            'action': torch.from_numpy(action)
+            'action': torch.from_numpy(action),
+            'reward': torch.from_numpy(reward)
         }
         return torch_data
