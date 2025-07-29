@@ -29,13 +29,13 @@ policy:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
       name: resnet18
       weights: IMAGENET1K_V1
-      feature_dim: 128
     resize_shape: null
     crop_shape: null
     random_crop: False
     use_group_norm: True
     share_rgb_model: False
     imagenet_norm: True
+    feature_dim: 256
   horizon: ${horizon}
   n_action_steps: ${n_action_steps}
   n_obs_steps: ${n_obs_steps}
