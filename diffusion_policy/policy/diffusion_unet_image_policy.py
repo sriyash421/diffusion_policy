@@ -79,9 +79,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         if shape_meta.get('auxiliary_obs', None) is not None:
             self.aux_decoders = nn.ModuleDict({
                 key: nn.Sequential(
-                    nn.Linear(obs_encoder.output_shape()[0], 8),
-                    nn.ReLU(),
-                    nn.Linear(8, value.shape[0])
+                    nn.Linear(obs_encoder.output_shape()[0], value.shape[0])
                 )
                 for key, value in shape_meta['auxiliary_obs'].items()
             })
