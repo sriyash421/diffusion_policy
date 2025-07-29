@@ -70,7 +70,8 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             # renormalize rgb input with imagenet normalization
             # assuming input in [0,1]
             imagenet_norm: bool=False,
-            extra_randomizations=None
+            extra_randomizations=None,
+            feature_dim: int=None,
         ):
         """
         Assumes rgb input: B,C,H,W
@@ -189,6 +190,8 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         self.rgb_keys = rgb_keys
         self.low_dim_keys = low_dim_keys
         self.key_shape_map = key_shape_map
+        self.feature_dim = feature_dim
+        self.projector = None
 
     def forward(self, obs_dict):
         batch_size = None
@@ -242,6 +245,16 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         
         # concatenate all features
         result = torch.cat(features, dim=-1)
+
+        if self.feature_dim is not None:
+            if self.projector is None:
+                self.projector = nn.Sequential(
+                    nn.Linear(result.shape[-1], self.feature_dim * 2),
+                    nn.ReLU(),
+                    nn.Linear(self.feature_dim * 2, self.feature_dim)
+                )
+            result = self.projector(result)
+
         return result
     
     @torch.no_grad()
