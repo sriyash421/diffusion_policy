@@ -277,7 +277,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
                 decoder = self.aux_decoders[key]
                 target = nobs[key].reshape(-1, *nobs[key].shape[2:])
                 pred = decoder(nobs_features)
-                preds.append(pred)
+                preds.append(pred.detach())
                 aux_loss = F.mse_loss(pred, target, reduction='mean')
                 aux_losses[key] = aux_loss
             aux_loss_mean = torch.stack(list(aux_losses.values())).mean()
