@@ -69,7 +69,7 @@ policy:
   n_groups: 8
   cond_predict_scale: True
   aux_loss_weight: 1.0
-  aux_as_input: True
+  aux_as_input: False
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
