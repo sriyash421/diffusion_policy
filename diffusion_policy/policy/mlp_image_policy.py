@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,7 +7,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.model.bet.utils import mlp
+from torch.distributions import Normal
 
 class MLPImagePolicy(BaseImagePolicy):
     def __init__(self,
@@ -32,13 +32,33 @@ class MLPImagePolicy(BaseImagePolicy):
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
         self.kwargs = kwargs
+        
         # Input: all obs steps concatenated
         input_dim = obs_feature_dim * n_obs_steps
-        output_dim = action_dim * 2  # mean and log_std
-        self.mlp = mlp(input_dim, hidden_dim, output_dim, hidden_depth)
-        self.init_std = 0.3
-        self.mean_limits = (-9.0, 9.0)
-        self.std_limits = (0.007, 7.5)
+        
+        # Shared trunk
+        layers = []
+        last_dim = input_dim
+        for _ in range(hidden_depth):
+            layers += [nn.Linear(last_dim, hidden_dim), nn.ReLU()]
+            last_dim = hidden_dim
+        self.trunk = nn.Sequential(*layers)
+        
+        # Separate heads for mean and log std
+        self.mean_head = nn.Linear(last_dim, action_dim)
+        self.log_std_head = nn.Linear(last_dim, action_dim)
+        
+        self.log_std_limits = (-20.0, 2.0)
+
+    def forward(self, obs_features: torch.Tensor) -> Normal:
+        """
+        Returns a Normal(mean, std) distribution over actions given observation features.
+        """
+        h = self.trunk(obs_features)
+        mean = self.mean_head(h)
+        log_std = self.log_std_head(h).clamp(min=self.log_std_limits[0], max=self.log_std_limits[1])
+        std = torch.exp(log_std)
+        return Normal(mean, std)
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         assert 'past_action' not in obs_dict
@@ -56,19 +76,14 @@ class MLPImagePolicy(BaseImagePolicy):
         nobs_features = self.obs_encoder(this_nobs)
         nobs_features = nobs_features.reshape(B, To, -1)
         mlp_input = nobs_features.reshape(B, -1)
-        # Predict mean and log_std
-        mlp_out = self.mlp(mlp_input)
-        mean, std_param = torch.chunk(mlp_out, 2, dim=-1)
-        mean = torch.clamp(mean, min=self.mean_limits[0], max=self.mean_limits[1])
-        std = F.softplus(std_param) * (self.init_std / F.softplus(torch.zeros(1, device=std_param.device)))
-        std = torch.clamp(std, min=self.std_limits[0], max=self.std_limits[1])
-        action_pred = self.normalizer['action'].unnormalize(mean)
-        action = action_pred  # deterministic: mean
+        
+        # Get action distribution
+        dist = self.forward(mlp_input)
+        action_pred = dist.rsample()  # Sample from distribution
+        action = self.normalizer['action'].unnormalize(action_pred)
         return {
             'action': action,
-            'action_pred': action_pred,
-            'mean': mean,
-            'log_std': std_param
+            'action_pred': action_pred
         }
 
     def set_normalizer(self, normalizer: LinearNormalizer):
@@ -81,6 +96,7 @@ class MLPImagePolicy(BaseImagePolicy):
         To = self.n_obs_steps
         Ta = self.n_action_steps
         Da = self.action_dim
+        
         # Encode obs
         if isinstance(nobs, dict):
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
@@ -89,15 +105,14 @@ class MLPImagePolicy(BaseImagePolicy):
         nobs_features = self.obs_encoder(this_nobs)
         nobs_features = nobs_features.reshape(B, To, -1)
         mlp_input = nobs_features.reshape(B, -1)
+        
         # Target: only predict the next n_action_steps
-        target = nactions[:, To-1:To+Ta-1]
-        # Predict mean and log_std
-        mlp_out = self.mlp(mlp_input)
-        mean, std_param = torch.chunk(mlp_out, 2, dim=-1)
-        mean = torch.clamp(mean, min=self.mean_limits[0], max=self.mean_limits[1])
-        std = F.softplus(std_param) * (self.init_std / F.softplus(torch.zeros(1, device=std_param.device)))
-        std = torch.clamp(std, min=self.std_limits[0], max=self.std_limits[1])
-        dist = torch.distributions.Independent(torch.distributions.Normal(mean, std), 1)
-        log_prob = dist.log_prob(target)
-        loss = -log_prob.sum(dim=-1).mean()
+        assert Ta == 1, "MLPImagePolicy only supports n_action_steps=1"
+        target = nactions[:, To-1:To+Ta-1].squeeze()
+        
+        # Get action distribution and compute loss
+        dist = self.forward(mlp_input)
+        log_prob = dist.log_prob(target).sum(dim=-1)
+        loss = -log_prob.mean()
+        
         return loss 
