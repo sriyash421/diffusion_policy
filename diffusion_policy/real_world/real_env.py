@@ -314,24 +314,11 @@ class RealEnv:
                 robot_timestamps
             )
 
-        # still need to test if this works
         last_actions = dict()
         if self.action_accumulator is not None and self.action_accumulator.actions.shape[0] > 0:
-            action_timestamps = self.action_accumulator.actual_timestamps
-            this_timestamps = action_timestamps
-            this_idxs = list()
-            for t in obs_align_timestamps:
-                is_before_idxs = np.nonzero(this_timestamps < t)[0]
-                this_idx = 0
-                if len(is_before_idxs) > 0:
-                    this_idx = is_before_idxs[-1]
-                this_idxs.append(this_idx)
+            last_actions_raw = self.action_accumulator.actions[-self.n_obs_steps:]
             
-            if(len(this_idxs) > self.action_accumulator.actions.shape[0]):
-                last_actions_raw = self.action_accumulator.actions[this_idxs[:self.action_accumulator.actions.shape[0]]]
-            else:
-                last_actions_raw = self.action_accumulator.actions[this_idxs]
-
+            # Pad if we don't have enough actions
             if last_actions_raw.shape[0] < self.n_obs_steps:
                 pad_size = self.n_obs_steps - last_actions_raw.shape[0]
                 last_actions_raw = np.pad(
@@ -391,9 +378,9 @@ class RealEnv:
             raise ValueError(f"Actions must have 7 dimensions (6 joints + 1 gripper), got shape {actions.shape}")
 
         # Separate joint and gripper actions
-        joint_actions = (actions * (0.02,0.02,0.02,0.02,0.02,0.2,1.0))[:, :6]  # Joint positions
+        joint_actions = actions[:, :6]  # Joint positions
         joint_actions += self.robot.get_state()['ActualQ']
-        gripper_actions = actions[:, 6]
+        gripper_actions = actions[:, 6:7]
 
         # convert action to joint positions
         receive_time = time.time()

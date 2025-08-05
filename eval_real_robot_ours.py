@@ -35,6 +35,7 @@ import math
 import skvideo.io
 from omegaconf import OmegaConf
 import scipy.spatial.transform as st
+from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.real_world.real_env import RealEnv
 from diffusion_policy.real_world.spacemouse_shared_memory import Spacemouse
 from diffusion_policy.common.precise_sleep import precise_wait
@@ -46,6 +47,7 @@ from diffusion_policy.real_world.real_inference_util import (
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
+from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
 from diffusion_policy.common.cv2_util import get_image_transform
 
 # Robomimic imports
@@ -85,24 +87,47 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                 episode_first_frame_map[episode_idx] = frames[0]
     print(f"Loaded initial frame for {len(episode_first_frame_map)} episodes")
     
-    # load checkpoint
-    device = TorchUtils.get_torch_device(try_to_use_cuda=True)
-    policy, config = FileUtils.policy_from_checkpoint(ckpt_path=input, device=device, verbose=True)
-    json_config = json.loads(config["config"])
+    # # load checkpoint
+    # device = TorchUtils.get_torch_device(try_to_use_cuda=True)
+    # policy, config = FileUtils.policy_from_checkpoint(ckpt_path=input, device=device, verbose=True)
+    # json_config = json.loads(config["config"])
 
-    #chaning the config bc its breaking stuff
+    ckpt_path = input
+    payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
+    cfg = payload['cfg']
+    cls = hydra.utils.get_class(cfg._target_)
+    workspace = cls(cfg)
+    workspace: BaseWorkspace
+    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
 
-    # setup experiment
+    # hacks for method-specific setup.
+    delta_action = False
+
+    assert 'diffusion' in cfg.name
+
+    # diffusion model
+    policy: BaseImagePolicy
+    policy = workspace.model
+    if cfg.training.use_ema:
+        policy = workspace.ema_model
+
+        device = torch.device('cuda')
+        policy.eval().to(device)
+
+        # set inference params
+        policy.num_inference_steps = 16 # DDIM inference iterations
+        policy.n_action_steps = policy.horizon - policy.n_obs_steps + 1
+        policy.set_normalizer(policy.normalizer)
+
+    # setup experiments
     dt = 1/frequency
 
-    obs_res = get_real_obs_resolution_ours(config['shape_metadata'])
-    n_obs_steps = json_config['train']['frame_stack']
-    action_offset = 0
+    obs_res = get_real_obs_resolution_ours(cfg['task']['shape_meta'])
+    n_obs_steps = cfg['n_obs_steps']
+    n_action_steps = cfg['n_action_steps']
     print("n_obs_steps: ", n_obs_steps)
-    print("steps_per_inference:", steps_per_inference)
-    print("action_offset:", action_offset)
-
-    dones = torch.ones(1, dtype=torch.bool, device=device)
+    print("steps_per_inference: ", steps_per_inference)
+    print("n_action_steps: ", n_action_steps)
 
     with SharedMemoryManager() as shm_manager:
         with Spacemouse(shm_manager=shm_manager) as sm, RealEnv(
@@ -125,7 +150,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             # Should be the same as demo
             # realsense exposure
             # TODO(pat)
-            env.realsense.set_exposure(exposure=500, gain=0)
+            env.realsense.set_exposure(exposure=300, gain=0)
             # realsense white balance
             env.realsense.set_white_balance(white_balance=2000)
 
@@ -136,33 +161,38 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             obs = env.get_obs()
 
             with torch.no_grad():
-                policy.start_episode(resets=dones)
-
+                policy.reset()
                 obs_dict_np = get_real_obs_ours(
-                    env_obs=obs, shape_meta=config['shape_metadata']
-                )
-                
+                    env_obs=obs, shape_meta=cfg['shape_meta'])
                 obs_dict = dict_apply(obs_dict_np,
                     lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
-                action = policy(obs_dict, batched=True)
+                try:
+                    result = policy.predict_action(obs_dict)
+                    action = result['action'][0].detach().to('cpu').numpy()
+                except Exception as e:
+                    print(e)
+
+            # initial target pose required
+            target_pose = env.get_robot_state()['TargetTCPPose']
 
             print('Ready!')
             while True:
                 # ========== policy control loop ==============
                 try:
                     # start episode
-                    policy.start_episode(resets=dones)
+                    policy.reset()
                     start_delay = 1.0
                     eval_t_start = time.time() + start_delay
                     t_start = time.monotonic() + start_delay
                     env.start_episode(eval_t_start)
-
                     # wait for 1/30 sec to get the closest frame actually
                     # reduces overall latency
                     frame_latency = 1/30
                     precise_wait(eval_t_start - frame_latency, time_func=time.time)
                     print("Started!")
                     iter_idx = 0
+                    term_area_start_timestamp = float('inf')
+                    perv_target_pose = None
                     while True:
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
@@ -176,20 +206,30 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         with torch.no_grad():
                             s = time.time()
                             obs_dict_np = get_real_obs_ours(
-                                env_obs=obs, shape_meta=config['shape_metadata']
+                                env_obs=obs, shape_meta=cfg['shape_meta']
                             )
                             obs_dict = dict_apply(obs_dict_np,
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
-                            action = policy(obs_dict, batched=True)
+                            result = policy.predict_action(obs_dict)
                             # this action starts from the first obs step
+                            action = result['action'][0].detach().to('cpu').numpy() 
                             print('Inference latency:', time.time() - s)
                         
                         # convert policy action to env actions
-                        this_target_poses = action
+                        if delta_action:
+                            assert len(action) == 1
+                            if perv_target_pose is None:
+                                perv_target_pose = obs['robot_eef_pose'][-1]
+                            this_target_pose = perv_target_pose.copy()
+                            this_target_pose[[0,1]] += action[-1]
+                            perv_target_pose = this_target_pose
+                            this_target_poses = np.expand_dims(this_target_pose, axis=0)
+                        else:
+                            this_target_poses = action.copy()
 
                         # deal with timing
                         # the same step actions are always the target for
-                        action_timestamps = (np.arange(len(action), dtype=np.float64) + action_offset
+                        action_timestamps = (np.arange(len(action), dtype=np.float64)
                             ) * dt + obs_timestamps[-1]
                         action_exec_latency = 0.01
                         curr_time = time.time()
@@ -206,14 +246,18 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             this_target_poses = this_target_poses[is_new]
                             action_timestamps = action_timestamps[is_new]
 
+                        # clip actions
+                        this_target_poses[:,:2] = np.clip(
+                            this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
+
                         # execute actions
                         env.exec_actions(
-                            actions=this_target_poses.cpu(),
-                            timestamps=action_timestamps
+                            actions=this_target_poses[:n_action_steps],
+                            timestamps=action_timestamps[:n_action_steps]
                         )
+                        print(f"Submitted {n_action_steps} steps of actions.")
 
-                        print(f"Submitted {len(this_target_poses)} steps of actions.")
-
+                        # Only causing an error because of camera names
                         # visualize
                         # episode_id = env.replay_buffer.n_episodes
                         # vis_img = obs[f'camera_{vis_camera_idx}'][-1]
@@ -245,6 +289,23 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         if time.monotonic() - t_start > max_duration:
                             terminate = True
                             print('Terminated by the timeout!')
+
+                        # term_pose = np.array([ 3.40948500e-01,  2.17721816e-01,  4.59076878e-02,  2.22014183e+00, -2.22184883e+00, -4.07186655e-04])
+                        # curr_pose = obs['robot_eef_pose'][-1]
+                        # dist = np.linalg.norm((curr_pose - term_pose)[:2], axis=-1)
+                        # if dist < 0.03:
+                        #     # in termination area
+                        #     curr_timestamp = obs['timestamp'][-1]
+                        #     if term_area_start_timestamp > curr_timestamp:
+                        #         term_area_start_timestamp = curr_timestamp
+                        #     else:
+                        #         term_area_time = curr_timestamp - term_area_start_timestamp
+                        #         if term_area_time > 0.5:
+                        #             terminate = True
+                        # #             print('Terminated by the policy!')
+                        # else:
+                        #     # out of the area
+                        #     term_area_start_timestamp = float('inf')
 
                         if terminate:
                             env.end_episode()

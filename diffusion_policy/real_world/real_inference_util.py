@@ -57,12 +57,12 @@ def get_real_obs_ours(
         shape_meta: dict,
         ) -> Dict[str, np.ndarray]:
     obs_dict_np = dict()
-    obs_shape_meta = shape_meta['all_shapes']
+    obs_shape_meta = shape_meta['obs']
     for key, attr in obs_shape_meta.items():
         if 'rgb' in key:
             this_imgs_in = env_obs[key]
             t,hi,wi,ci = this_imgs_in.shape
-            co,ho,wo = attr
+            co,ho,wo = attr['shape']
             assert ci == co
             out_imgs = this_imgs_in
             if (ho != hi) or (wo != wi) or (this_imgs_in.dtype == np.uint8):
@@ -74,7 +74,8 @@ def get_real_obs_ours(
                 if this_imgs_in.dtype == np.uint8:
                     out_imgs = out_imgs.astype(np.float32) / 255
             # THWC to TCHW
-            obs_dict_np[key] = np.moveaxis(out_imgs, -1, 1)[0]
+            #obs_dict_np[key] = np.moveaxis(out_imgs, -1, 1)[0]
+            obs_dict_np[key] = np.moveaxis(out_imgs, -1, 1)
 
             img_np = np.moveaxis(obs_dict_np[key], 0, -1)  # C H W → H W C
             # plt.figure(figsize=(5,5))
@@ -83,15 +84,8 @@ def get_real_obs_ours(
             # plt.axis('off')
             # plt.show()
         else:
-            if key == "last_gripper_action":
-                obs_dict_np['last_gripper_action'] = env_obs[key][-1]
-            else:
-                obs_dict_np[key] = env_obs[key]
-            # if 'pose' in key and shape == (2,):
-            #     # take X,Y coordinates
-            #     this_data_in = this_data_in[...,[0,1]]
-            # TODO: last_arm_action should be action, not achieved observation
-            
+            obs_dict_np[key] = env_obs[key]
+
     return obs_dict_np
 
 
@@ -99,10 +93,10 @@ def get_real_obs_resolution_ours(
         shape_meta: dict
         ) -> Tuple[int, int]:
     out_res = None
-    obs_shape_meta = shape_meta['all_shapes']
+    obs_shape_meta = shape_meta['obs']
     for key, attr in obs_shape_meta.items():
         if 'rgb' in key:
-            co,ho,wo = attr
+            co,ho,wo = attr['shape']
             if out_res is None:
                 out_res = (wo, ho)
             assert out_res == (wo, ho)
