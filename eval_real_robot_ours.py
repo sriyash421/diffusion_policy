@@ -88,7 +88,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     print(f"Loaded initial frame for {len(episode_first_frame_map)} episodes")
     
     # # load checkpoint
-    # device = TorchUtils.get_torch_device(try_to_use_cuda=True)
+    device = TorchUtils.get_torch_device(try_to_use_cuda=True)
     # policy, config = FileUtils.policy_from_checkpoint(ckpt_path=input, device=device, verbose=True)
     # json_config = json.loads(config["config"])
 
@@ -102,26 +102,18 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
     # hacks for method-specific setup.
     delta_action = False
-
-    assert 'diffusion' in cfg.name
-
-    # diffusion model
     policy: BaseImagePolicy
     policy = workspace.model
     if cfg.training.use_ema:
         policy = workspace.ema_model
 
-        device = torch.device('cuda')
         policy.eval().to(device)
 
-        # set inference params
         policy.num_inference_steps = 16 # DDIM inference iterations
         policy.n_action_steps = policy.horizon - policy.n_obs_steps + 1
-        policy.set_normalizer(policy.normalizer)
 
     # setup experiments
     dt = 1/frequency
-
     obs_res = get_real_obs_resolution_ours(cfg['task']['shape_meta'])
     n_obs_steps = cfg['n_obs_steps']
     n_action_steps = cfg['n_action_steps']
@@ -140,17 +132,18 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             init_joints=init_joints,
             enable_multi_cam_vis=True,
             record_raw_video=True,
+            rolling_action_buffer = True,
             # number of threads per camera view for video recording (H.264)
             thread_per_video=3,
             # video recording quality, lower is better (but slower).
+            rolling_action_buffer = True,
             video_crf=21,
             shm_manager=shm_manager) as env:
             cv2.setNumThreads(1)
 
             # Should be the same as demo
             # realsense exposure
-            # TODO(pat)
-            env.realsense.set_exposure(exposure=300, gain=0)
+            env.realsense.set_exposure(exposure=500, gain=0)
             # realsense white balance
             env.realsense.set_white_balance(white_balance=2000)
 
@@ -169,13 +162,16 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                 try:
                     result = policy.predict_action(obs_dict)
                     action = result['action'][0].detach().to('cpu').numpy()
+                    del result
                 except Exception as e:
                     print(e)
+                    del result
 
             # initial target pose required
             target_pose = env.get_robot_state()['TargetTCPPose']
 
             print('Ready!')
+            time.sleep(5.0)
             while True:
                 # ========== policy control loop ==============
                 try:
@@ -212,9 +208,9 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
                             result = policy.predict_action(obs_dict)
                             # this action starts from the first obs step
-                            action = result['action'][0].detach().to('cpu').numpy() 
+                            action = result['action'][0:1].detach().to('cpu').numpy() 
                             print('Inference latency:', time.time() - s)
-                        
+                            action = result['action'][0:1].detach().to('cpu').numpy() 
                         # convert policy action to env actions
                         if delta_action:
                             assert len(action) == 1
@@ -248,9 +244,9 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
                         # clip actions
                         this_target_poses[:,:2] = np.clip(
-                            this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
-
-                        # execute actions
+                        this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
+                        # this_target_poses[:,:2] = np.clip(
+                        # this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
                         env.exec_actions(
                             actions=this_target_poses[:n_action_steps],
                             timestamps=action_timestamps[:n_action_steps]

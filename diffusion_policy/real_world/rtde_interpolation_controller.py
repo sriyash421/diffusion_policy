@@ -6,18 +6,19 @@ from multiprocessing.managers import SharedMemoryManager
 import scipy.interpolate as si
 import scipy.spatial.transform as st
 import numpy as np
+
 from rtde_control import RTDEControlInterface
 from rtde_receive import RTDEReceiveInterface
 from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from diffusion_policy.real_world.pd import PD
 
 class Command(enum.Enum):
     STOP = 0
-    SERVOL = 1
-    SCHEDULE_WAYPOINT = 2
-    SERVOJ = 3  # Joint position control
+    SpeedPdJ = 1 # Joint Position Control: SpeedJ with PD control
+    
 
 
 class RTDEInterpolationController(mp.Process):
@@ -31,10 +32,9 @@ class RTDEInterpolationController(mp.Process):
             shm_manager: SharedMemoryManager, 
             robot_ip, 
             frequency=125, 
-            lookahead_time=0.1, 
-            gain=300,
-            max_pos_speed=0.25, # 5% of max speed
-            max_rot_speed=0.16, # 5% of max speed
+            acceleration=2.0,
+            Kp=1.0,
+            Kd=0.0,
             launch_timeout=3,
             tcp_offset_pose=None,
             payload_mass=None,
@@ -48,9 +48,8 @@ class RTDEInterpolationController(mp.Process):
             ):
         """
         frequency: CB2=125, UR3e=500
-        lookahead_time: [0.03, 0.2]s smoothens the trajectory with this lookahead time
-        gain: [100, 2000] proportional gain for following target position
-        max_pos_speed: m/s
+        Kp: proportional gain for following target position
+        Kd: derivative gain for following target position
         max_rot_speed: rad/s
         tcp_offset_pose: 6d pose
         payload_mass: float
@@ -61,10 +60,6 @@ class RTDEInterpolationController(mp.Process):
         """
         # verify
         assert 0 < frequency <= 500
-        assert 0.03 <= lookahead_time <= 0.2
-        assert 100 <= gain <= 2000
-        assert 0 < max_pos_speed
-        assert 0 < max_rot_speed
         if tcp_offset_pose is not None:
             tcp_offset_pose = np.array(tcp_offset_pose)
             assert tcp_offset_pose.shape == (6,)
@@ -81,10 +76,9 @@ class RTDEInterpolationController(mp.Process):
         super().__init__(name="RTDEPositionalController")
         self.robot_ip = robot_ip
         self.frequency = frequency
-        self.lookahead_time = lookahead_time
-        self.gain = gain
-        self.max_pos_speed = max_pos_speed
-        self.max_rot_speed = max_rot_speed
+        self.acceleration = acceleration
+        self.Kp = Kp
+        self.Kd = Kd
         self.launch_timeout = launch_timeout
         self.tcp_offset_pose = tcp_offset_pose
         self.payload_mass = payload_mass
@@ -96,7 +90,7 @@ class RTDEInterpolationController(mp.Process):
 
         # build input queue
         example = {
-            'cmd': Command.SERVOL.value,
+            'cmd': Command.SpeedPdJ.value,
             'target_pose': np.zeros((6,), dtype=np.float64),
             'target_joints': np.zeros((6,), dtype=np.float64),
             'duration': 0.0,
@@ -138,6 +132,13 @@ class RTDEInterpolationController(mp.Process):
         self.input_queue = input_queue
         self.ring_buffer = ring_buffer
         self.receive_keys = receive_keys
+
+        self.pd_controller = PD(
+            num_joints=6,
+            Kp=self.Kp,
+            Kd=self.Kd,
+            sample_time=None
+        )
     
     # ========= launch method ===========
     def start(self, wait=True):
@@ -175,23 +176,7 @@ class RTDEInterpolationController(mp.Process):
         self.stop()
         
     # ========= command methods ============
-    def servoL(self, pose, duration=0.1):
-        """
-        duration: desired time to reach pose
-        """
-        assert self.is_alive()
-        assert(duration >= (1/self.frequency))
-        pose = np.array(pose)
-        assert pose.shape == (6,)
-
-        message = {
-            'cmd': Command.SERVOL.value,
-            'target_pose': pose,
-            'duration': duration
-        }
-        self.input_queue.put(message)
-    
-    def servoJ(self, joints, duration=0.1):
+    def speedPdJ(self, joints, duration=0.1):
         """
         Send joint position command to the robot.
         
@@ -205,21 +190,9 @@ class RTDEInterpolationController(mp.Process):
         assert joints.shape == (6,)
 
         message = {
-            'cmd': Command.SERVOJ.value,
+            'cmd': Command.SpeedPdJ.value,
             'target_joints': joints,
             'duration': duration
-        }
-        self.input_queue.put(message)
-
-    def schedule_waypoint(self, pose, target_time):
-        assert target_time > time.time()
-        pose = np.array(pose)
-        assert pose.shape == (6,)
-
-        message = {
-            'cmd': Command.SCHEDULE_WAYPOINT.value,
-            'target_pose': pose,
-            'target_time': target_time
         }
         self.input_queue.put(message)
 
@@ -264,18 +237,9 @@ class RTDEInterpolationController(mp.Process):
 
             # main loop
             dt = 1. / self.frequency
-            curr_pose = rtde_r.getActualTCPPose()
             curr_joints = rtde_r.getActualQ()
-            # use monotonic time to make sure the control loop never go backward
-            curr_t = time.monotonic()
-            last_waypoint_time = curr_t
-            pose_interp = PoseTrajectoryInterpolator(
-                times=[curr_t],
-                poses=[curr_pose]
-            )
             
             # Track current control mode
-            control_mode = 'joint'  # or 'pose'
             current_target_joints = curr_joints
 
             iter_idx = 0
@@ -287,24 +251,16 @@ class RTDEInterpolationController(mp.Process):
                 # send command to robot
                 t_now = time.monotonic()
                 
-                # Execute control based on mode
-                if control_mode == 'pose':
-                    pose_command = pose_interp(t_now)
-                    vel = 0.5
-                    acc = 0.5
-                    assert rtde_c.servoL(pose_command, 
-                        vel, acc, # dummy, not used by ur5
-                        dt, 
-                        self.lookahead_time, 
-                        self.gain)
-                else:  # joint control mode
-                    vel = 0.5
-                    acc = 0.5
-                    assert rtde_c.servoJ(current_target_joints,
-                        vel, acc,  # velocity and acceleration scaling
-                        dt,  # time since last servo command
-                        self.lookahead_time,  # lookahead time for smoothing
-                        self.gain)  # gain for following target position
+                # Execute control
+                self.pd_controller.setpoint = current_target_joints
+                curr_joints = rtde_r.getActualQ()
+                speeds = self.pd_controller(curr_joints)
+
+                rtde_c.speedJ(
+                    qd=speeds,
+                    acceleration=self.acceleration,
+                    time=dt,
+                )
                 
                 # update robot state
                 state = dict()
@@ -331,54 +287,13 @@ class RTDEInterpolationController(mp.Process):
                         keep_running = False
                         # stop immediately, ignore later commands
                         break
-                    elif cmd == Command.SERVOL.value:
-                        # Switch to pose control mode
-                        control_mode = 'pose'
-                        # since curr_pose always lag behind curr_target_pose
-                        # if we start the next interpolation with curr_pose
-                        # the command robot receive will have discontinouity 
-                        # and cause jittery robot behavior.
-                        target_pose = command['target_pose']
-                        duration = float(command['duration'])
-                        curr_time = t_now + dt
-                        t_insert = curr_time + duration
-                        pose_interp = pose_interp.drive_to_waypoint(
-                            pose=target_pose,
-                            time=t_insert,
-                            curr_time=curr_time,
-                            max_pos_speed=self.max_pos_speed,
-                            max_rot_speed=self.max_rot_speed
-                        )
-                        last_waypoint_time = t_insert
-                        if self.verbose:
-                            print("[RTDEPositionalController] New pose target:{} duration:{}s".format(
-                                target_pose, duration))
-                    elif cmd == Command.SERVOJ.value:
-                        # Switch to joint control mode
-                        control_mode = 'joint'
+                    elif cmd == Command.SpeedPdJ.value:
                         # Update target joint positions
                         current_target_joints = command['target_joints']
                         duration = float(command['duration'])
                         if self.verbose:
                             print("[RTDEPositionalController] New joint target:{} duration:{}s".format(
                                 current_target_joints, duration))
-                    elif cmd == Command.SCHEDULE_WAYPOINT.value:
-                        # Switch to pose control mode
-                        control_mode = 'pose'
-                        target_pose = command['target_pose']
-                        target_time = float(command['target_time'])
-                        # translate global time to monotonic time
-                        target_time = time.monotonic() - time.time() + target_time
-                        curr_time = t_now + dt
-                        pose_interp = pose_interp.schedule_waypoint(
-                            pose=target_pose,
-                            time=target_time,
-                            max_pos_speed=self.max_pos_speed,
-                            max_rot_speed=self.max_rot_speed,
-                            curr_time=curr_time,
-                            last_waypoint_time=last_waypoint_time
-                        )
-                        last_waypoint_time = target_time
                     else:
                         keep_running = False
                         break
