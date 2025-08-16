@@ -4,6 +4,7 @@ import numpy as np
 import time
 import shutil
 import math
+from collections import deque
 from multiprocessing.managers import SharedMemoryManager
 from diffusion_policy.real_world.rtde_interpolation_controller import RTDEInterpolationController
 from diffusion_policy.real_world.multi_realsense import MultiRealsense, SingleRealsense
@@ -21,10 +22,7 @@ from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
 
 DEFAULT_OBS_KEY_MAP = {
     # robot
-    'ActualTCPPose': 'end_effector_pose',
-    'ActualTCPSpeed': 'end_effector_vel',
     'ActualQ': 'arm_joint_pos',
-    'ActualQd': 'arm_joint_vel',
     # timestamps
     'step_idx': 'step_idx',
     'timestamp': 'timestamp'
@@ -45,13 +43,15 @@ class RealEnv:
             obs_key_map=DEFAULT_OBS_KEY_MAP,
             obs_float32=False,
             # action
+            rolling_action_buffer=False,
             max_pos_speed=0.25,
             max_rot_speed=0.6,
             # robot
             tcp_offset=0.13,
             init_joints=False,
+            custom_init_joints=None,  # NEW: Custom initial joint positions
             # gripper
-            gripper_ip="192.168.1.2",
+            gripper_ip="192.168.1.10",
             gripper_port=63352,
             # video capture params
             video_capture_fps=30,
@@ -155,18 +155,26 @@ class RealEnv:
             )
 
         cube_diag = np.linalg.norm([1,1,1])
-        j_init = np.array([0,-90,90,-90,-90,0]) / 180 * np.pi
-        if not init_joints:
-            j_init = None
+        
+        # Handle joint initialization
+        j_init = None
+        if init_joints:
+            if custom_init_joints is not None:
+                # Use custom initial joint positions if provided
+                j_init = np.array(custom_init_joints)
+                print(f"Using custom initial joint positions: {j_init}")
+            else:
+                # Use default initial joint positions
+                j_init = np.array([0,-90,90,-90,-90,0]) / 180 * np.pi
+                print(f"Using default initial joint positions: {j_init}")
 
         robot = RTDEInterpolationController(
             shm_manager=shm_manager,
             robot_ip=robot_ip,
-            frequency=125, # UR5 CB3 RTDE
-            lookahead_time=0.1,
-            gain=100,
-            max_pos_speed=max_pos_speed*cube_diag,
-            max_rot_speed=max_rot_speed*cube_diag,
+            frequency=500,
+            acceleration=2.0,
+            Kp=1.0,
+            Kd=0.0,
             launch_timeout=3,
             tcp_offset_pose=[0,0,tcp_offset,0,0,0],
             payload_mass=None,
@@ -178,7 +186,7 @@ class RealEnv:
             receive_keys=None,
             get_max_k=max_obs_buffer_size
             )
-        
+
         # Initialize gripper
         gripper = RobotiqGripper()
         gripper.connect(gripper_ip, gripper_port)
@@ -206,6 +214,9 @@ class RealEnv:
         self.obs_accumulator = None
         self.action_accumulator = None
         self.stage_accumulator = None
+
+        # No-timestamp action buffer
+        rolling_action_buffer = self.action_buffer = deque(maxlen=self.n_obs_steps) if rolling_action_buffer else None
 
         self.start_time = None
     
@@ -283,8 +294,13 @@ class RealEnv:
                     this_idx = is_before_idxs[-1]
                 this_idxs.append(this_idx)
             # remap key
-            camera_obs[f'camera_{camera_idx}'] = value['color'][this_idxs]
-
+            if camera_idx == 0:
+                camera_obs[f'front_rgb'] = value['color'][this_idxs]
+            elif camera_idx == 1:
+                camera_obs[f'wrist_rgb'] = value['color'][this_idxs]
+            else:
+                camera_obs[f'side_rgb'] = value['color'][this_idxs]
+        
         # align robot obs
         robot_timestamps = last_robot_data['robot_receive_timestamp']
         this_timestamps = robot_timestamps
@@ -312,9 +328,31 @@ class RealEnv:
                 robot_timestamps
             )
 
+        last_actions = dict()
+        if self.action_buffer is not None and len(self.action_buffer) > 0:
+            last_actions_raw = np.zeros((self.n_obs_steps, 7), dtype=np.float32)
+            actions = np.array(self.action_buffer)
+
+            # overlay the buffer in
+            last_actions_raw[:actions.shape[0], :] = actions
+
+            last_actions = {
+                'last_arm_action': last_actions_raw[:,:6],
+                'last_gripper_action': last_actions_raw[:,6:7] 
+            }
+        else:
+            # values = self.robot.get_state()['ActualQ']
+            values = np.zeros(7)
+            obs_array = np.tile(values, (self.n_obs_steps, 1))
+            last_actions = {
+                'last_arm_action': obs_array[:,:6],
+                'last_gripper_action': np.zeros((self.n_obs_steps, 1))
+            }
+        
         # return obs
         obs_data = dict(camera_obs)
         obs_data.update(robot_obs)
+        obs_data.update(last_actions)
         obs_data['timestamp'] = obs_align_timestamps
         return obs_data
     
@@ -322,7 +360,7 @@ class RealEnv:
             actions: np.ndarray, 
             timestamps: np.ndarray, 
             stages: Optional[np.ndarray]=None,
-            max_joint_diff: float = 1.0):
+            max_joint_diff: float = 10.0):
         """
         Execute unified robot actions including gripper control.
         
@@ -347,10 +385,11 @@ class RealEnv:
         # Validate action shape
         if actions.shape[-1] != 7:
             raise ValueError(f"Actions must have 7 dimensions (6 joints + 1 gripper), got shape {actions.shape}")
-
+        
+        current_joints = self.robot.get_state()['ActualQ']
         # Separate joint and gripper actions
-        joint_actions = actions[:, :6]
-        gripper_actions = actions[:, 6]
+        joint_actions = actions[:, :6]  # Joint positions
+        gripper_actions = actions[:, 6:7]
 
         # convert action to joint positions
         receive_time = time.time()
@@ -363,7 +402,6 @@ class RealEnv:
 
         # Check joint position differences for new actions
         if len(new_joint_actions) > 0:
-            current_joints = self.robot.get_state()['ActualQ']
             # Only check the latest action that will be executed
             latest_joint_action = new_joint_actions[-1]
             joint_diff = np.abs(latest_joint_action - current_joints)
@@ -383,11 +421,10 @@ class RealEnv:
 
         # schedule waypoints for joint control
         for i in range(len(new_joint_actions)):
-            self.robot.servoJ(
+            self.robot.speedPdJ(
                 joints=new_joint_actions[i],
                 duration=1.0
             )
-        
         # record unified actions
         if self.action_accumulator is not None:
             self.action_accumulator.put(
@@ -399,6 +436,10 @@ class RealEnv:
                 new_stages,
                 new_timestamps
             )
+        if self.action_buffer is not None:
+            # Store the last n_obs_steps actions in a rolling buffer
+            for action in new_actions:
+                self.action_buffer.appendleft(action)
     
     def get_robot_state(self):
         return self.robot.get_state()

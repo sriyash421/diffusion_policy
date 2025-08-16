@@ -4,6 +4,7 @@ wandb
 outputs
 data
 data_local
+demo
 .vscode
 _wandb
 

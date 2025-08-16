@@ -20,7 +20,7 @@ def test():
         h,w,_ = color.shape
         factor = 4
         color = cv2.resize(color, (w//factor,h//factor), interpolation=cv2.INTER_AREA)
-        # color = color[:,140:500]
+        color = color[:,140:500]
         data['color'] = color
         return data
 
@@ -56,7 +56,7 @@ def test():
         intr = realsense.get_intrinsics()
         print(intr)
 
-        video_path = 'data_local/test'
+        video_path = 'data/test'
         rec_start_time = time.time() + 1
         realsense.start_recording(video_path, start_time=rec_start_time)
         realsense.restart_put(rec_start_time)

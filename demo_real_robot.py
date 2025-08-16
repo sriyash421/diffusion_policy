@@ -51,7 +51,8 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
             MelloInterface(**mello_kwargs) as mello, \
             RealEnv(
                 output_dir=output, 
-                robot_ip=robot_ip, 
+                robot_ip=robot_ip,
+                gripper_ip=robot_ip,  # Assuming gripper is on the same IP
                 # recording resolution
                 obs_image_resolution=(640,480),
                 frequency=frequency,
@@ -114,25 +115,25 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                 stage = key_counter[Key.space]
 
                 # visualize
-                vis_img = obs[f'camera_{vis_camera_idx}'][-1,:,:,::-1].copy()
-                episode_id = env.replay_buffer.n_episodes
-                text = f'Episode: {episode_id}, Stage: {stage}'
-                if is_recording:
-                    text += ', Recording!'
-                if debug:
-                    text += ' (DEBUG MODE)'
-                cv2.putText(
-                    vis_img,
-                    text,
-                    (10,30),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                    fontScale=1,
-                    thickness=2,
-                    color=(255,255,255)
-                )
+                # vis_img = obs[f'camera_{vis_camera_idx}'][-1,:,:,::-1].copy()
+                # episode_id = env.replay_buffer.n_episodes
+                # text = f'Episode: {episode_id}, Stage: {stage}'
+                # if is_recording:
+                #     text += ', Recording!'
+                # if debug:
+                #     text += ' (DEBUG MODE)'
+                # cv2.putText(
+                #     vis_img,
+                #     text,
+                #     (10,30),
+                #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                #     fontScale=1,
+                #     thickness=2,
+                #     color=(255,255,255)
+                # )
 
-                cv2.imshow('default', vis_img)
-                cv2.pollKey()
+                # cv2.imshow('default', vis_img)
+                # cv2.pollKey()
 
                 precise_wait(t_sample)
                 
