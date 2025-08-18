@@ -91,6 +91,11 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     device = TorchUtils.get_torch_device(try_to_use_cuda=True)
     # policy, config = FileUtils.policy_from_checkpoint(ckpt_path=input, device=device, verbose=True)
     # json_config = json.loads(config["config"])
+    configs = [
+        json.load(open("diffusion_policy/real_world/realsense_config/455_front.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/435_side.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/415_wrist.json"))
+    ]
 
     ckpt_path = input
     payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
@@ -133,19 +138,14 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             enable_multi_cam_vis=True,
             record_raw_video=True,
             rolling_action_buffer = True,
+            camera_serial_numbers=['215122255213', '832112070487', '746112060198'],
+            camera_configs=configs,
             # number of threads per camera view for video recording (H.264)
             thread_per_video=3,
             # video recording quality, lower is better (but slower).
-            rolling_action_buffer = True,
             video_crf=21,
             shm_manager=shm_manager) as env:
             cv2.setNumThreads(1)
-
-            # Should be the same as demo
-            # realsense exposure
-            env.realsense.set_exposure(exposure=500, gain=0)
-            # realsense white balance
-            env.realsense.set_white_balance(white_balance=2000)
 
             print("Waiting for realsense")
             time.sleep(1.0)

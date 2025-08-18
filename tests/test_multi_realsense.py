@@ -13,7 +13,11 @@ from diffusion_policy.real_world.multi_realsense import MultiRealsense
 from diffusion_policy.real_world.video_recorder import VideoRecorder
 
 def test():
-    # config = json.load(open('/home/cchi/dev/diffusion_policy/diffusion_policy/real_world/realsense_config/415_high_accuracy_mode.json', 'r'))
+    configs = [
+        json.load(open("diffusion_policy/real_world/realsense_config/455_front.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/435_side.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/415_wrist.json"))
+    ]
 
     def transform(data):
         color = data['color']
@@ -41,18 +45,17 @@ def test():
     )
 
     with MultiRealsense(
-            resolution=(640,480),
-            capture_fps=30,
-            record_fps=15,
-            enable_color=True,
-            # advanced_mode_config=config,
-            transform=transform,
-            # recording_transform=transform,
-            # video_recorder=video_recorder,
-            verbose=True
+        resolution=(640,480),
+        capture_fps=30,
+        record_fps=15,
+        enable_color=True,
+        serial_numbers=['215122255213', '832112070487', '746112060198'],
+        advanced_mode_config=configs,
+        transform=transform,
+        # recording_transform=transform,
+        # video_recorder=video_recorder,
+        verbose=True
         ) as realsense:
-        realsense.set_exposure(exposure=500, gain=0)
-        realsense.set_white_balance(white_balance=2000)
         intr = realsense.get_intrinsics()
         print(intr)
 
