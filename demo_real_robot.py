@@ -37,7 +37,7 @@ from diffusion_policy.real_world.mello_teleop import MelloTeleopInterface, Dummy
 @click.option('--mello_port', '-mp', default='/dev/serial/by-id/usb-M5Stack_Technology_Co.__Ltd_M5Stack_UiFlow_2.0_24587ce945900000-if00', help="Mello device serial port")
 @click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
-@click.option('--frequency', '-f', default=15, type=float, help="Control frequency in Hz.")
+@click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving command to executing on Robot in Sec.")
 @click.option('--debug', is_flag=True, help="Use dummy Mello interface with fixed joint positions for testing.")
 def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, command_latency, debug):
