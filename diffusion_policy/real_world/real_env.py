@@ -40,6 +40,7 @@ class RealEnv:
             obs_image_resolution=(640,480),
             max_obs_buffer_size=30,
             camera_serial_numbers=None,
+            camera_configs=None,
             obs_key_map=DEFAULT_OBS_KEY_MAP,
             obs_float32=False,
             # action
@@ -48,7 +49,7 @@ class RealEnv:
             max_rot_speed=0.6,
             # robot
             tcp_offset=0.13,
-            init_joints=False,
+            init_joints=True,
             custom_init_joints=None,  # NEW: Custom initial joint positions
             # gripper
             gripper_ip="192.168.1.10",
@@ -134,6 +135,7 @@ class RealEnv:
             # ignores put_fps
             put_downsample=False,
             record_fps=recording_fps,
+            advanced_mode_config=camera_configs,
             enable_color=True,
             enable_depth=False,
             enable_infrared=False,
@@ -297,9 +299,9 @@ class RealEnv:
             if camera_idx == 0:
                 camera_obs[f'front_rgb'] = value['color'][this_idxs]
             elif camera_idx == 1:
-                camera_obs[f'wrist_rgb'] = value['color'][this_idxs]
-            else:
                 camera_obs[f'side_rgb'] = value['color'][this_idxs]
+            else:
+                camera_obs[f'wrist_rgb'] = value['color'][this_idxs]
         
         # align robot obs
         robot_timestamps = last_robot_data['robot_receive_timestamp']
