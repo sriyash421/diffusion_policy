@@ -3,22 +3,21 @@ import time
 import enum
 import multiprocessing as mp
 from multiprocessing.managers import SharedMemoryManager
-import scipy.interpolate as si
-import scipy.spatial.transform as st
 import numpy as np
 
 from rtde_control import RTDEControlInterface
 from rtde_receive import RTDEReceiveInterface
 from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
-from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from diffusion_policy.shared_memory.shared_memory_ring_buffer import (
+    SharedMemoryRingBuffer)
 from diffusion_policy.real_world.pd import PD
+from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
+
 
 class Command(enum.Enum):
     STOP = 0
-    SpeedPdJ = 1 # Joint Position Control: SpeedJ with PD control
-    
+    SpeedPdJ = 1  # Joint Position Control: SpeedJ with PD control
 
 
 class RTDEInterpolationController(mp.Process):
@@ -27,25 +26,25 @@ class RTDEInterpolationController(mp.Process):
     this controller need its separate process (due to python GIL)
     """
 
-
     def __init__(self,
-            shm_manager: SharedMemoryManager, 
-            robot_ip, 
-            frequency=125, 
-            acceleration=2.0,
-            Kp=1.0,
-            Kd=0.0,
-            launch_timeout=3,
-            tcp_offset_pose=None,
-            payload_mass=None,
-            payload_cog=None,
-            joints_init=None,
-            joints_init_speed=1.05,
-            soft_real_time=False,
-            verbose=False,
-            receive_keys=None,
-            get_max_k=128,
-            ):
+                 shm_manager: SharedMemoryManager,
+                 robot_ip,
+                 gripper_port=63352,
+                 frequency=125,
+                 acceleration=2.0,
+                 Kp=1.0,
+                 Kd=0.0,
+                 launch_timeout=3,
+                 tcp_offset_pose=None,
+                 payload_mass=None,
+                 payload_cog=None,
+                 joints_init=None,
+                 joints_init_speed=1.05,
+                 soft_real_time=False,
+                 verbose=False,
+                 receive_keys=None,
+                 get_max_k=128,
+                 ):
         """
         frequency: CB2=125, UR3e=500
         Kp: proportional gain for following target position
@@ -75,6 +74,7 @@ class RTDEInterpolationController(mp.Process):
 
         super().__init__(name="RTDEPositionalController")
         self.robot_ip = robot_ip
+        self.gripper_port = gripper_port
         self.frequency = frequency
         self.acceleration = acceleration
         self.Kp = Kp
@@ -91,8 +91,8 @@ class RTDEInterpolationController(mp.Process):
         # build input queue
         example = {
             'cmd': Command.SpeedPdJ.value,
-            'target_pose': np.zeros((6,), dtype=np.float64),
             'target_joints': np.zeros((6,), dtype=np.float64),
+            'close_gripper': np.zeros((1,), dtype=np.bool_),
             'duration': 0.0,
             'target_time': 0.0
         }
@@ -139,14 +139,15 @@ class RTDEInterpolationController(mp.Process):
             Kd=self.Kd,
             sample_time=None
         )
-    
+
     # ========= launch method ===========
     def start(self, wait=True):
         super().start()
         if wait:
             self.start_wait()
         if self.verbose:
-            print(f"[RTDEPositionalController] Controller process spawned at {self.pid}")
+            print(f"[RTDEPositionalController] Controller process "
+                  f"spawned at {self.pid}")
 
     def stop(self, wait=True):
         message = {
@@ -159,10 +160,10 @@ class RTDEInterpolationController(mp.Process):
     def start_wait(self):
         self.ready_event.wait(self.launch_timeout)
         assert self.is_alive()
-    
+
     def stop_wait(self):
         self.join()
-    
+
     @property
     def is_ready(self):
         return self.ready_event.is_set()
@@ -171,12 +172,12 @@ class RTDEInterpolationController(mp.Process):
     def __enter__(self):
         self.start()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
-        
+
     # ========= command methods ============
-    def speedPdJ(self, joints, duration=0.1):
+    def speedPdJ(self, joints, close_gripper, duration=0.1):
         """
         Send joint position command to the robot.
         
@@ -185,13 +186,14 @@ class RTDEInterpolationController(mp.Process):
             duration: desired time to reach joint positions
         """
         assert self.is_alive()
-        assert(duration >= (1/self.frequency))
+        assert (duration >= (1/self.frequency))
         joints = np.array(joints)
         assert joints.shape == (6,)
 
         message = {
             'cmd': Command.SpeedPdJ.value,
             'target_joints': joints,
+            'close_gripper': close_gripper,
             'duration': duration
         }
         self.input_queue.put(message)
@@ -201,11 +203,11 @@ class RTDEInterpolationController(mp.Process):
         if k is None:
             return self.ring_buffer.get(out=out)
         else:
-            return self.ring_buffer.get_last_k(k=k,out=out)
-    
+            return self.ring_buffer.get_last_k(k=k, out=out)
+
     def get_all_state(self):
         return self.ring_buffer.get_all()
-    
+
     # ========= main loop in process ============
     def run(self):
         # enable soft real-time
@@ -213,6 +215,9 @@ class RTDEInterpolationController(mp.Process):
             os.sched_setscheduler(
                 0, os.SCHED_RR, os.sched_param(20))
 
+        # start gripper
+        gripper = RobotiqGripper()
+        gripper.connect(self.robot_ip, self.gripper_port)
         # start rtde
         robot_ip = self.robot_ip
         rtde_c = RTDEControlInterface(hostname=robot_ip)
@@ -220,27 +225,34 @@ class RTDEInterpolationController(mp.Process):
 
         try:
             if self.verbose:
-                print(f"[RTDEPositionalController] Connect to robot: {robot_ip}")
+                print(f"[RTDEPositionalController] Connect to robot: "
+                      f"{robot_ip}")
 
             # set parameters
             if self.tcp_offset_pose is not None:
                 rtde_c.setTcp(self.tcp_offset_pose)
             if self.payload_mass is not None:
                 if self.payload_cog is not None:
-                    assert rtde_c.setPayload(self.payload_mass, self.payload_cog)
+                    assert rtde_c.setPayload(self.payload_mass,
+                                             self.payload_cog)
                 else:
                     assert rtde_c.setPayload(self.payload_mass)
-            
+
             # init pose
             if self.joints_init is not None:
-                assert rtde_c.moveJ(self.joints_init, self.joints_init_speed, 1.4)
+                assert rtde_c.moveJ(self.joints_init,
+                                    self.joints_init_speed, 1.4)
+
+            gripper.activate()
 
             # main loop
             dt = 1. / self.frequency
             curr_joints = rtde_r.getActualQ()
-            
+
             # Track current control mode
             current_target_joints = curr_joints
+            current_gripper_close = False
+            current_gripper_state = 'open'
 
             iter_idx = 0
             keep_running = True
@@ -248,12 +260,26 @@ class RTDEInterpolationController(mp.Process):
                 # start control iteration
                 t_start = rtde_c.initPeriod()
 
-                # send command to robot
-                t_now = time.monotonic()
-                
-                # Execute control
-                self.pd_controller.setpoint = current_target_joints
+                # Check forward kinematics safety constraint
+                if self.tcp_offset_pose is not None:
+                    fk_pose = rtde_c.getForwardKinematics(
+                        current_target_joints, self.tcp_offset_pose)
+                    fk_pose_current = rtde_c.getForwardKinematics(
+                        curr_joints, self.tcp_offset_pose)
+                else:
+                    fk_pose = rtde_c.getForwardKinematics(
+                        current_target_joints)
+                    fk_pose_current = rtde_c.getForwardKinematics(
+                        curr_joints)
+
                 curr_joints = rtde_r.getActualQ()
+                if fk_pose[2] < 0.1 and fk_pose_current[2] < 0.1:
+                    # Safety stop
+                    self.pd_controller.setpoint = curr_joints
+                else:
+                    # Execute control
+                    self.pd_controller.setpoint = current_target_joints
+
                 speeds = self.pd_controller(curr_joints)
 
                 rtde_c.speedJ(
@@ -261,7 +287,25 @@ class RTDEInterpolationController(mp.Process):
                     acceleration=self.acceleration,
                     time=dt,
                 )
-                
+
+                # print("fk_pose", fk_pose)
+                # print("fk_pose_current", fk_pose_current)
+                # print("actual tcp pose", rtde_r.getActualTCPPose())
+                # print("target tcp pose", rtde_r.getTargetTCPPose())
+                # print()
+
+                # update gripper state
+                if (current_gripper_close and
+                        current_gripper_state == 'open'):
+                    gripper.move(gripper.get_closed_position(), 255, 255)
+                    current_gripper_state = 'closed'
+                elif (not current_gripper_close and
+                      current_gripper_state == 'closed'):
+                    gripper.move(gripper.get_open_position(), 255, 255)
+                    current_gripper_state = 'open'
+                else:
+                    pass
+
                 # update robot state
                 state = dict()
                 for key in self.receive_keys:
@@ -290,10 +334,12 @@ class RTDEInterpolationController(mp.Process):
                     elif cmd == Command.SpeedPdJ.value:
                         # Update target joint positions
                         current_target_joints = command['target_joints']
+                        current_gripper_close = command['close_gripper']
                         duration = float(command['duration'])
                         if self.verbose:
-                            print("[RTDEPositionalController] New joint target:{} duration:{}s".format(
-                                current_target_joints, duration))
+                            print("[RTDEPositionalController] New joint "
+                                  f"target:{current_target_joints} "
+                                  f"duration:{duration}s")
                     else:
                         keep_running = False
                         break
@@ -307,7 +353,9 @@ class RTDEInterpolationController(mp.Process):
                 iter_idx += 1
 
                 if self.verbose:
-                    print(f"[RTDEPositionalController] Actual frequency {1/(time.perf_counter() - t_start)}")
+                    freq = 1/(time.perf_counter() - t_start)
+                    print(f"[RTDEPositionalController] Actual frequency "
+                          f"{freq}")
 
         finally:
             # manditory cleanup
@@ -321,4 +369,5 @@ class RTDEInterpolationController(mp.Process):
             self.ready_event.set()
 
             if self.verbose:
-                print(f"[RTDEPositionalController] Disconnected from robot: {robot_ip}")
+                print(f"[RTDEPositionalController] Disconnected from "
+                      f"robot: {robot_ip}")

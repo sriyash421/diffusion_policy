@@ -18,7 +18,6 @@ from diffusion_policy.real_world.multi_camera_visualizer import MultiCameraVisua
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.cv2_util import (
     get_image_transform, optimal_row_cols)
-from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
 
 DEFAULT_OBS_KEY_MAP = {
     # robot
@@ -51,9 +50,6 @@ class RealEnv:
             tcp_offset=0.13,
             init_joints=True,
             custom_init_joints=None,  # NEW: Custom initial joint positions
-            # gripper
-            gripper_ip="192.168.1.10",
-            gripper_port=63352,
             # video capture params
             video_capture_fps=30,
             video_capture_resolution=(640,480),
@@ -65,7 +61,8 @@ class RealEnv:
             enable_multi_cam_vis=True,
             multi_cam_vis_resolution=(640,480),
             # shared memory
-            shm_manager=None
+            shm_manager=None,
+            rescale_pixels=True,
             ):
         assert frequency <= video_capture_fps
         output_dir = pathlib.Path(output_dir)
@@ -89,7 +86,10 @@ class RealEnv:
             bgr_to_rgb=True)
         color_transform = color_tf
         if obs_float32:
-            color_transform = lambda x: color_tf(x).astype(np.float32) / 255
+            if rescale_pixels:
+                color_transform = lambda x: color_tf(x).astype(np.float32) / 255
+            else:
+                color_transform = lambda x: color_tf(x).astype(np.float32)
 
         def transform(data):
             data['color'] = color_transform(data['color'])
@@ -189,15 +189,8 @@ class RealEnv:
             get_max_k=max_obs_buffer_size
             )
 
-        # Initialize gripper
-        gripper = RobotiqGripper()
-        gripper.connect(gripper_ip, gripper_port)
-        gripper.activate()
-
         self.realsense = realsense
         self.robot = robot
-        self.gripper = gripper
-        self.gripper_state = 'open'  # Track gripper state
         self.multi_cam_vis = multi_cam_vis
         self.video_capture_fps = video_capture_fps
         self.frequency = frequency
@@ -391,7 +384,8 @@ class RealEnv:
         current_joints = self.robot.get_state()['ActualQ']
         # Separate joint and gripper actions
         joint_actions = actions[:, :6]  # Joint positions
-        gripper_actions = actions[:, 6:7]
+        # Convert gripper action: <0 is closed, >=0 is open
+        gripper_actions = actions[:, 6:7] < 0
 
         # convert action to joint positions
         receive_time = time.time()
@@ -414,17 +408,11 @@ class RealEnv:
                     f"Action joints: {latest_joint_action}, Current joints: {current_joints}"
                 )
 
-        # Handle gripper commands
-        if len(new_gripper_actions) > 0:
-            latest_gripper_action = new_gripper_actions[-1]
-            # Convert gripper action: <0 is closed, >=0 is open
-            should_close = latest_gripper_action < 0
-            self.set_gripper(should_close)
-
         # schedule waypoints for joint control
         for i in range(len(new_joint_actions)):
             self.robot.speedPdJ(
                 joints=new_joint_actions[i],
+                close_gripper=new_gripper_actions[i],
                 duration=1.0
             )
         # record unified actions
@@ -442,7 +430,7 @@ class RealEnv:
             # Store the last n_obs_steps actions in a rolling buffer
             for action in new_actions:
                 self.action_buffer.appendleft(action)
-    
+
     def get_robot_state(self):
         return self.robot.get_state()
 
@@ -530,21 +518,3 @@ class RealEnv:
             shutil.rmtree(str(this_video_dir))
         print(f'Episode {episode_id} dropped!')
 
-    def open_gripper(self):
-        """Opens the gripper."""
-        if self.gripper_state != 'open':
-            self.gripper.move(self.gripper.get_open_position(), 255, 255)
-            self.gripper_state = 'open'
-
-    def close_gripper(self):
-        """Closes the gripper."""
-        if self.gripper_state != 'closed':
-            self.gripper.move(self.gripper.get_closed_position(), 255, 255)
-            self.gripper_state = 'closed'
-
-    def set_gripper(self, should_close):
-        """Sets the gripper state based on boolean input."""
-        if should_close:
-            self.close_gripper()
-        else:
-            self.open_gripper()

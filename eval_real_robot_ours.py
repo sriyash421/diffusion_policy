@@ -63,15 +63,14 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 @click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')
 @click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode from the match dataset')
 @click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
-@click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
-@click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")
+@click.option('--init_joints', '-j', is_flag=True, default=True, help="Whether to initialize robot joint configuration in the beginning.")
+@click.option('--steps_per_inference', '-si', default=1, type=int, help="Action horizon for inference.")
 @click.option('--max_duration', '-md', default=60, help='Max duration for each epoch in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
-@click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
 def main(input, output, robot_ip, match_dataset, match_episode,
     vis_camera_idx, init_joints, 
     steps_per_inference, max_duration,
-    frequency, command_latency):
+    frequency):
     # load match_dataset
     match_camera_idx = 0
     episode_first_frame_map = dict()
@@ -101,6 +100,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
     cls = hydra.utils.get_class(cfg._target_)
+    cfg['policy']['obs_encoder']['extra_randomizations'] = []
     workspace = cls(cfg)
     workspace: BaseWorkspace
     workspace.load_payload(payload, exclude_keys=None, include_keys=None)
@@ -148,7 +148,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             cv2.setNumThreads(1)
 
             print("Waiting for realsense")
-            time.sleep(1.0)
+            time.sleep(5.0)
 
             print("Warming up policy inference")
             obs = env.get_obs()
@@ -243,8 +243,9 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             action_timestamps = action_timestamps[is_new]
 
                         # clip actions
-                        this_target_poses[:,:2] = np.clip(
-                        this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
+                        # this_target_poses[:,:2] = np.clip(
+                        # this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
+
                         # this_target_poses[:,:2] = np.clip(
                         # this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
                         env.exec_actions(
