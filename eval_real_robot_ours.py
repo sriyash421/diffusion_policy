@@ -31,46 +31,55 @@ import json
 import dill
 import hydra
 import pathlib
-import math
 import skvideo.io
 from omegaconf import OmegaConf
-import scipy.spatial.transform as st
-from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.real_world.real_env import RealEnv
 from diffusion_policy.real_world.spacemouse_shared_memory import Spacemouse
 from diffusion_policy.common.precise_sleep import precise_wait
 from diffusion_policy.real_world.real_inference_util import (
     get_real_obs_resolution_ours, 
-    get_real_obs_dict, 
     get_real_obs_ours
 )
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
-from diffusion_policy.common.cv2_util import get_image_transform
+
+# Add imageio import for video saving
+import imageio
 
 # Robomimic imports
-import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
-@click.option('--output', '-o', required=True, help='Directory to save recording')
-@click.option('--robot_ip', '-ri', required=True, help="UR5's IP address e.g. 192.168.0.204")
-@click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')
-@click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode from the match dataset')
-@click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
-@click.option('--init_joints', '-j', is_flag=True, default=True, help="Whether to initialize robot joint configuration in the beginning.")
-@click.option('--steps_per_inference', '-si', default=1, type=int, help="Action horizon for inference.")
-@click.option('--max_duration', '-md', default=60, help='Max duration for each epoch in seconds.')
-@click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
+@click.option('--output', '-o', required=True, 
+              help='Directory to save recording')
+@click.option('--robot_ip', '-ri', required=True, 
+              help="UR5's IP address e.g. 192.168.0.204")
+@click.option('--match_dataset', '-m', default=None, 
+              help='Dataset used to overlay and adjust initial condition')
+@click.option('--match_episode', '-me', default=None, type=int, 
+              help='Match specific episode from the match dataset')
+@click.option('--vis_camera_idx', default=0, type=int, 
+              help="Which RealSense camera to visualize.")
+@click.option('--init_joints', '-j', is_flag=True, default=True, 
+              help="Whether to initialize robot joint configuration in the "
+                   "beginning.")
+@click.option('--steps_per_inference', '-si', default=1, type=int, 
+              help="Action horizon for inference.")
+@click.option('--max_duration', '-md', default=60, 
+              help='Max duration for each epoch in seconds.')
+@click.option('--frequency', '-f', default=10, type=float, 
+              help="Control frequency in Hz.")
+@click.option('--save_video', is_flag=True, default=False,
+              help='Save video of concatenated camera views.')
 def main(input, output, robot_ip, match_dataset, match_episode,
-    vis_camera_idx, init_joints, 
-    steps_per_inference, max_duration,
-    frequency):
+         vis_camera_idx, init_joints, 
+         steps_per_inference, max_duration,
+         frequency, save_video):
     # load match_dataset
     match_camera_idx = 0
     episode_first_frame_map = dict()
@@ -86,14 +95,15 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                 episode_first_frame_map[episode_idx] = frames[0]
     print(f"Loaded initial frame for {len(episode_first_frame_map)} episodes")
     
-    # # load checkpoint
+    # load checkpoint
     device = TorchUtils.get_torch_device(try_to_use_cuda=True)
-    # policy, config = FileUtils.policy_from_checkpoint(ckpt_path=input, device=device, verbose=True)
-    # json_config = json.loads(config["config"])
     configs = [
-        json.load(open("diffusion_policy/real_world/realsense_config/455_front.json")),
-        json.load(open("diffusion_policy/real_world/realsense_config/435_side.json")),
-        json.load(open("diffusion_policy/real_world/realsense_config/415_wrist.json"))
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "455_front.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "435_side.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "415_wrist.json"))
     ]
 
     ckpt_path = input
@@ -114,7 +124,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
         policy.eval().to(device)
 
-        policy.num_inference_steps = 16 # DDIM inference iterations
+        policy.num_inference_steps = 16  # DDIM inference iterations
         policy.n_action_steps = policy.horizon - policy.n_obs_steps + 1
 
     # setup experiments
@@ -137,8 +147,9 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             init_joints=init_joints,
             enable_multi_cam_vis=True,
             record_raw_video=True,
-            rolling_action_buffer = True,
-            camera_serial_numbers=['215122255213', '832112070487', '746112060198'],
+            rolling_action_buffer=True,
+            camera_serial_numbers=['215122255213', '832112070487',
+                                  '746112060198'],
             camera_configs=configs,
             # number of threads per camera view for video recording (H.264)
             thread_per_video=3,
@@ -148,7 +159,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             cv2.setNumThreads(1)
 
             print("Waiting for realsense")
-            time.sleep(5.0)
+            time.sleep(10.0)
 
             print("Warming up policy inference")
             obs = env.get_obs()
@@ -165,13 +176,21 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                     del result
                 except Exception as e:
                     print(e)
-                    del result
+                    # Handle case where result might not be defined
+                    if 'result' in locals():
+                        del result
 
             # initial target pose required
             target_pose = env.get_robot_state()['TargetTCPPose']
 
             print('Ready!')
-            time.sleep(5.0)
+            time.sleep(1.0)
+            
+            # Initialize video recording if enabled
+            if save_video:
+                frames_to_save = []
+                print("Video recording enabled - will save concatenated camera views")
+            
             while True:
                 # ========== policy control loop ==============
                 try:
@@ -197,6 +216,25 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
                         print(f'Obs latency {time.time() - obs_timestamps[-1]}')
+
+                        # Capture frames for video if enabled
+                        if save_video:
+                            # Get the latest frame from each camera and concatenate
+                            camera_names = ['front_rgb', 'side_rgb', 'wrist_rgb']
+                            imgs = []
+                            for cam_name in camera_names:
+                                if cam_name in obs:
+                                    # Get the most recent frame (last in time dimension)
+                                    img = obs[cam_name][-1]  # Shape: (H, W, C)
+                                    # Convert from float [0,1] to uint8 [0,255] if needed
+                                    if img.dtype == np.float32 or img.dtype == np.float64:
+                                        img = (img * 255).clip(0, 255).astype(np.uint8)
+                                    imgs.append(img)
+                            
+                            # Concatenate frames horizontally if we have all cameras
+                            if len(imgs) == 3:
+                                frame = np.concatenate(imgs, axis=1)
+                                frames_to_save.append(frame)
 
                         # run inference
                         with torch.no_grad():
@@ -306,16 +344,39 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
                         if terminate:
                             env.end_episode()
+                            
+                            # Save video if recording and we have frames
+                            if save_video and frames_to_save:
+                                episode_id = getattr(env.replay_buffer, 'n_episodes', 0)
+                                video_filename = f'policy_cameras_episode_{episode_id:03d}.mp4'
+                                video_path = pathlib.Path(output) / video_filename
+                                print(f"Saving video with {len(frames_to_save)} frames to {video_path}")
+                                imageio.mimsave(str(video_path), frames_to_save, 
+                                              fps=10, codec='libx264')
+                                frames_to_save = []  # Reset for next episode
+                            
                             break
 
                         # wait for execution
                         precise_wait(t_cycle_end - frame_latency)
                         iter_idx += steps_per_inference
 
-                except KeyboardInterrupt:
+                except Exception as e:
+                    print(e)
                     print("Interrupted!")
                     # stop robot.
                     env.end_episode()
+                    
+                    # Save video if recording and we have frames
+                    if save_video and frames_to_save:
+                        episode_id = getattr(env.replay_buffer, 'n_episodes', 0)
+                        video_filename = f'policy_cameras_interrupted_{episode_id:03d}.mp4'
+                        video_path = pathlib.Path(output) / video_filename
+                        print(f"Saving interrupted video with {len(frames_to_save)} frames to {video_path}")
+                        imageio.mimsave(str(video_path), frames_to_save, 
+                                      fps=10, codec='libx264')
+                    
+                    break
                 
                 print("Stopped.")
 

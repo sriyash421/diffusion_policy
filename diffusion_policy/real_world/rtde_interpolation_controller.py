@@ -261,24 +261,24 @@ class RTDEInterpolationController(mp.Process):
                 t_start = rtde_c.initPeriod()
 
                 # Check forward kinematics safety constraint
-                if self.tcp_offset_pose is not None:
-                    fk_pose = rtde_c.getForwardKinematics(
-                        current_target_joints, self.tcp_offset_pose)
-                    fk_pose_current = rtde_c.getForwardKinematics(
-                        curr_joints, self.tcp_offset_pose)
-                else:
-                    fk_pose = rtde_c.getForwardKinematics(
-                        current_target_joints)
-                    fk_pose_current = rtde_c.getForwardKinematics(
-                        curr_joints)
+                # if self.tcp_offset_pose is not None:
+                #     fk_pose = rtde_c.getForwardKinematics(
+                #         current_target_joints, self.tcp_offset_pose)
+                #     fk_pose_current = rtde_c.getForwardKinematics(
+                #         curr_joints, self.tcp_offset_pose)
+                # else:
+                #     fk_pose = rtde_c.getForwardKinematics(
+                #         current_target_joints)
+                #     fk_pose_current = rtde_c.getForwardKinematics(
+                #         curr_joints)
 
                 curr_joints = rtde_r.getActualQ()
-                if fk_pose[2] < 0.1 and fk_pose_current[2] < 0.1:
-                    # Safety stop
-                    self.pd_controller.setpoint = curr_joints
-                else:
-                    # Execute control
-                    self.pd_controller.setpoint = current_target_joints
+                # if fk_pose[2] < 0.04 and fk_pose_current[2] < 0.04:
+                #     # Safety stop
+                #     self.pd_controller.setpoint = curr_joints
+                # else:
+                # Execute control
+                self.pd_controller.setpoint = current_target_joints
 
                 speeds = self.pd_controller(curr_joints)
 

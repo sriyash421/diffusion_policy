@@ -168,6 +168,7 @@ class RealEnv:
             else:
                 # Use default initial joint positions
                 j_init = np.array([0,-90,90,-90,-90,0]) / 180 * np.pi
+                # j_init = np.array([-0.5748, -1.2212, 1.6753, -2.0596, -1.1225, -1.0952])
                 print(f"Using default initial joint positions: {j_init}")
 
         robot = RTDEInterpolationController(
@@ -429,7 +430,7 @@ class RealEnv:
         if self.action_buffer is not None:
             # Store the last n_obs_steps actions in a rolling buffer
             for action in new_actions:
-                self.action_buffer.appendleft(action)
+                self.action_buffer.append(action)
 
     def get_robot_state(self):
         return self.robot.get_state()
