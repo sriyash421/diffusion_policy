@@ -4,6 +4,7 @@ import enum
 import multiprocessing as mp
 from multiprocessing.managers import SharedMemoryManager
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 from rtde_control import RTDEControlInterface
 from rtde_receive import RTDEReceiveInterface
@@ -11,13 +12,12 @@ from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import (
     SharedMemoryRingBuffer)
-from diffusion_policy.real_world.pd import PD
 from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
 
 
 class Command(enum.Enum):
     STOP = 0
-    SpeedPdJ = 1  # Joint Position Control: SpeedJ with PD control
+    ImpedanceControl = 1  # Joint Position Control: Impedance control with forceMode
 
 
 class RTDEInterpolationController(mp.Process):
@@ -44,6 +44,13 @@ class RTDEInterpolationController(mp.Process):
                  verbose=False,
                  receive_keys=None,
                  get_max_k=128,
+                 # Impedance control parameters
+                 imp_kp=10000.0,
+                 imp_kd=2200.0,
+                 ori_kp=100.0,
+                 ori_kd=22.0,
+                 imp_delta=0.05,
+                 forcemode_damping=0.02,
                  ):
         """
         frequency: CB2=125, UR3e=500
@@ -87,10 +94,24 @@ class RTDEInterpolationController(mp.Process):
         self.joints_init_speed = joints_init_speed
         self.soft_real_time = soft_real_time
         self.verbose = verbose
+        
+        # Impedance control parameters
+        self.imp_kp = imp_kp
+        self.imp_kd = imp_kd
+        self.ori_kp = ori_kp
+        self.ori_kd = ori_kd
+        self.imp_delta = imp_delta
+        self.forcemode_damping = forcemode_damping
+        self.dt = 1.0 / frequency
+        
+        # Force mode configuration
+        self.fm_task_frame = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.fm_selection_vector = [1, 1, 1, 1, 1, 1]
+        self.fm_limits = [0.5, 0.5, 0.1, 1., 1., 1.]
 
         # build input queue
         example = {
-            'cmd': Command.SpeedPdJ.value,
+            'cmd': Command.ImpedanceControl.value,
             'target_joints': np.zeros((6,), dtype=np.float64),
             'close_gripper': np.zeros((1,), dtype=np.bool_),
             'duration': 0.0,
@@ -133,13 +154,6 @@ class RTDEInterpolationController(mp.Process):
         self.ring_buffer = ring_buffer
         self.receive_keys = receive_keys
 
-        self.pd_controller = PD(
-            num_joints=6,
-            Kp=self.Kp,
-            Kd=self.Kd,
-            sample_time=None
-        )
-
     # ========= launch method ===========
     def start(self, wait=True):
         super().start()
@@ -151,7 +165,11 @@ class RTDEInterpolationController(mp.Process):
 
     def stop(self, wait=True):
         message = {
-            'cmd': Command.STOP.value
+            'cmd': np.array([Command.STOP.value], dtype=np.int32),
+            'target_joints': np.zeros((6,), dtype=np.float64),
+            'close_gripper': np.zeros((1,), dtype=np.bool_),
+            'duration': 0.0,
+            'target_time': 0.0
         }
         self.input_queue.put(message)
         if wait:
@@ -177,9 +195,9 @@ class RTDEInterpolationController(mp.Process):
         self.stop()
 
     # ========= command methods ============
-    def speedPdJ(self, joints, close_gripper, duration=0.1):
+    def impedance_control(self, joints, close_gripper, duration=0.1):
         """
-        Send joint position command to the robot.
+        Send joint position command to the robot using impedance control.
         
         Args:
             joints: Array of 6 joint positions in radians
@@ -191,10 +209,11 @@ class RTDEInterpolationController(mp.Process):
         assert joints.shape == (6,)
 
         message = {
-            'cmd': Command.SpeedPdJ.value,
+            'cmd': np.array([Command.ImpedanceControl.value], dtype=np.int32),
             'target_joints': joints,
-            'close_gripper': close_gripper,
-            'duration': duration
+            'close_gripper': np.array([close_gripper], dtype=np.bool_),
+            'duration': float(duration),
+            'target_time': 0.0
         }
         self.input_queue.put(message)
 
@@ -207,6 +226,38 @@ class RTDEInterpolationController(mp.Process):
 
     def get_all_state(self):
         return self.ring_buffer.get_all()
+
+    # ========= helper methods for impedance control ============
+    def _pose_to_quat(self, pose_xyz_rxryrz: np.ndarray) -> np.ndarray:
+        """Convert pose [x,y,z,rx,ry,rz] to [x,y,z,qx,qy,qz,qw]."""
+        pos = np.array(pose_xyz_rxryrz[:3], dtype=float)
+        rotvec = np.array(pose_xyz_rxryrz[3:], dtype=float)
+        quat = R.from_rotvec(rotvec).as_quat()  # Returns [x,y,z,w]
+        return np.concatenate([pos, quat])
+
+    def _compute_impedance_wrench(self, target_pose_quat: np.ndarray, 
+                                 curr_pose: np.ndarray, curr_vel: np.ndarray) -> np.ndarray:
+        """Compute impedance control wrench from target and current pose."""
+        curr_quat_pose = self._pose_to_quat(curr_pose)
+        
+        # Position impedance
+        diff_p = target_pose_quat[:3] - curr_quat_pose[:3]
+        diff_p = np.clip(diff_p, a_min=-self.imp_delta, a_max=self.imp_delta)
+        vel_delta = 2.0 * self.imp_delta / self.dt
+        diff_d = np.clip(-curr_vel[:3], a_min=-vel_delta, a_max=vel_delta)
+        force = self.imp_kp * diff_p + self.imp_kd * diff_d
+
+        # Orientation impedance using scipy Rotation (robust to discontinuities)
+        target_quat = target_pose_quat[3:7]  # Extract quaternion (4 values)
+        curr_quat = curr_quat_pose[3:7]      # Extract quaternion (4 values)
+        
+        # Use scipy Rotation for robust orientation error calculation
+        rot_diff = R.from_quat(target_quat) * R.from_quat(curr_quat).inv()
+        rotvec_err = rot_diff.as_rotvec()
+        ang_vel = curr_vel[3:]
+        torque = self.ori_kp * rotvec_err + self.ori_kd * (-ang_vel)
+
+        return np.concatenate([force, torque]).astype(float)
 
     # ========= main loop in process ============
     def run(self):
@@ -237,6 +288,11 @@ class RTDEInterpolationController(mp.Process):
                                              self.payload_cog)
                 else:
                     assert rtde_c.setPayload(self.payload_mass)
+            tcp_offset = rtde_c.getTCPOffset()
+            
+            # Initialize force mode parameters
+            rtde_c.forceModeSetDamping(self.forcemode_damping)
+            rtde_c.zeroFtSensor()
 
             # init pose
             if self.joints_init is not None:
@@ -260,39 +316,33 @@ class RTDEInterpolationController(mp.Process):
                 # start control iteration
                 t_start = rtde_c.initPeriod()
 
-                # Check forward kinematics safety constraint
-                # if self.tcp_offset_pose is not None:
-                #     fk_pose = rtde_c.getForwardKinematics(
-                #         current_target_joints, self.tcp_offset_pose)
-                #     fk_pose_current = rtde_c.getForwardKinematics(
-                #         curr_joints, self.tcp_offset_pose)
-                # else:
-                #     fk_pose = rtde_c.getForwardKinematics(
-                #         current_target_joints)
-                #     fk_pose_current = rtde_c.getForwardKinematics(
-                #         curr_joints)
-
                 curr_joints = rtde_r.getActualQ()
-                # if fk_pose[2] < 0.04 and fk_pose_current[2] < 0.04:
-                #     # Safety stop
-                #     self.pd_controller.setpoint = curr_joints
-                # else:
-                # Execute control
-                self.pd_controller.setpoint = current_target_joints
-
-                speeds = self.pd_controller(curr_joints)
-
-                rtde_c.speedJ(
-                    qd=speeds,
-                    acceleration=self.acceleration,
-                    time=dt,
+                
+                # Compute target pose from target joints using forward kinematics
+                target_pose_xyz_rxryrz = rtde_c.getForwardKinematics(current_target_joints, tcp_offset)
+                
+                # Convert to quaternion format
+                target_pose_quat = self._pose_to_quat(target_pose_xyz_rxryrz)
+                
+                # Get current pose and velocity
+                curr_pose = rtde_r.getActualTCPPose()
+                curr_vel = np.array(rtde_r.getActualTCPSpeed(), dtype=float)
+                
+                # Compute impedance control wrench
+                wrench = self._compute_impedance_wrench(target_pose_quat, curr_pose, curr_vel)
+                
+                # Apply force mode control
+                ok = rtde_c.forceMode(
+                    self.fm_task_frame,
+                    self.fm_selection_vector,
+                    wrench.tolist(),
+                    2,  # type 2 for normal force mode
+                    self.fm_limits,
                 )
-
-                # print("fk_pose", fk_pose)
-                # print("fk_pose_current", fk_pose_current)
-                # print("actual tcp pose", rtde_r.getActualTCPPose())
-                # print("target tcp pose", rtde_r.getTargetTCPPose())
-                # print()
+                if not ok:
+                    rtde_c.forceModeStop()
+                    if self.verbose:
+                        print("[RTDEPositionalController] forceMode failed, stopping")
 
                 # update gripper state
                 if (current_gripper_close and
@@ -319,30 +369,32 @@ class RTDEInterpolationController(mp.Process):
                     n_cmd = len(commands['cmd'])
                 except Empty:
                     n_cmd = 0
+                    commands = None
 
                 # execute commands
-                for i in range(n_cmd):
-                    command = dict()
-                    for key, value in commands.items():
-                        command[key] = value[i]
-                    cmd = command['cmd']
+                if commands is not None:
+                    for i in range(n_cmd):
+                        command = dict()
+                        for key, value in commands.items():
+                            command[key] = value[i]
+                        cmd = command['cmd'][0] if isinstance(command['cmd'], np.ndarray) else command['cmd']
 
-                    if cmd == Command.STOP.value:
-                        keep_running = False
-                        # stop immediately, ignore later commands
-                        break
-                    elif cmd == Command.SpeedPdJ.value:
-                        # Update target joint positions
-                        current_target_joints = command['target_joints']
-                        current_gripper_close = command['close_gripper']
-                        duration = float(command['duration'])
-                        if self.verbose:
-                            print("[RTDEPositionalController] New joint "
-                                  f"target:{current_target_joints} "
-                                  f"duration:{duration}s")
-                    else:
-                        keep_running = False
-                        break
+                        if cmd == Command.STOP.value:
+                            keep_running = False
+                            # stop immediately, ignore later commands
+                            break
+                        elif cmd == Command.ImpedanceControl.value:
+                            # Update target joint positions
+                            current_target_joints = command['target_joints']
+                            current_gripper_close = command['close_gripper'][0] if isinstance(command['close_gripper'], np.ndarray) else command['close_gripper']
+                            duration = float(command['duration'])
+                            if self.verbose:
+                                print("[RTDEPositionalController] New joint "
+                                      f"target:{current_target_joints} "
+                                      f"duration:{duration}s")
+                        else:
+                            keep_running = False
+                            break
 
                 # regulate frequency
                 rtde_c.waitPeriod(t_start)
@@ -358,9 +410,20 @@ class RTDEInterpolationController(mp.Process):
                           f"{freq}")
 
         finally:
-            # manditory cleanup
-            # decelerate
-            rtde_c.servoStop()
+            # mandatory cleanup
+            try:
+                # Stop force mode first
+                rtde_c.forceModeStop()
+                
+                # Hold current position briefly to prevent drift
+                current_joints = rtde_r.getActualQ()
+                rtde_c.servoJ(current_joints, 0.5, 0.5, 0.1, 0.1, 300)
+                
+                # decelerate
+                rtde_c.servoStop()
+            except Exception as e:
+                if self.verbose:
+                    print(f"[RTDEPositionalController] Cleanup error: {e}")
 
             # terminate
             rtde_c.stopScript()

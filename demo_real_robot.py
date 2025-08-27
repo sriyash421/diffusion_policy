@@ -16,6 +16,10 @@ Press "C" to start recording.
 Press "S" to stop recording.
 Press "Q" to exit program.
 Press "Backspace" to delete the previously recorded episode.
+
+Macro controls:
+Press "R" to go to the above peg tcp position
+Press "Down Arrow" to use the screw macro
 """
 
 # %%
@@ -24,6 +28,7 @@ from multiprocessing.managers import SharedMemoryManager
 import click
 import cv2
 import numpy as np
+import json
 from diffusion_policy.real_world.real_env import RealEnv
 from diffusion_policy.common.precise_sleep import precise_wait
 from diffusion_policy.real_world.keystroke_counter import (
@@ -41,20 +46,31 @@ from diffusion_policy.real_world.mello_teleop import MelloTeleopInterface, Dummy
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving command to executing on Robot in Sec.")
 @click.option('--debug', is_flag=True, help="Use dummy Mello interface with fixed joint positions for testing.")
 def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, command_latency, debug):
+
+    configs = [
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "455_front.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "435_side.json")),
+        json.load(open("diffusion_policy/real_world/realsense_config/"
+                      "415_wrist.json"))
+    ]
+
     dt = 1/frequency
     with SharedMemoryManager() as shm_manager:
         # Choose between real and dummy Mello interface
         MelloInterface = DummyMelloTeleopInterface if debug else MelloTeleopInterface
         mello_kwargs = {} if debug else {'port': mello_port}
-        
         with KeystrokeCounter() as key_counter, \
             MelloInterface(**mello_kwargs) as mello, \
             RealEnv(
                 output_dir=output, 
                 robot_ip=robot_ip,
-                gripper_ip=robot_ip,  # Assuming gripper is on the same IP
                 # recording resolution
                 obs_image_resolution=(640,480),
+                camera_serial_numbers=['215122255213', '832112070487',
+                        '746112060198'],
+                camera_configs=configs,
                 frequency=frequency,
                 init_joints=init_joints,
                 enable_multi_cam_vis=True,
@@ -67,17 +83,16 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
             ) as env:
             cv2.setNumThreads(1)
 
-            # realsense exposure
-            env.realsense.set_exposure(exposure=500, gain=0)
-            # realsense white balance
-            env.realsense.set_white_balance(white_balance=2000)
-
             time.sleep(1.0)
             print('Ready!')
+            stage = key_counter[Key.space]
             t_start = time.monotonic()
             iter_idx = 0
             stop = False
             is_recording = False
+            is_twisting = False
+            twist_step_count = 0
+            initial_wrist_position = 0.0
             while not stop:
                 # calculate timing
                 t_cycle_end = t_start + (iter_idx + 1) * dt
@@ -86,7 +101,6 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
 
                 # pump obs
                 obs = env.get_obs()
-
                 # handle key presses
                 press_events = key_counter.get_press_events()
                 for key_stroke in press_events:
@@ -112,7 +126,15 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                             key_counter.clear()
                             is_recording = False
                         # delete
-                stage = key_counter[Key.space]
+                    elif key_stroke == Key.down:
+                        # Start twisting macro (screw motion)
+                        is_twisting = True
+                        twist_step_count = 0
+                    elif key_stroke == Key.up:
+                        # Stop twisting macro
+                        is_twisting = False
+
+
 
                 # visualize
                 # vis_img = obs[f'camera_{vis_camera_idx}'][-1,:,:,::-1].copy()
@@ -139,9 +161,42 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                 
                 # Get latest Mello values
                 mello_values = mello.get_latest_values()
-                joints = mello_values[:6]  # First 6 values are joints
+                mello_joints = mello_values[:6]  # First 6 values are joints
                 gripper_command = mello_values[6]  # 7th value is gripper (1 for open, -1 for closed)
-                unified_action = np.concatenate([joints, [gripper_command]])
+                unified_action = np.concatenate([mello_joints, [gripper_command]])
+                
+                current_joints = env.robot.get_state()["ActualQ"]
+
+                # Handle twisting macro behavior
+                if is_twisting:
+                    # Store initial wrist position on first twist step
+                    if twist_step_count == 0:
+                        initial_wrist_position = current_joints[5]
+                    
+                    # Execute screw motion: move TCP down and rotate wrist
+                    modified_joints = current_joints.copy()
+                    modified_joints[1] += 0.0025  # Joint 1 adjustment
+                    modified_joints[2] += 0.0025  # Joint 2 adjustment  
+                    modified_joints[3] -= 0.005   # Joint 3 adjustment
+                    modified_joints[5] += 0.5     # Wrist rotation
+                    
+                    unified_action = np.concatenate([modified_joints, [-1]])  # Close gripper
+                    twist_step_count += 1
+                
+                elif twist_step_count > 0:
+                    # Return wrist to original position after twisting
+                    wrist_error = initial_wrist_position - current_joints[5]
+                    max_correction = np.pi/8
+                    
+                    if abs(wrist_error) > max_correction:
+                        # Apply gradual correction back to initial position
+                        wrist_correction = np.clip(wrist_error, -max_correction, max_correction)
+                        modified_joints = current_joints.copy()
+                        modified_joints[5] += wrist_correction
+                        unified_action = np.concatenate([modified_joints, [1]])  # Open gripper
+                    else:
+                        # Close enough to initial position, reset twist state
+                        twist_step_count = 0
 
                 # execute teleop command
                 env.exec_actions(

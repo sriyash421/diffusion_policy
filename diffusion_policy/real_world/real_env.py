@@ -411,12 +411,11 @@ class RealEnv:
 
         # schedule waypoints for joint control
         for i in range(len(new_joint_actions)):
-            self.robot.speedPdJ(
+            self.robot.impedance_control(
                 joints=new_joint_actions[i],
                 close_gripper=new_gripper_actions[i],
                 duration=1.0
             )
-        # record unified actions
         if self.action_accumulator is not None:
             self.action_accumulator.put(
                 new_actions,  # Store the full 7D actions
