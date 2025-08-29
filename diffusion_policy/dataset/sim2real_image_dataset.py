@@ -11,7 +11,26 @@ from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
 from diffusion_policy.model.common.normalizer import (
     LinearNormalizer, SingleFieldLinearNormalizer)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
-from diffusion_policy.common.normalize_util import get_image_range_normalizer
+
+
+class CustomWeightedRandomSampler(torch.utils.data.WeightedRandomSampler):
+    """
+    WeightedRandomSampler except allows for more than 2^24 samples
+    copied from https://github.com/pytorch/pytorch/issues/2576
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __iter__(self):
+        weights_np = self.weights.numpy()
+        weights_sum = torch.sum(self.weights).numpy()
+        rand_tensor = np.random.choice(
+            range(0, len(self.weights)),
+            size=self.num_samples,
+            p=weights_np / weights_sum,
+            replace=self.replacement)
+        rand_tensor = torch.from_numpy(rand_tensor)
+        return iter(rand_tensor.tolist())
 
 
 class Sim2RealImageDataset(BaseImageDataset):
@@ -189,3 +208,189 @@ class Sim2RealImageDataset(BaseImageDataset):
             'reward': torch.from_numpy(reward)
         }
         return torch_data
+
+
+class Sim2RealImageMultiDataset(BaseImageDataset):
+    """
+    Multi-dataset wrapper that combines multiple Sim2RealImageDataset instances 
+    with weighted sampling.
+    """
+    
+    def __init__(
+        self,
+        dataset_config: list,
+        shape_meta: dict,
+        horizon=1,
+        pad_before=0,
+        pad_after=0,
+        n_obs_steps=None,
+        n_latency_steps=0,
+        seed=42,
+        val_ratio=0.0,
+        use_cache: bool = False,
+    ):
+        super().__init__()
+        self.dataset_config = dataset_config
+        self.shape_meta = shape_meta
+        
+        # Initialize datasets
+        self.datasets = []
+        self.dataset_lengths = []
+        self.sampling_ratios = []
+        
+        common_kwargs = {
+            'shape_meta': shape_meta,
+            'horizon': horizon,
+            'pad_before': pad_before,
+            'pad_after': pad_after,
+            'n_obs_steps': n_obs_steps,
+            'n_latency_steps': n_latency_steps,
+            'seed': seed,
+            'val_ratio': val_ratio,
+            'use_cache': use_cache
+        }
+        
+        for config in dataset_config:
+            dataset_kwargs = {**common_kwargs}
+            dataset_kwargs['dataset_path'] = config['dataset_path']
+            
+            dataset = Sim2RealImageDataset(**dataset_kwargs)
+            
+            self.datasets.append(dataset)
+            self.dataset_lengths.append(len(dataset))
+            self.sampling_ratios.append(config['sampling_ratio'])
+        
+        # Calculate cumulative indices for mapping global index to (dataset_idx, local_idx)
+        self.cumulative_lengths = np.cumsum([0] + self.dataset_lengths)
+        self.total_length = int(self.cumulative_lengths[-1])
+        
+        # Calculate sampling weights
+        self.weights = self._calculate_weights()
+        
+        # Create weighted sampler
+        self.weighted_sampler = CustomWeightedRandomSampler(
+            weights=self.weights,
+            num_samples=self.total_length,
+            replacement=True
+        )
+    
+    def _calculate_weights(self) -> torch.Tensor:
+        """Calculate per-sample weights based on dataset sizes and sampling ratios."""
+        weights = []
+        
+        # Normalize sampling ratios
+        total_ratio = sum(self.sampling_ratios)
+        normalized_ratios = [r / total_ratio for r in self.sampling_ratios]
+        
+        for dataset_idx, (dataset_len, ratio) in enumerate(zip(self.dataset_lengths, normalized_ratios)):
+            # Weight per sample = ratio / dataset_length
+            sample_weight = ratio / dataset_len
+            weights.extend([sample_weight] * dataset_len)
+        
+        return torch.tensor(weights, dtype=torch.float32)
+    
+    def _global_to_local_index(self, global_idx: int) -> tuple:
+        """Convert global index to (dataset_idx, local_idx)."""
+        dataset_idx = np.searchsorted(self.cumulative_lengths[1:], global_idx, side='right')
+        local_idx = global_idx - self.cumulative_lengths[dataset_idx]
+        return dataset_idx, local_idx
+    
+    def get_validation_dataset(self):
+        """Create validation version of this multi-dataset wrapper."""
+        val_wrapper = copy.copy(self)
+        val_wrapper.datasets = [dataset.get_validation_dataset() for dataset in self.datasets]
+        
+        # Recalculate lengths and weights for validation sets
+        val_wrapper.dataset_lengths = [len(dataset) for dataset in val_wrapper.datasets]
+        val_wrapper.cumulative_lengths = np.cumsum([0] + val_wrapper.dataset_lengths)
+        val_wrapper.total_length = int(val_wrapper.cumulative_lengths[-1])
+        val_wrapper.weights = val_wrapper._calculate_weights()
+        
+        # Create new weighted sampler for validation
+        val_wrapper.weighted_sampler = CustomWeightedRandomSampler(
+            weights=val_wrapper.weights,
+            num_samples=val_wrapper.total_length,
+            replacement=True
+        )
+        
+        return val_wrapper
+    
+    def get_normalizer(self, **kwargs) -> LinearNormalizer:
+        """Combine normalizers from all datasets."""
+        # Get normalizers from all datasets
+        normalizers = [dataset.get_normalizer(**kwargs) for dataset in self.datasets]
+        
+        if len(normalizers) == 1:
+            return normalizers[0]
+        
+        # Combine normalizers using weighted averaging
+        combined_normalizer = LinearNormalizer()
+        
+        # Get all keys from the first normalizer
+        first_normalizer = normalizers[0]
+        
+        for key in first_normalizer.params_dict.keys():
+            # Collect statistics from all normalizers for this key
+            means = []
+            stds = []
+            weights = []
+            
+            for i, normalizer in enumerate(normalizers):
+                field_normalizer = normalizer[key]
+                # Access the parameters directly from params_dict
+                params = field_normalizer.params_dict
+                means.append(params['offset'])
+                stds.append(1.0 / params['scale'])
+                
+                # Weight by dataset size * sampling ratio
+                dataset_weight = (self.dataset_lengths[i] * 
+                                self.sampling_ratios[i])
+                weights.append(dataset_weight)
+            
+            # Convert to tensors for computation - will error if lists are empty
+            means = torch.stack(means)
+            stds = torch.stack(stds)
+            weights = torch.tensor(weights, dtype=torch.float32)
+            
+            # Normalize weights
+            weights = weights / weights.sum()
+            
+            # Compute weighted mean and std
+            combined_mean = (means * weights.unsqueeze(-1)).sum(dim=0)
+            combined_std = (stds * weights.unsqueeze(-1)).sum(dim=0)
+            
+            # Create combined normalizer for this key  
+            # Use the first normalizer's input_stats as a template
+            first_stats = normalizers[0][key].params_dict['input_stats']
+            combined_normalizer[key] = SingleFieldLinearNormalizer.create_manual(
+                scale=1.0 / combined_std,
+                offset=combined_mean,
+                input_stats_dict=dict(first_stats)
+            )
+        
+        return combined_normalizer
+    
+    def get_all_actions(self) -> torch.Tensor:
+        """Concatenate actions from all datasets."""
+        all_actions = []
+        for dataset in self.datasets:
+            all_actions.append(dataset.get_all_actions())
+        return torch.cat(all_actions, dim=0)
+    
+    def __len__(self):
+        return self.total_length
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        # For direct indexing, use the provided index
+        dataset_idx, local_idx = self._global_to_local_index(idx)
+        return self.datasets[dataset_idx][local_idx]
+    
+    def sample_weighted(self) -> Dict[str, torch.Tensor]:
+        """Sample using the weighted sampler."""
+        # Get a weighted sample index
+        sampled_indices = list(self.weighted_sampler)
+        global_idx = sampled_indices[0]  # Take first sample
+        
+        # Convert to local index and get sample
+        dataset_idx, local_idx = self._global_to_local_index(global_idx)
+        return self.datasets[dataset_idx][local_idx]

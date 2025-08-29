@@ -60,8 +60,12 @@ env_runner:
   _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
 
 dataset:
-  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageDataset
-  dataset_path: data/sim2real_image
+  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  dataset_config:
+    - dataset_path: data/test.zarr
+      sampling_ratio: 0.5
+    - dataset_path: data/test3.zarr
+      sampling_ratio: 0.5
   shape_meta: *shape_meta
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
@@ -70,4 +74,4 @@ dataset:
   n_latency_steps: ${n_latency_steps}
   seed: 42
   val_ratio: 0.02
-  use_cache: True
+  use_cache: False
