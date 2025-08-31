@@ -178,7 +178,6 @@ class Sim2RealImageDataset(BaseImageDataset):
         z = zarr.open(dataset_path, mode='r')
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
-        reward_arr = z['data']['rewards']
         episode_ends = z['meta']['episode_ends']
 
         # Create replay buffer
@@ -193,19 +192,8 @@ class Sim2RealImageDataset(BaseImageDataset):
                 # Load into memory
                 replay_buffer.root['data'][key] = obs_group[key][:]
 
-        # Add actions
-        if use_disk:
-            replay_buffer.root['data']['action'] = action_arr
-        else:
-            replay_buffer.root['data']['action'] = action_arr[:]
-
-        # Add rewards
-        if use_disk:
-            replay_buffer.root['data']['reward'] = reward_arr
-        else:
-            replay_buffer.root['data']['reward'] = reward_arr[:]
-
-        # Add episode metadata (always load to memory as it's small)
+        # Always load to memory as it's small
+        replay_buffer.root['data']['action'] = action_arr[:]
         replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
 
         return replay_buffer
@@ -273,12 +261,10 @@ class Sim2RealImageDataset(BaseImageDataset):
         # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
             action = action[self.n_latency_steps:]
-        reward = data['reward'].astype(np.float32)
 
         torch_data = {
             'obs': dict_apply(obs_dict, torch.from_numpy),
             'action': torch.from_numpy(action),
-            'reward': torch.from_numpy(reward)
         }
         return torch_data
 
