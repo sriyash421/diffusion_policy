@@ -4,7 +4,12 @@ import numpy as np
 import copy
 import zarr
 import os
+import shutil
+import json
+import hashlib
+from filelock import FileLock
 from threadpoolctl import threadpool_limits
+from omegaconf import OmegaConf
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
@@ -46,12 +51,15 @@ class Sim2RealImageDataset(BaseImageDataset):
         seed=42,
         val_ratio=0.0,
         use_cache: bool = False,
+        use_disk: bool = True,
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
 
         # Load data and create replay buffer
-        self.replay_buffer = self._create_replay_buffer_from_zarr(dataset_path, use_cache=use_cache)
+        self.replay_buffer = self._create_replay_buffer_from_zarr(
+            dataset_path, shape_meta=shape_meta, use_cache=use_cache,
+            use_disk=use_disk)
 
         # Parse keys
         self.rgb_keys = [
@@ -99,8 +107,74 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.val_mask = val_mask
         self.train_mask = train_mask
 
-    def _create_replay_buffer_from_zarr(self, dataset_path, use_cache=False):
-        """Create replay buffer from zarr data"""
+    def _create_replay_buffer_from_zarr(
+            self, dataset_path, shape_meta, use_cache=False, use_disk=True):
+        """Create replay buffer from zarr data with caching and memory options."""
+        replay_buffer = None
+
+        if use_cache:
+            # Create fingerprint for caching
+            shape_meta_json = json.dumps(
+                OmegaConf.to_container(shape_meta), sort_keys=True)
+            dataset_stat = os.stat(dataset_path)
+            cache_fingerprint = {
+                'shape_meta': shape_meta_json,
+                'dataset_path': dataset_path,
+                'dataset_mtime': dataset_stat.st_mtime,
+                'dataset_size': dataset_stat.st_size,
+                'use_disk': use_disk
+            }
+            cache_fingerprint_json = json.dumps(
+                cache_fingerprint, sort_keys=True)
+            cache_hash = hashlib.md5(
+                cache_fingerprint_json.encode('utf-8')).hexdigest()
+
+            cache_zarr_path = os.path.join(
+                dataset_path, cache_hash + '.zarr.zip')
+            cache_lock_path = cache_zarr_path + '.lock'
+
+            print(f'Acquiring lock on cache: {cache_zarr_path}')
+            with FileLock(cache_lock_path):
+                if not os.path.exists(cache_zarr_path):
+                    # Cache does not exist, create it
+                    try:
+                        print('Cache does not exist. Creating!')
+                        # Always load to memory for caching
+                        replay_buffer = self._load_zarr_data(
+                            dataset_path, use_disk=False)
+                        print('Saving cache to disk.')
+                        with zarr.ZipStore(cache_zarr_path) as zip_store:
+                            replay_buffer.save_to_store(store=zip_store)
+                    except Exception as e:
+                        if os.path.exists(cache_zarr_path):
+                            shutil.rmtree(cache_zarr_path)
+                        raise e
+                else:
+                    print('Loading cached ReplayBuffer from disk.')
+
+                if replay_buffer is None:
+                    # Load from cache
+                    if use_disk:
+                        # Load cache but keep it on disk (memory mapped)
+                        zip_store = zarr.ZipStore(cache_zarr_path, mode='r')
+                        replay_buffer = ReplayBuffer.copy_from_store(
+                            src_store=zip_store, store=zarr.MemoryStore())
+                    else:
+                        # Load cache into memory
+                        with zarr.ZipStore(
+                                cache_zarr_path, mode='r') as zip_store:
+                            replay_buffer = ReplayBuffer.copy_from_store(
+                                src_store=zip_store, store=zarr.MemoryStore())
+                    print('Loaded cached data!')
+        else:
+            # No caching, load directly
+            replay_buffer = self._load_zarr_data(
+                dataset_path, use_disk=use_disk)
+
+        return replay_buffer
+
+    def _load_zarr_data(self, dataset_path, use_disk=True):
+        """Load zarr data with disk/memory options"""
         z = zarr.open(dataset_path, mode='r')
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
@@ -112,28 +186,27 @@ class Sim2RealImageDataset(BaseImageDataset):
 
         # Add observations
         for key in obs_group.keys():
-            if use_cache:
-                replay_buffer.root['data'][key] = obs_group[key][:]
-            else:
+            if use_disk:
+                # Keep data on disk (memory mapped)
                 replay_buffer.root['data'][key] = obs_group[key]
+            else:
+                # Load into memory
+                replay_buffer.root['data'][key] = obs_group[key][:]
 
         # Add actions
-        if use_cache:
-            replay_buffer.root['data']['action'] = action_arr[:]
-        else:
+        if use_disk:
             replay_buffer.root['data']['action'] = action_arr
+        else:
+            replay_buffer.root['data']['action'] = action_arr[:]
 
         # Add rewards
-        if use_cache:
-            replay_buffer.root['data']['reward'] = reward_arr[:]
-        else:
+        if use_disk:
             replay_buffer.root['data']['reward'] = reward_arr
-
-        # Add episode metadata
-        if use_cache:
-            replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
         else:
-            replay_buffer.root['meta']['episode_ends'] = episode_ends
+            replay_buffer.root['data']['reward'] = reward_arr[:]
+
+        # Add episode metadata (always load to memory as it's small)
+        replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
 
         return replay_buffer
 
@@ -212,10 +285,10 @@ class Sim2RealImageDataset(BaseImageDataset):
 
 class Sim2RealImageMultiDataset(BaseImageDataset):
     """
-    Multi-dataset wrapper that combines multiple Sim2RealImageDataset instances 
+    Multi-dataset wrapper that combines multiple Sim2RealImageDataset instances
     with weighted sampling.
     """
-    
+
     def __init__(
         self,
         dataset_config: list,
@@ -227,17 +300,18 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         n_latency_steps=0,
         seed=42,
         val_ratio=0.0,
-        use_cache: bool = False,
+        use_cache: bool = True,
+        use_disk: bool = True,
     ):
         super().__init__()
         self.dataset_config = dataset_config
         self.shape_meta = shape_meta
-        
+
         # Initialize datasets
         self.datasets = []
         self.dataset_lengths = []
         self.sampling_ratios = []
-        
+
         common_kwargs = {
             'shape_meta': shape_meta,
             'horizon': horizon,
@@ -247,119 +321,125 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'n_latency_steps': n_latency_steps,
             'seed': seed,
             'val_ratio': val_ratio,
-            'use_cache': use_cache
+            'use_cache': use_cache,
+            'use_disk': use_disk
         }
-        
+
         for config in dataset_config:
             dataset_kwargs = {**common_kwargs}
             dataset_kwargs['dataset_path'] = config['dataset_path']
-            
+
             dataset = Sim2RealImageDataset(**dataset_kwargs)
-            
+
             self.datasets.append(dataset)
             self.dataset_lengths.append(len(dataset))
             self.sampling_ratios.append(config['sampling_ratio'])
-        
-        # Calculate cumulative indices for mapping global index to (dataset_idx, local_idx)
+
+        # Calculate cumulative indices for mapping global index to
+        # (dataset_idx, local_idx)
         self.cumulative_lengths = np.cumsum([0] + self.dataset_lengths)
         self.total_length = int(self.cumulative_lengths[-1])
-        
+
         # Calculate sampling weights
         self.weights = self._calculate_weights()
-        
+
         # Create weighted sampler
         self.weighted_sampler = CustomWeightedRandomSampler(
-            weights=self.weights,
-            num_samples=self.total_length,
-            replacement=True
-        )
-    
+            weights=self.weights, num_samples=self.total_length,
+            replacement=True)
+
     def _calculate_weights(self) -> torch.Tensor:
         """Calculate per-sample weights based on dataset sizes and sampling ratios."""
         weights = []
-        
+
         # Normalize sampling ratios
         total_ratio = sum(self.sampling_ratios)
         normalized_ratios = [r / total_ratio for r in self.sampling_ratios]
-        
-        for dataset_idx, (dataset_len, ratio) in enumerate(zip(self.dataset_lengths, normalized_ratios)):
+
+        for dataset_idx, (dataset_len, ratio) in enumerate(
+                zip(self.dataset_lengths, normalized_ratios)):
             # Weight per sample = ratio / dataset_length
             sample_weight = ratio / dataset_len
             weights.extend([sample_weight] * dataset_len)
-        
+
         return torch.tensor(weights, dtype=torch.float32)
-    
+
     def _global_to_local_index(self, global_idx: int) -> tuple:
         """Convert global index to (dataset_idx, local_idx)."""
-        dataset_idx = np.searchsorted(self.cumulative_lengths[1:], global_idx, side='right')
+        dataset_idx = np.searchsorted(
+            self.cumulative_lengths[1:], global_idx, side='right')
         local_idx = global_idx - self.cumulative_lengths[dataset_idx]
         return dataset_idx, local_idx
-    
+
     def get_validation_dataset(self):
         """Create validation version of this multi-dataset wrapper."""
         val_wrapper = copy.copy(self)
-        val_wrapper.datasets = [dataset.get_validation_dataset() for dataset in self.datasets]
-        
+        val_wrapper.datasets = [
+            dataset.get_validation_dataset() for dataset in self.datasets]
+
         # Recalculate lengths and weights for validation sets
-        val_wrapper.dataset_lengths = [len(dataset) for dataset in val_wrapper.datasets]
-        val_wrapper.cumulative_lengths = np.cumsum([0] + val_wrapper.dataset_lengths)
+        val_wrapper.dataset_lengths = [
+            len(dataset) for dataset in val_wrapper.datasets]
+        val_wrapper.cumulative_lengths = np.cumsum(
+            [0] + val_wrapper.dataset_lengths)
         val_wrapper.total_length = int(val_wrapper.cumulative_lengths[-1])
         val_wrapper.weights = val_wrapper._calculate_weights()
-        
+
         # Create new weighted sampler for validation
         val_wrapper.weighted_sampler = CustomWeightedRandomSampler(
             weights=val_wrapper.weights,
             num_samples=val_wrapper.total_length,
             replacement=True
         )
-        
+
         return val_wrapper
-    
+
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
         """Combine normalizers from all datasets."""
         # Get normalizers from all datasets
-        normalizers = [dataset.get_normalizer(**kwargs) for dataset in self.datasets]
-        
+        normalizers = [
+            dataset.get_normalizer(**kwargs) for dataset in self.datasets]
+
         if len(normalizers) == 1:
             return normalizers[0]
-        
+
         # Combine normalizers using weighted averaging
         combined_normalizer = LinearNormalizer()
-        
+
         # Get all keys from the first normalizer
         first_normalizer = normalizers[0]
-        
+
         for key in first_normalizer.params_dict.keys():
             # Collect statistics from all normalizers for this key
             means = []
             stds = []
             weights = []
-            
+
             for i, normalizer in enumerate(normalizers):
                 field_normalizer = normalizer[key]
                 # Access the parameters directly from params_dict
                 params = field_normalizer.params_dict
                 means.append(params['offset'])
                 stds.append(1.0 / params['scale'])
-                
+
                 # Weight by dataset size * sampling ratio
-                dataset_weight = (self.dataset_lengths[i] * 
-                                self.sampling_ratios[i])
+                dataset_weight = (
+                    self.dataset_lengths[i] * self.sampling_ratios[i])
                 weights.append(dataset_weight)
-            
+
             # Convert to tensors for computation - will error if lists are empty
             means = torch.stack(means)
             stds = torch.stack(stds)
             weights = torch.tensor(weights, dtype=torch.float32)
-            
+
             # Normalize weights
             weights = weights / weights.sum()
-            
+
             # Compute weighted mean and std
             combined_mean = (means * weights.unsqueeze(-1)).sum(dim=0)
             combined_std = (stds * weights.unsqueeze(-1)).sum(dim=0)
-            
-            # Create combined normalizer for this key  
+
+            # Create combined normalizer for this key
             # Use the first normalizer's input_stats as a template
             first_stats = normalizers[0][key].params_dict['input_stats']
             combined_normalizer[key] = SingleFieldLinearNormalizer.create_manual(
@@ -367,30 +447,30 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 offset=combined_mean,
                 input_stats_dict=dict(first_stats)
             )
-        
+
         return combined_normalizer
-    
+
     def get_all_actions(self) -> torch.Tensor:
         """Concatenate actions from all datasets."""
         all_actions = []
         for dataset in self.datasets:
             all_actions.append(dataset.get_all_actions())
         return torch.cat(all_actions, dim=0)
-    
+
     def __len__(self):
         return self.total_length
-    
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         # For direct indexing, use the provided index
         dataset_idx, local_idx = self._global_to_local_index(idx)
         return self.datasets[dataset_idx][local_idx]
-    
+
     def sample_weighted(self) -> Dict[str, torch.Tensor]:
         """Sample using the weighted sampler."""
         # Get a weighted sample index
         sampled_indices = list(self.weighted_sampler)
         global_idx = sampled_indices[0]  # Take first sample
-        
+
         # Convert to local index and get sample
         dataset_idx, local_idx = self._global_to_local_index(global_idx)
         return self.datasets[dataset_idx][local_idx]
