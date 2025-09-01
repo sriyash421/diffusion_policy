@@ -150,6 +150,7 @@ class Sim2RealImageDataset(BaseImageDataset):
                         # Clear memory after cache creation
                         del replay_buffer
                         gc.collect()
+                        replay_buffer = None
                     except Exception as e:
                         if os.path.exists(cache_zarr_path):
                             shutil.rmtree(cache_zarr_path)
