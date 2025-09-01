@@ -58,6 +58,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
         # accelerator
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        print(f"ddp_kwargs: {ddp_kwargs}")
         self.accelerator = Accelerator(
             kwargs_handlers=[ddp_kwargs]
         )
