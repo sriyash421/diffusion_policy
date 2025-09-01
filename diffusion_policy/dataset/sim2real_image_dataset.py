@@ -4,6 +4,7 @@ import numpy as np
 import copy
 import zarr
 import os
+import gc
 import shutil
 import json
 import hashlib
@@ -145,6 +146,10 @@ class Sim2RealImageDataset(BaseImageDataset):
                         print('Saving cache to disk.')
                         with zarr.ZipStore(cache_zarr_path) as zip_store:
                             replay_buffer.save_to_store(store=zip_store)
+
+                        # Clear memory after cache creation
+                        del replay_buffer
+                        gc.collect()
                     except Exception as e:
                         if os.path.exists(cache_zarr_path):
                             shutil.rmtree(cache_zarr_path)
