@@ -58,7 +58,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 @click.option('--output', '-o', required=True, 
               help='Directory to save recording')
 @click.option('--robot_ip', '-ri', required=True, 
-              help="UR5's IP address e.g. 192.168.0.204")
+              help="UR5's IP address e.g. 192.168.1.10")
 @click.option('--match_dataset', '-m', default=None, 
               help='Dataset used to overlay and adjust initial condition')
 @click.option('--match_episode', '-me', default=None, type=int, 
@@ -159,7 +159,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             cv2.setNumThreads(1)
 
             print("Waiting for realsense")
-            time.sleep(10.0)
+            time.sleep(5.0)
 
             print("Warming up policy inference")
             obs = env.get_obs()
@@ -248,7 +248,6 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             # this action starts from the first obs step
                             action = result['action'][0:1].detach().to('cpu').numpy() 
                             print('Inference latency:', time.time() - s)
-                            action = result['action'][0:1].detach().to('cpu').numpy() 
                         # convert policy action to env actions
                         if delta_action:
                             assert len(action) == 1
