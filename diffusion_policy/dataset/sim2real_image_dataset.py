@@ -18,6 +18,11 @@ from diffusion_policy.model.common.normalizer import (
     LinearNormalizer, SingleFieldLinearNormalizer)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+import glob
+
 
 class CustomWeightedRandomSampler(torch.utils.data.WeightedRandomSampler):
     """
@@ -275,6 +280,285 @@ class Sim2RealImageDataset(BaseImageDataset):
         return torch_data
 
 
+def discover_zarr_files(dataset_dir: str) -> list:
+    """
+    Discover all zarr files in a directory.
+    Supports both .zarr directories and .zarr.zip files.
+    """
+    if not os.path.exists(dataset_dir):
+        raise ValueError(f"Dataset directory does not exist: {dataset_dir}")
+
+    zarr_files = []
+
+    # Find .zarr directories
+    zarr_dirs = glob.glob(os.path.join(dataset_dir, "*.zarr"))
+    zarr_files.extend([f for f in zarr_dirs if os.path.isdir(f)])
+
+    # Find .zarr.zip files
+    zarr_zips = glob.glob(os.path.join(dataset_dir, "*.zarr.zip"))
+    zarr_files.extend(zarr_zips)
+
+    if not zarr_files:
+        raise ValueError(f"No zarr files found in directory: {dataset_dir}")
+
+    # Sort for consistent ordering
+    zarr_files.sort()
+
+    print(f"Discovered {len(zarr_files)} zarr files in {dataset_dir}:")
+    for f in zarr_files:
+        print(f"  - {os.path.basename(f)}")
+
+    return zarr_files
+
+
+class FileStreamManager:
+    """
+    Manages file loading queue and double-buffering for streaming datasets.
+    """
+    def __init__(self, file_paths: list, 
+                 samples_per_file_multiplier: float = 1.0):
+        self.file_paths = file_paths
+        self.samples_per_file_multiplier = samples_per_file_multiplier
+        self.file_queue = deque(file_paths.copy())
+        self.current_file_path = None
+        self.next_file_path = None
+
+        # Thread management
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.next_dataset_future = None
+        self.lock = threading.Lock()
+
+        # Shuffle initial queue
+        import random
+        file_list = list(self.file_queue)
+        random.shuffle(file_list)
+        self.file_queue = deque(file_list)
+
+    def get_next_file_path(self) -> str:
+        """Get next file path from queue, reshuffling if needed."""
+        with self.lock:
+            if not self.file_queue:
+                # Reshuffle queue when empty
+                file_list = self.file_paths.copy()
+                import random
+                random.shuffle(file_list)
+                self.file_queue = deque(file_list)
+                print("Reshuffled file queue for new epoch")
+
+            return self.file_queue.popleft()
+
+    def start_loading_next(self, dataset_kwargs: dict):
+        """Start background loading of next dataset."""
+        if self.next_dataset_future is not None:
+            return  # Already loading
+
+        self.next_file_path = self.get_next_file_path()
+        dataset_kwargs = dataset_kwargs.copy()
+        dataset_kwargs['dataset_path'] = self.next_file_path
+
+        print(f"Starting background load of {self.next_file_path}")
+        self.next_dataset_future = self.executor.submit(
+            self._load_dataset, dataset_kwargs)
+
+    def _load_dataset(self, dataset_kwargs: dict) -> 'Sim2RealImageDataset':
+        """Load dataset in background thread."""
+        return Sim2RealImageDataset(**dataset_kwargs)
+
+    def get_next_dataset(self) -> 'Sim2RealImageDataset':
+        """Get the next loaded dataset, blocking if necessary."""
+        if self.next_dataset_future is None:
+            raise RuntimeError("No dataset loading in progress")
+
+        print(f"Waiting for {self.next_file_path} to finish loading...")
+        dataset = self.next_dataset_future.result()
+        print(f"Finished loading {self.next_file_path}")
+
+        # Calculate samples for this file
+        file_size = len(dataset)
+        samples_for_file = int(file_size * self.samples_per_file_multiplier)
+
+        # Reset for next load
+        self.current_file_path = self.next_file_path
+        self.next_file_path = None
+        self.next_dataset_future = None
+
+        return dataset, samples_for_file
+
+    def shutdown(self):
+        """Clean shutdown of background threads."""
+        if self.next_dataset_future:
+            self.next_dataset_future.cancel()
+        self.executor.shutdown(wait=True)
+
+
+class StreamingMultiDataset(BaseImageDataset):
+    """
+    Streaming multi-dataset with double-buffering and natural size-based
+    sampling. Only keeps 2 datasets in memory at once, with background
+    loading.
+    """
+
+    def __init__(
+        self,
+        file_paths: list = None,
+        dataset_dir: str = None,
+        shape_meta: dict = None,
+        horizon=1,
+        pad_before=0,
+        pad_after=0,
+        n_obs_steps=None,
+        n_latency_steps=0,
+        seed=42,
+        val_ratio=0.0,
+        use_cache: bool = False,
+        use_disk: bool = False,
+        samples_per_file_multiplier: float = 1.0,
+    ):
+        super().__init__()
+
+        # Handle file discovery
+        if dataset_dir is not None:
+            file_paths = discover_zarr_files(dataset_dir)
+        elif file_paths is None:
+            raise ValueError("Either file_paths or dataset_dir must be provided")
+
+        # Store common dataset kwargs
+        self.common_dataset_kwargs = {
+            'shape_meta': shape_meta,
+            'horizon': horizon,
+            'pad_before': pad_before,
+            'pad_after': pad_after,
+            'n_obs_steps': n_obs_steps,
+            'n_latency_steps': n_latency_steps,
+            'seed': seed,
+            'val_ratio': val_ratio,
+            'use_cache': use_cache,
+            'use_disk': use_disk
+        }
+
+        # Initialize file manager
+        self.file_manager = FileStreamManager(
+            file_paths, samples_per_file_multiplier)
+
+        # Double buffering state
+        self.active_dataset = None
+        self.standby_dataset = None
+        self.samples_consumed_from_active = 0
+        self.target_samples_for_active = 0
+
+        # Initialize first two datasets
+        self._initialize_datasets()
+
+        # For compatibility with existing code
+        self.shape_meta = shape_meta
+        self.val_ratio = val_ratio
+
+    def _initialize_datasets(self):
+        """Load first two datasets synchronously."""
+        print("Initializing streaming datasets...")
+
+        # Load first dataset
+        first_path = self.file_manager.get_next_file_path()
+        first_kwargs = self.common_dataset_kwargs.copy()
+        first_kwargs['dataset_path'] = first_path
+        self.active_dataset = Sim2RealImageDataset(**first_kwargs)
+        self.target_samples_for_active = int(
+            len(self.active_dataset) * 
+            self.file_manager.samples_per_file_multiplier)
+        print(f"Loaded active dataset: {first_path} "
+              f"({len(self.active_dataset)} samples, "
+              f"target: {self.target_samples_for_active})")
+
+        # Start loading second dataset
+        self.file_manager.start_loading_next(self.common_dataset_kwargs)
+
+        # Load second dataset (will block)
+        self.standby_dataset, standby_target = (
+            self.file_manager.get_next_dataset())
+
+        # Start loading third dataset in background
+        self.file_manager.start_loading_next(self.common_dataset_kwargs)
+
+        print("Streaming datasets initialized!")
+
+    def _should_rotate_datasets(self) -> bool:
+        """Check if we should rotate to next dataset."""
+        return (self.samples_consumed_from_active >= 
+                self.target_samples_for_active)
+
+    def _rotate_datasets(self):
+        """Rotate active/standby datasets and start loading next."""
+        print(f"Rotating datasets (consumed {self.samples_consumed_from_active}"
+              f"/{self.target_samples_for_active} from active)")
+
+        # Swap active and standby
+        old_active = self.active_dataset
+        self.active_dataset = self.standby_dataset
+        self.samples_consumed_from_active = 0
+        self.target_samples_for_active = int(
+            len(self.active_dataset) * 
+            self.file_manager.samples_per_file_multiplier)
+
+        # Get next dataset (blocks if not ready)
+        self.standby_dataset, _ = self.file_manager.get_next_dataset()
+
+        # Start loading the next one in background
+        self.file_manager.start_loading_next(self.common_dataset_kwargs)
+
+        # Clean up old dataset
+        del old_active
+        import gc
+        gc.collect()
+
+        print(f"Rotated to new active dataset "
+              f"({len(self.active_dataset)} samples, "
+              f"target: {self.target_samples_for_active})")
+
+    def __len__(self):
+        """Return length of active dataset."""
+        return len(self.active_dataset) if self.active_dataset else 0
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get item from active dataset and handle rotation."""
+        if self._should_rotate_datasets():
+            self._rotate_datasets()
+
+        # Sample from active dataset
+        # Use modulo to handle idx >= dataset length
+        actual_idx = idx % len(self.active_dataset)
+        sample = self.active_dataset[actual_idx]
+
+        self.samples_consumed_from_active += 1
+        return sample
+
+    def get_validation_dataset(self):
+        """Create validation version using active dataset."""
+        # For validation, just use the active dataset's validation split
+        return self.active_dataset.get_validation_dataset()
+
+    def get_normalizer(self, **kwargs) -> LinearNormalizer:
+        """Get normalizer using first dataset for consistency."""
+        if not hasattr(self, '_cached_normalizer'):
+            # Load first dataset temporarily to get normalizer
+            first_path = self.file_manager.file_paths[0]
+            temp_kwargs = self.common_dataset_kwargs.copy()
+            temp_kwargs['dataset_path'] = first_path
+            temp_dataset = Sim2RealImageDataset(**temp_kwargs)
+            self._cached_normalizer = temp_dataset.get_normalizer(**kwargs)
+            del temp_dataset
+            print(f"Computed normalizer using first dataset: {first_path}")
+        return self._cached_normalizer
+
+    def get_all_actions(self) -> torch.Tensor:
+        """Get actions from active dataset."""
+        return self.active_dataset.get_all_actions()
+
+    def __del__(self):
+        """Cleanup on destruction."""
+        if hasattr(self, 'file_manager'):
+            self.file_manager.shutdown()
+
+
 class Sim2RealImageMultiDataset(BaseImageDataset):
     """
     Multi-dataset wrapper that combines multiple Sim2RealImageDataset instances
@@ -283,8 +567,10 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
     def __init__(
         self,
-        dataset_config: list,
-        shape_meta: dict,
+        dataset_config: list = None,
+        file_paths: list = None,
+        dataset_dir: str = None,
+        shape_meta: dict = None,
         horizon=1,
         pad_before=0,
         pad_after=0,
@@ -294,9 +580,46 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         val_ratio=0.0,
         use_cache: bool = True,
         use_disk: bool = True,
+        use_streaming: bool = False,
+        samples_per_file_multiplier: float = 1.0,
     ):
         super().__init__()
-        self.dataset_config = dataset_config
+
+        # Handle different input formats
+        if dataset_dir is not None:
+            file_paths = discover_zarr_files(dataset_dir)
+        elif dataset_config is not None:
+            file_paths = [config['dataset_path'] for config in dataset_config]
+        elif file_paths is None:
+            raise ValueError(
+                "Either dataset_dir, dataset_config, or file_paths must be "
+                "provided")
+
+        # Use streaming implementation if requested
+        if use_streaming:
+            self.streaming_dataset = StreamingMultiDataset(
+                file_paths=file_paths,
+                dataset_dir=None,  # Already resolved to file_paths above
+                shape_meta=shape_meta,
+                horizon=horizon,
+                pad_before=pad_before,
+                pad_after=pad_after,
+                n_obs_steps=n_obs_steps,
+                n_latency_steps=n_latency_steps,
+                seed=seed,
+                val_ratio=val_ratio,
+                use_cache=use_cache,
+                use_disk=use_disk,
+                samples_per_file_multiplier=samples_per_file_multiplier,
+            )
+            self.is_streaming = True
+            return
+
+        # Fall back to original implementation
+        self.is_streaming = False
+        self.dataset_config = dataset_config or [
+            {'dataset_path': path, 'sampling_ratio': 1.0} 
+            for path in file_paths]
         self.shape_meta = shape_meta
 
         # Initialize datasets
@@ -317,7 +640,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'use_disk': use_disk
         }
 
-        for config in dataset_config:
+        for config in self.dataset_config:
             dataset_kwargs = {**common_kwargs}
             dataset_kwargs['dataset_path'] = config['dataset_path']
 
@@ -325,7 +648,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
             self.datasets.append(dataset)
             self.dataset_lengths.append(len(dataset))
-            self.sampling_ratios.append(config['sampling_ratio'])
+            # Use natural sampling (size-based) if no ratio specified
+            ratio = config.get('sampling_ratio', len(dataset))
+            self.sampling_ratios.append(ratio)
 
         # Calculate cumulative indices for mapping global index to
         # (dataset_idx, local_idx)
@@ -365,6 +690,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
     def get_validation_dataset(self):
         """Create validation version of this multi-dataset wrapper."""
+        if self.is_streaming:
+            return self.streaming_dataset.get_validation_dataset()
+
         val_wrapper = copy.copy(self)
         val_wrapper.datasets = [
             dataset.get_validation_dataset() for dataset in self.datasets]
@@ -388,6 +716,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
         """Combine normalizers from all datasets."""
+        if self.is_streaming:
+            return self.streaming_dataset.get_normalizer(**kwargs)
+
         # Get normalizers from all datasets
         normalizers = [
             dataset.get_normalizer(**kwargs) for dataset in self.datasets]
@@ -419,7 +750,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                     self.dataset_lengths[i] * self.sampling_ratios[i])
                 weights.append(dataset_weight)
 
-            # Convert to tensors for computation - will error if lists are empty
+            # Convert to tensors for computation
             means = torch.stack(means)
             stds = torch.stack(stds)
             weights = torch.tensor(weights, dtype=torch.float32)
@@ -434,31 +765,46 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             # Create combined normalizer for this key
             # Use the first normalizer's input_stats as a template
             first_stats = normalizers[0][key].params_dict['input_stats']
-            combined_normalizer[key] = SingleFieldLinearNormalizer.create_manual(
-                scale=1.0 / combined_std,
-                offset=combined_mean,
-                input_stats_dict=dict(first_stats)
-            )
+            combined_normalizer[key] = (
+                SingleFieldLinearNormalizer.create_manual(
+                    scale=1.0 / combined_std,
+                    offset=combined_mean,
+                    input_stats_dict=dict(first_stats)
+                ))
 
         return combined_normalizer
 
     def get_all_actions(self) -> torch.Tensor:
         """Concatenate actions from all datasets."""
+        if self.is_streaming:
+            return self.streaming_dataset.get_all_actions()
+
         all_actions = []
         for dataset in self.datasets:
             all_actions.append(dataset.get_all_actions())
         return torch.cat(all_actions, dim=0)
 
     def __len__(self):
+        if self.is_streaming:
+            return len(self.streaming_dataset)
         return self.total_length
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        if self.is_streaming:
+            return self.streaming_dataset[idx]
+
         # For direct indexing, use the provided index
         dataset_idx, local_idx = self._global_to_local_index(idx)
         return self.datasets[dataset_idx][local_idx]
 
     def sample_weighted(self) -> Dict[str, torch.Tensor]:
         """Sample using the weighted sampler."""
+        if self.is_streaming:
+            # For streaming, just use regular indexing
+            import random
+            idx = random.randint(0, len(self) - 1)
+            return self[idx]
+
         # Get a weighted sample index
         sampled_indices = list(self.weighted_sampler)
         global_idx = sampled_indices[0]  # Take first sample
