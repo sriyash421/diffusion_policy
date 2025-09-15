@@ -75,28 +75,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-        # configure dataset - use shared loading for multi-GPU
+        # configure dataset
         dataset: BaseImageDataset
-
-        # Ensure use_disk=True for memory efficiency in multi-GPU training
-        dataset_cfg = copy.deepcopy(cfg.task.dataset)
-        if hasattr(dataset_cfg, 'use_disk'):
-            dataset_cfg.use_disk = True
-        if hasattr(dataset_cfg, 'use_cache'):
-            dataset_cfg.use_cache = True
-        if self.accelerator.is_main_process:
-            print(f"Main process (rank {self.accelerator.process_index}) loading dataset...")
-            dataset = hydra.utils.instantiate(dataset_cfg)
-        else:
-            # Non-main processes wait for main process to finish potential caching
-            print(f"Process {self.accelerator.process_index} waiting for main process...")
-            self.accelerator.wait_for_everyone()
-            dataset = hydra.utils.instantiate(dataset_cfg)
-
-        # Synchronize all processes after dataset loading
-        self.accelerator.wait_for_everyone()
-        print(f"Process {self.accelerator.process_index} finished loading dataset")
-
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
