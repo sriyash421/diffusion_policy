@@ -32,7 +32,7 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class TrainMLPImageWorkspace(BaseWorkspace):
-    include_keys = ['global_step', 'epoch']
+    include_keys = ['global_step', 'epoch', 'last_checkpoint_step']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
@@ -54,6 +54,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
+        self.last_checkpoint_step = 0  # Track last checkpoint step
 
         # accelerator
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -183,6 +184,26 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 json_logger.log(step_log)
                             self.global_step += 1
 
+                            # checkpoint based on gradient steps - check right after step increment
+                            next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
+                            if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
+                                print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                model_ddp = self.model
+                                self.model = self.accelerator.unwrap_model(self.model)
+                                if cfg.checkpoint.save_last_ckpt:
+                                    self.save_checkpoint()
+                                if cfg.checkpoint.save_last_snapshot:
+                                    self.save_snapshot()
+
+                                # Save checkpoint for this step
+                                step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
+                                os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
+                                self.save_checkpoint(path=step_ckpt_path)
+                                self.model = model_ddp
+
+                                # Update last checkpoint step
+                                self.last_checkpoint_step = self.global_step
+
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
                             break
@@ -236,20 +257,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         del pred_action
                         del mse
 
-                # checkpoint based on gradient steps, not epochs
-                if (self.global_step % cfg.training.checkpoint_every) == 0 and self.accelerator.is_main_process:
-                    model_ddp = self.model
-                    self.model = self.accelerator.unwrap_model(self.model)
-                    if cfg.checkpoint.save_last_ckpt:
-                        self.save_checkpoint()
-                    if cfg.checkpoint.save_last_snapshot:
-                        self.save_snapshot()
-
-                    # Save checkpoint for this step
-                    step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
-                    os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
-                    self.save_checkpoint(path=step_ckpt_path)
-                    self.model = model_ddp
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
