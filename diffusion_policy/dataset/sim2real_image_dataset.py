@@ -435,6 +435,10 @@ class StreamingMultiDataset(BaseImageDataset):
             'use_disk': use_disk
         }
 
+        # Calculate total epoch length and normalizer from all files in one pass
+        print("Loading all datasets to compute epoch length and normalizer...")
+        self._compute_epoch_stats_and_normalizer(file_paths, **self.common_dataset_kwargs)
+
         # Initialize file manager
         self.file_manager = FileStreamManager(
             file_paths, samples_per_file_multiplier)
@@ -451,6 +455,81 @@ class StreamingMultiDataset(BaseImageDataset):
         # For compatibility with existing code
         self.shape_meta = shape_meta
         self.val_ratio = val_ratio
+
+    def _compute_epoch_stats_and_normalizer(self, file_paths: list, **dataset_kwargs):
+        """Compute total epoch length and normalizer from all datasets one at a time."""
+        self.total_epoch_length = 0
+
+        # Collect statistics from each dataset without keeping them all in memory
+        dataset_stats = []
+        dataset_sizes = []
+
+        # Process datasets one at a time
+        for file_path in file_paths:
+            temp_kwargs = dataset_kwargs.copy()
+            temp_kwargs['dataset_path'] = file_path
+            temp_dataset = Sim2RealImageDataset(**temp_kwargs)
+
+            # Accumulate epoch length
+            file_length = len(temp_dataset)
+            self.total_epoch_length += file_length
+            dataset_sizes.append(file_length)
+
+            # Get normalizer statistics
+            dataset_normalizer = temp_dataset.get_normalizer()
+            dataset_stats.append(dataset_normalizer)
+
+            print(f"  {file_path}: {file_length} samples")
+
+            # Clean up immediately to save memory
+            del temp_dataset
+
+        print(f"Total epoch length: {self.total_epoch_length} samples across {len(file_paths)} files")
+
+        # Compute combined normalizer from collected statistics
+        if len(dataset_stats) == 1:
+            self._cached_normalizer = dataset_stats[0]
+        else:
+            # Combine normalizers using weighted averaging by dataset size
+            combined_normalizer = LinearNormalizer()
+            first_normalizer = dataset_stats[0]
+
+            # Calculate weights based on dataset sizes
+            total_size = sum(dataset_sizes)
+            weights = [size / total_size for size in dataset_sizes]
+
+            for key in first_normalizer.params_dict.keys():
+                # Collect statistics from all normalizers for this key
+                means = []
+                stds = []
+
+                for normalizer in dataset_stats:
+                    field_normalizer = normalizer[key]
+                    params = field_normalizer.params_dict
+                    means.append(params['offset'])
+                    stds.append(1.0 / params['scale'])
+
+                # Convert to tensors for computation
+                means = torch.stack(means)
+                stds = torch.stack(stds)
+                weights_tensor = torch.tensor(weights, dtype=torch.float32)
+
+                # Compute weighted mean and std
+                combined_mean = (means * weights_tensor.unsqueeze(-1)).sum(dim=0)
+                combined_std = (stds * weights_tensor.unsqueeze(-1)).sum(dim=0)
+
+                # Create combined normalizer for this key
+                first_stats = dataset_stats[0][key].params_dict['input_stats']
+                combined_normalizer[key] = (
+                    SingleFieldLinearNormalizer.create_manual(
+                        scale=1.0 / combined_std,
+                        offset=combined_mean,
+                        input_stats_dict=dict(first_stats)
+                    ))
+
+            self._cached_normalizer = combined_normalizer
+
+        print("Epoch stats and normalizer computed from all datasets!")
 
     def _initialize_datasets(self):
         """Load first two datasets synchronously."""
@@ -514,8 +593,8 @@ class StreamingMultiDataset(BaseImageDataset):
               f"target: {self.target_samples_for_active})")
 
     def __len__(self):
-        """Return length of active dataset."""
-        return len(self.active_dataset) if self.active_dataset else 0
+        """Return total epoch length (sum of all datasets)."""
+        return getattr(self, 'total_epoch_length', len(self.active_dataset) if self.active_dataset else 0)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get item from active dataset and handle rotation."""
@@ -536,16 +615,7 @@ class StreamingMultiDataset(BaseImageDataset):
         return self.active_dataset.get_validation_dataset()
 
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
-        """Get normalizer using first dataset for consistency."""
-        if not hasattr(self, '_cached_normalizer'):
-            # Load first dataset temporarily to get normalizer
-            first_path = self.file_manager.file_paths[0]
-            temp_kwargs = self.common_dataset_kwargs.copy()
-            temp_kwargs['dataset_path'] = first_path
-            temp_dataset = Sim2RealImageDataset(**temp_kwargs)
-            self._cached_normalizer = temp_dataset.get_normalizer(**kwargs)
-            del temp_dataset
-            print(f"Computed normalizer using first dataset: {first_path}")
+        """Get normalizer computed from all datasets during initialization."""
         return self._cached_normalizer
 
     def get_all_actions(self) -> torch.Tensor:
