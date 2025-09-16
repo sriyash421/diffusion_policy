@@ -65,7 +65,7 @@ env_runner:
 dataset:
   _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
   dataset_dir: ../OctiLab/datasets_test
-  use_streaming: true
+  use_streaming: false
   samples_per_file_multiplier: 1.0
   shape_meta: *shape_meta
   horizon: ${horizon}
