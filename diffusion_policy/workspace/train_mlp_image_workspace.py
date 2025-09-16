@@ -25,7 +25,6 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.mlp_image_policy import MLPImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
@@ -121,10 +120,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             )
 
         # configure checkpoint
-        topk_manager = TopKCheckpointManager(
-            save_dir=os.path.join(self.output_dir, 'checkpoints'),
-            **cfg.checkpoint.topk
-        )
         # accelerator prepare
         train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = self.accelerator.prepare(
             train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
@@ -248,14 +243,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     if cfg.checkpoint.save_last_snapshot:
                         self.save_snapshot()
 
-                    # sanitize metric names
-                    metric_dict = dict()
-                    for key, value in step_log.items():
-                        new_key = key.replace('/', '_')
-                        metric_dict[new_key] = value
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
+                    # Save checkpoint for this epoch
+                    epoch_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'epoch_{self.epoch:04d}.ckpt')
+                    os.makedirs(os.path.dirname(epoch_ckpt_path), exist_ok=True)
+                    self.save_checkpoint(path=epoch_ckpt_path)
                     self.model = model_ddp
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)

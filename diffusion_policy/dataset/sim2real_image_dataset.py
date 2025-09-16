@@ -363,7 +363,6 @@ class FileStreamManager:
     def _load_dataset(self, dataset_kwargs: dict) -> 'Sim2RealImageDataset':
         """Load dataset in background thread."""
         return Sim2RealImageDataset(**dataset_kwargs)
-
     def get_next_dataset(self) -> 'Sim2RealImageDataset':
         """Get the next loaded dataset, blocking if necessary."""
         if self.next_dataset_future is None:
