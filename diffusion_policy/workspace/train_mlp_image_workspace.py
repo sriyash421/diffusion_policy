@@ -235,7 +235,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         del result
                         del pred_action
                         del mse
-                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.accelerator.is_main_process:
+
+                # checkpoint based on gradient steps, not epochs
+                if (self.global_step % cfg.training.checkpoint_every) == 0 and self.accelerator.is_main_process:
                     model_ddp = self.model
                     self.model = self.accelerator.unwrap_model(self.model)
                     if cfg.checkpoint.save_last_ckpt:
@@ -243,10 +245,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     if cfg.checkpoint.save_last_snapshot:
                         self.save_snapshot()
 
-                    # Save checkpoint for this epoch
-                    epoch_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'epoch_{self.epoch:04d}.ckpt')
-                    os.makedirs(os.path.dirname(epoch_ckpt_path), exist_ok=True)
-                    self.save_checkpoint(path=epoch_ckpt_path)
+                    # Save checkpoint for this step
+                    step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
+                    os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
+                    self.save_checkpoint(path=step_ckpt_path)
                     self.model = model_ddp
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
