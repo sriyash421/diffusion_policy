@@ -22,7 +22,6 @@ obs_as_global_cond: True
 policy:
   _target_: diffusion_policy.policy.mlp_image_policy.MLPImagePolicy
   shape_meta: ${shape_meta}
-  action_clip_range: null  # Set to 2.0 to clip normalized actions to [-2, 2]
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
     shape_meta: ${shape_meta}
@@ -94,7 +93,6 @@ training:
   max_train_steps: null
   max_val_steps: null
   tqdm_interval_sec: 1.0
-  grad_norm_clip: 1.0  # Gradient clipping threshold
 
 logging:
   project: diffusion_policy_sim2real_image

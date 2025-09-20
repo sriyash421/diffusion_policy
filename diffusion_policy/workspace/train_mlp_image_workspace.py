@@ -152,7 +152,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
                 train_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
-                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec,
+                        disable=not self.accelerator.is_main_process) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
@@ -164,6 +165,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
+                            # Gradient clipping
+                            if hasattr(cfg.training, 'grad_norm_clip') and cfg.training.grad_norm_clip is not None:
+                                self.accelerator.clip_grad_norm_(self.model.parameters(), cfg.training.grad_norm_clip)
+                            
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()

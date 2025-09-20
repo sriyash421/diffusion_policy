@@ -1,12 +1,13 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union
 import torch
 import torch.nn as nn
-from torch.distributions import Normal
-from diffusion_policy.common.pytorch_util import dict_apply
+import torch.nn.functional as F
+
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
-
+from diffusion_policy.common.pytorch_util import dict_apply
+from torch.distributions import Normal
 
 class MLPImagePolicy(BaseImagePolicy):
     def __init__(self,
@@ -16,7 +17,6 @@ class MLPImagePolicy(BaseImagePolicy):
             n_obs_steps: int,
             hidden_dim: int = 512,
             hidden_depth: int = 4,
-            action_clip_range: float = None,  # NEW: Action clipping parameter
             **kwargs):
         assert n_action_steps == 1, "MLPImagePolicy only supports n_action_steps=1"
         
@@ -32,9 +32,6 @@ class MLPImagePolicy(BaseImagePolicy):
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
         self.kwargs = kwargs
-        
-        # NEW: Action clipping configuration
-        self.action_clip_range = action_clip_range  # None means no clipping
         
         # Input: all obs steps concatenated
         input_dim = obs_feature_dim * n_obs_steps
@@ -83,9 +80,6 @@ class MLPImagePolicy(BaseImagePolicy):
         # Get action distribution
         dist = self.forward(mlp_input)
         action_pred = dist.rsample()  # Sample from distribution
-        
-
-        
         action = self.normalizer['action'].unnormalize(action_pred)
         return {
             'action': action,
@@ -98,17 +92,6 @@ class MLPImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
-        
-        # NEW: Apply action clipping if enabled
-        if self.action_clip_range is not None:
-            nactions = torch.clamp(nactions, 
-                                 min=-self.action_clip_range, 
-                                 max=self.action_clip_range)
-        
-        # HACK: Replace last dimension (gripper) with raw data clipped to [-1, 1]
-        raw_actions = batch['action']
-        nactions[..., -1] = torch.clamp(raw_actions[..., -1], min=-1.0, max=1.0)
-        
         B = nactions.shape[0]
         To = self.n_obs_steps
         Ta = self.n_action_steps
