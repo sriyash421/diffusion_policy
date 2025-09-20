@@ -53,20 +53,21 @@ policy:
 
 dataloader:
   batch_size: 64
-  num_workers: 8
-  shuffle: True
-  pin_memory: True
-  persistent_workers: True
-  prefetch_factor: 4
+  num_workers: 8          # Enable parallel loading
+  shuffle: False
+  pin_memory: True        # PyTorch handles this safely
+  persistent_workers: True # Keep workers alive
+  prefetch_factor: 2      # Each worker prefetches 2 batches
   drop_last: True
+
 
 val_dataloader:
   batch_size: 64
-  num_workers: 8
+  num_workers: 2
   shuffle: False
   pin_memory: True
   persistent_workers: True
-  prefetch_factor: 4
+  prefetch_factor: 2
   drop_last: True
 
 optimizer:

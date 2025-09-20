@@ -490,9 +490,9 @@ class BufferedSim2RealImageDataset(BaseImageDataset):
 		if self.n_latency_steps > 0:
 			act_seg = act_seg[self.n_latency_steps:]
 		act_t = torch.from_numpy(act_seg)
-		if self.pin_memory_stage:
-			obs_out = {k: v.pin_memory() if isinstance(v, torch.Tensor) else v for k, v in obs_out.items()}
-			act_t = act_t.pin_memory()
+		# if self.pin_memory_stage:
+		# 	obs_out = {k: v.pin_memory() if isinstance(v, torch.Tensor) else v for k, v in obs_out.items()}
+		# 	act_t = act_t.pin_memory()
 		return {
 			'obs': obs_out,
 			'action': act_t
