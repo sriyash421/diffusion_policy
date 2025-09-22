@@ -54,3 +54,5 @@ dataset:
   pin_memory_stage: true
   distributed_shard: auto
   samples_per_epoch: null
+  # enable_debug_logging: true          # Enable debug logging
+  # debug_buffer_log_interval: 5.0 

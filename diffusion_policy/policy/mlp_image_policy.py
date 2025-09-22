@@ -105,9 +105,9 @@ class MLPImagePolicy(BaseImagePolicy):
                                  min=-self.action_clip_range, 
                                  max=self.action_clip_range)
         
-        # HACK: Replace last dimension (gripper) with raw data clipped to [-1, 1]
-        raw_actions = batch['action']
-        nactions[..., -1] = torch.clamp(raw_actions[..., -1], min=-1.0, max=1.0)
+        # # HACK: Replace last dimension (gripper) with raw data clipped to [-1, 1]
+        # raw_actions = batch['action']
+        # nactions[..., -1] = torch.clamp(raw_actions[..., -1], min=-1.0, max=1.0)
         
         B = nactions.shape[0]
         To = self.n_obs_steps

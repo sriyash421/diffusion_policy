@@ -20,6 +20,7 @@ import tqdm
 import numpy as np
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
+import time
 
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.mlp_image_policy import MLPImagePolicy
@@ -79,6 +80,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
+        # HACK: Wait for buffer to fill
+        print("HACK: Waiting 300 seconds for buffer to fill...")
+        time.sleep(500)
+
+
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
 

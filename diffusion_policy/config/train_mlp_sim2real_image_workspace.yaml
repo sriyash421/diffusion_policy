@@ -52,8 +52,8 @@ policy:
   hidden_depth: 4
 
 dataloader:
-  batch_size: 64
-  num_workers: 8          # Enable parallel loading
+  batch_size: 32
+  num_workers: 12          # Enable parallel loading
   shuffle: False
   pin_memory: True        # PyTorch handles this safely
   persistent_workers: True # Keep workers alive
@@ -62,7 +62,7 @@ dataloader:
 
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 2
   shuffle: False
   pin_memory: True
@@ -101,6 +101,7 @@ logging:
   project: diffusion_policy_sim2real_image
   resume: True
   mode: online
+  # entity: westtyl
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
