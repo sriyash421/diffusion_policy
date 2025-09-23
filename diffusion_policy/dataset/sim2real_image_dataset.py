@@ -658,7 +658,34 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         if dataset_dir is not None:
             file_paths = discover_zarr_files(dataset_dir)
         elif dataset_config is not None:
-            file_paths = [config['dataset_path'] for config in dataset_config]
+            # Support both dataset_path and dataset_dir in config
+            # Build expanded config with individual file paths
+            expanded_config = []
+            for config in dataset_config:
+                sampling_ratio = config.get('sampling_ratio', 1.0)
+                if 'dataset_path' in config:
+                    expanded_config.append({
+                        'dataset_path': config['dataset_path'],
+                        'sampling_ratio': sampling_ratio
+                    })
+                elif 'dataset_dir' in config:
+                    # Discover all zarr files in the directory
+                    dir_files = discover_zarr_files(config['dataset_dir'])
+                    # Split sampling ratio equally among files in directory
+                    ratio_per_file = sampling_ratio / len(dir_files)
+                    for file_path in dir_files:
+                        expanded_config.append({
+                            'dataset_path': file_path,
+                            'sampling_ratio': ratio_per_file
+                        })
+                else:
+                    raise ValueError(
+                        "Each dataset_config entry must have either "
+                        "'dataset_path' or 'dataset_dir'")
+
+            # Extract file paths and update dataset_config
+            file_paths = [config['dataset_path'] for config in expanded_config]
+            dataset_config = expanded_config
         elif file_paths is None:
             raise ValueError(
                 "Either dataset_dir, dataset_config, or file_paths must be "
