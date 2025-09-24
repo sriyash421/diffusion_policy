@@ -1,4 +1,9 @@
 from typing import Dict
+import json
+import hashlib
+import shutil
+from filelock import FileLock
+from omegaconf import OmegaConf
 import torch
 import numpy as np
 import copy
@@ -30,9 +35,49 @@ class Sim2RealImageDataset(BaseImageDataset):
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
-
+        #debug printing stuff
+        print("shape_meta: ", shape_meta)
         # Load data and create replay buffer
         self.replay_buffer = self._create_replay_buffer_from_zarr(dataset_path, use_cache=use_cache)
+
+        # replay_buffer = None
+        # if use_cache:
+        #     # fingerprint shape_meta
+        #     shape_meta_json = json.dumps(OmegaConf.to_container(shape_meta), sort_keys=True)
+        #     shape_meta_hash = hashlib.md5(shape_meta_json.encode('utf-8')).hexdigest()
+        #     cache_zarr_path = os.path.join(dataset_path, shape_meta_hash + '.zarr.zip')
+        #     cache_lock_path = cache_zarr_path + '.lock'
+        #     print('Acquiring lock on cache.')
+        #     with FileLock(cache_lock_path):
+        #         if not os.path.exists(cache_zarr_path):
+        #             # cache does not exists
+        #             try:
+        #                 print('Cache does not exist. Creating!')
+        #                 replay_buffer = _get_replay_buffer( #doesn't exist in this file, so I've taken it from real_pusht_image_dataset.py
+        #                     dataset_path=dataset_path,
+        #                     shape_meta=shape_meta,
+        #                     store=zarr.MemoryStore()
+        #                 )
+        #                 print('Saving cache to disk.')
+        #                 with zarr.ZipStore(cache_zarr_path) as zip_store:
+        #                     replay_buffer.save_to_store(
+        #                         store=zip_store
+        #                     )
+        #             except Exception as e:
+        #                 shutil.rmtree(cache_zarr_path)
+        #                 raise e
+        #         else:
+        #             print('Loading cached ReplayBuffer from Disk.')
+        #             with zarr.ZipStore(cache_zarr_path, mode='r') as zip_store:
+        #                 replay_buffer = ReplayBuffer.copy_from_store(
+        #                     src_store=zip_store, store=zarr.MemoryStore())
+        #             print('Loaded!')
+        # else:
+        #     replay_buffer = _get_replay_buffer(
+        #         dataset_path=dataset_path,
+        #         shape_meta=shape_meta,
+        #         store=zarr.MemoryStore()
+        #     )
 
         # Parse keys
         self.rgb_keys = [
@@ -83,10 +128,16 @@ class Sim2RealImageDataset(BaseImageDataset):
     def _create_replay_buffer_from_zarr(self, dataset_path, use_cache=False):
         """Create replay buffer from zarr data"""
         z = zarr.open(dataset_path, mode='r')
-        obs_group = z['data']['obs']
-        action_arr = z['data']['actions']
-        reward_arr = z['data']['rewards']
-        episode_ends = z['meta']['episode_ends']
+        # before creating obs_group, create an obs with last arm action and last gripper action
+        # z[data][obs] = [last_arm_action, last_gripper_action] each with shape of 6
+        #THE PROBLEM IS HERE
+        # if (z['data']['obs'] is None):
+        #     #midify the zarr so that it has all the obs
+        #     call the read-data_conversion.py function real_data_to_replay_buffer
+        obs_group = z['data']['obs']      #obs does not exist in zarr data
+        action_arr = z['data']['actions'] #change to action not actions
+        reward_arr = z['data']['rewards'] #rewards does not exist in zarr data
+        episode_ends = z['meta']['episode_ends'] #good, it exists 
 
         # Create replay buffer
         replay_buffer = ReplayBuffer.create_empty_numpy()
@@ -132,12 +183,10 @@ class Sim2RealImageDataset(BaseImageDataset):
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
         normalizer = LinearNormalizer()
         # action
-        normalizer['action'] = SingleFieldLinearNormalizer.create_fit(
-            self.replay_buffer['action'])
+        normalizer['action'] = SingleFieldLinearNormalizer.create_fit(self.replay_buffer['action'])
         # obs
         for key in self.lowdim_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_fit(
-                self.replay_buffer[key])
+            normalizer[key] = SingleFieldLinearNormalizer.create_fit(self.replay_buffer[key])
         # don't normalize rgb, obs_encoder has image_net norm
         for key in self.rgb_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_identity()
@@ -189,3 +238,52 @@ class Sim2RealImageDataset(BaseImageDataset):
             'reward': torch.from_numpy(reward)
         }
         return torch_data
+    
+    #take from real_pusht_image_dataset.py
+    # def _get_replay_buffer(dataset_path, shape_meta, store):
+    #     # parse shape from diffusion_policy.real_world.real_data_conversion import real_data_to_replay_buffer
+    #     rgb_keys = list()
+    #     lowdim_keys = list()
+    #     out_resolutions = dict()
+    #     lowdim_shapes = dict()
+    #     obs_shape_meta = shape_meta['obs']
+    #     for key, attr in obs_shape_meta.items():
+    #         type = attr.get('type', 'low_dim')
+    #         shape = tuple(attr.get('shape'))
+    #         if type == 'rgb':
+    #             rgb_keys.append(key)
+    #             c,h,w = shape
+    #             out_resolutions[key] = (w,h)
+    #         elif type == 'low_dim':
+    #             lowdim_keys.append(key)
+    #             lowdim_shapes[key] = tuple(shape)
+    #             if 'pose' in key:
+    #                 assert tuple(shape) in [(2,),(6,)]
+        
+    #     action_shape = tuple(shape_meta['action']['shape'])
+    #     # assert action_shape in [(2,),(6,)]
+
+    #     # load data
+    #     cv2.setNumThreads(1)
+    #     with threadpool_limits(1):
+    #         replay_buffer = real_data_to_replay_buffer(
+    #             dataset_path=dataset_path,
+    #             out_store=store,
+    #             out_resolutions=out_resolutions,
+    #             lowdim_keys=lowdim_keys + ['action'],
+    #             image_keys=rgb_keys
+    #         )
+
+    #     # transform lowdim dimensions
+    #     if action_shape == (2,):
+    #         # 2D action space, only controls X and Y
+    #         zarr_arr = replay_buffer['action']
+    #         zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
+        
+    #     for key, shape in lowdim_shapes.items():
+    #         if 'pose' in key and shape == (2,):
+    #             # only take X and Y
+    #             zarr_arr = replay_buffer[key]
+    #             zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
+
+    #     return replay_buffer

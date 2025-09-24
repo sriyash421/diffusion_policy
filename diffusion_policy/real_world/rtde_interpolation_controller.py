@@ -17,7 +17,8 @@ from diffusion_policy.real_world.robotiq_gripper import RobotiqGripper
 
 class Command(enum.Enum):
     STOP = 0
-    ImpedanceControl = 1  # Joint Position Control: Impedance control with forceMode
+    FKCartesianImpedanceControl = 1  # Joint Position Control: Forward kinematics + impedance control
+    DeltaCartesianImpedanceControl = 2  # Delta Cartesian Control: Apply delta to current pose
 
 
 class RTDEInterpolationController(mp.Process):
@@ -111,8 +112,11 @@ class RTDEInterpolationController(mp.Process):
 
         # build input queue
         example = {
-            'cmd': Command.ImpedanceControl.value,
+            'cmd': Command.FKCartesianImpedanceControl.value,
             'target_joints': np.zeros((6,), dtype=np.float64),
+            'target_pose': np.zeros((6,), dtype=np.float64),  # [x, y, z, rx, ry, rz]
+            'delta_pose': np.zeros((6,), dtype=np.float64),   # [dx, dy, dz, drx, dry, drz]
+            'delta_scale': 1.0,  # Scale factor for delta poses
             'close_gripper': np.zeros((1,), dtype=np.bool_),
             'duration': 0.0,
             'target_time': 0.0
@@ -141,6 +145,9 @@ class RTDEInterpolationController(mp.Process):
         for key in receive_keys:
             example[key] = np.array(getattr(rtde_r, 'get'+key)())
         example['robot_receive_timestamp'] = time.time()
+        # Add new fields for end-effector pose and actions
+        example['ee_pose'] = np.zeros(6, dtype=np.float64)  # [x,y,z,rx,ry,rz]
+        example['ee_action'] = np.zeros(6, dtype=np.float64)  # [dx,dy,dz,drx,dry,drz]
         ring_buffer = SharedMemoryRingBuffer.create_from_examples(
             shm_manager=shm_manager,
             examples=example,
@@ -167,6 +174,9 @@ class RTDEInterpolationController(mp.Process):
         message = {
             'cmd': np.array([Command.STOP.value], dtype=np.int32),
             'target_joints': np.zeros((6,), dtype=np.float64),
+            'target_pose': np.zeros((6,), dtype=np.float64),
+            'delta_pose': np.zeros((6,), dtype=np.float64),
+            'delta_scale': 1.0,
             'close_gripper': np.zeros((1,), dtype=np.bool_),
             'duration': 0.0,
             'target_time': 0.0
@@ -195,9 +205,9 @@ class RTDEInterpolationController(mp.Process):
         self.stop()
 
     # ========= command methods ============
-    def impedance_control(self, joints, close_gripper, duration=0.1):
+    def fk_cartesian_control(self, joints, close_gripper, duration=0.1):
         """
-        Send joint position command to the robot using impedance control.
+        Send joint position command to the robot using forward kinematics + impedance control.
         
         Args:
             joints: Array of 6 joint positions in radians
@@ -209,13 +219,62 @@ class RTDEInterpolationController(mp.Process):
         assert joints.shape == (6,)
 
         message = {
-            'cmd': np.array([Command.ImpedanceControl.value], dtype=np.int32),
+            'cmd': np.array([Command.FKCartesianImpedanceControl.value], dtype=np.int32),
             'target_joints': joints,
+            'target_pose': np.zeros((6,), dtype=np.float64),
+            'delta_pose': np.zeros((6,), dtype=np.float64),
+            'delta_scale': 1.0,
             'close_gripper': np.array([close_gripper], dtype=np.bool_),
             'duration': float(duration),
             'target_time': 0.0
         }
         self.input_queue.put(message)
+
+    def delta_cartesian_control(self, delta_pose, close_gripper, delta_scale=1.0, duration=0.1):
+        """
+        Send cartesian delta command to the robot using impedance control.
+        
+        Args:
+            delta_pose: Array of 6 delta values [dx, dy, dz, drx, dry, drz] in axis-angle format
+            close_gripper: Boolean for gripper state
+            delta_scale: Scale factor for delta poses (0.0 = no change, 1.0 = full delta)
+            duration: desired time to reach target pose
+        """
+        assert self.is_alive()
+        assert (duration >= (1/self.frequency))
+        delta_pose = np.array(delta_pose)
+        assert delta_pose.shape == (6,)
+
+        message = {
+            'cmd': np.array([Command.DeltaCartesianImpedanceControl.value], dtype=np.int32),
+            'target_joints': np.zeros((6,), dtype=np.float64),
+            'target_pose': np.zeros((6,), dtype=np.float64),
+            'delta_pose': delta_pose,
+            'delta_scale': float(delta_scale),
+            'close_gripper': np.array([close_gripper], dtype=np.bool_),
+            'duration': float(duration),
+            'target_time': 0.0
+        }
+        self.input_queue.put(message)
+
+    def reset_to_initial_position(self, duration=3.0):
+        """
+        Reset robot to initial joint position.
+        
+        Args:
+            duration: Time to reach initial position (seconds)
+        """
+        if self.joints_init is not None:
+            print(f"Resetting robot to initial position: {self.joints_init}")
+            self.fk_cartesian_control(
+                joints=self.joints_init,
+                close_gripper=False,  # Open gripper during reset
+                duration=duration
+            )
+            # Wait for movement to complete
+            time.sleep(duration + 0.5)
+        else:
+            print("Warning: No initial joint positions defined for reset")
 
     # ========= receive APIs =============
     def get_state(self, k=None, out=None):
@@ -228,6 +287,45 @@ class RTDEInterpolationController(mp.Process):
         return self.ring_buffer.get_all()
 
     # ========= helper methods for impedance control ============
+    def _apply_delta_pose(self, source_pose: np.ndarray, delta_pose: np.ndarray, scale: float = 1.0, eps: float = 1.0e-6) -> np.ndarray:
+        """
+        Apply delta pose transformation on source pose with interpolation scaling.
+        
+        Args:
+            source_pose: Current TCP pose [x, y, z, rx, ry, rz] in axis-angle format
+            delta_pose: Position and orientation displacements [dx, dy, dz, drx, dry, drz]
+            scale: Interpolation factor (0.0 = no change, 1.0 = full delta)
+            eps: Tolerance to consider orientation displacement as zero
+            
+        Returns:
+            Target pose [x, y, z, rx, ry, rz] in axis-angle format
+        """
+        # Scale the delta pose
+        scaled_delta_pose = delta_pose * scale
+        
+        # Position delta: simply add scaled delta
+        target_pos = source_pose[:3] + scaled_delta_pose[:3]
+        
+        # Rotation delta: compose rotations with scaled delta
+        rot_actions = scaled_delta_pose[3:6]
+        angle = np.linalg.norm(rot_actions)
+        
+        # if angle > eps:
+        # Convert delta rotation to rotation matrix
+        delta_rot = R.from_rotvec(rot_actions)
+        
+        # Convert current rotation to rotation matrix
+        current_rot = R.from_rotvec(source_pose[3:6])
+        
+        # Compose rotations: target = delta * current
+        target_rot = delta_rot * current_rot
+        target_rotvec = target_rot.as_rotvec()
+        # else:
+        #     # No rotation change
+        #     target_rotvec = source_pose[3:6]
+        
+        return np.concatenate([target_pos, target_rotvec])
+
     def _pose_to_quat(self, pose_xyz_rxryrz: np.ndarray) -> np.ndarray:
         """Convert pose [x,y,z,rx,ry,rz] to [x,y,z,qx,qy,qz,qw]."""
         pos = np.array(pose_xyz_rxryrz[:3], dtype=float)
@@ -258,6 +356,22 @@ class RTDEInterpolationController(mp.Process):
         torque = self.ori_kp * rotvec_err + self.ori_kd * (-ang_vel)
 
         return np.concatenate([force, torque]).astype(float)
+
+    def _compute_ee_actions(self, target_pose: np.ndarray, current_pose: np.ndarray) -> np.ndarray:
+        """Compute relative end-effector actions (delta pose) from current to target pose."""
+        # Position delta: target_pos - current_pos
+        delta_pos = target_pose[:3] - current_pose[:3]
+        
+        # Rotation delta: compute rotation that transforms current to target
+        current_rot = R.from_rotvec(current_pose[3:])
+        target_rot = R.from_rotvec(target_pose[3:])
+        
+        # delta_rot such that delta_rot * current_rot = target_rot
+        # So delta_rot = target_rot * current_rot^(-1)
+        delta_rot = target_rot * current_rot.inv()
+        delta_rotvec = delta_rot.as_rotvec()
+        
+        return np.concatenate([delta_pos, delta_rotvec]).astype(float)
 
     # ========= main loop in process ============
     def run(self):
@@ -307,6 +421,9 @@ class RTDEInterpolationController(mp.Process):
 
             # Track current control mode
             current_target_joints = curr_joints
+            current_delta_pose = None  # Will be set for delta cartesian mode
+            current_delta_scale = 1.0  # Scale for delta poses
+            current_control_mode = Command.DeltaCartesianImpedanceControl  # Default to joint control
             current_gripper_close = False
             current_gripper_state = 'open'
 
@@ -318,8 +435,27 @@ class RTDEInterpolationController(mp.Process):
 
                 curr_joints = rtde_r.getActualQ()
                 
-                # Compute target pose from target joints using forward kinematics
-                target_pose_xyz_rxryrz = rtde_c.getForwardKinematics(current_target_joints, tcp_offset)
+                # Compute target pose based on control mode
+                if current_control_mode == Command.FKCartesianImpedanceControl:
+                    # Joint control mode: compute target pose from target joints using forward kinematics
+                    target_pose_xyz_rxryrz = rtde_c.getForwardKinematics(current_target_joints, tcp_offset)
+                elif current_control_mode == Command.DeltaCartesianImpedanceControl and current_delta_pose is not None:
+                    # Delta cartesian control mode: apply delta to current pose
+                    current_pose = rtde_r.getActualTCPPose()
+                    
+                    # HACK: Transform delta from policy frame to robot base frame
+                    # Policy operates in (1,0,0,0) frame, robot base is (0,0,0,1) - 180 deg rotation
+                    transformed_delta_pose = current_delta_pose.copy()
+                    # Comment out the next 4 lines to disable coordinate transformation
+                    policy_to_robot_rot = R.from_quat([0, 0, 1, 0])  # 180 deg around Z
+                    delta_pos = transformed_delta_pose[:3]
+                    delta_rot = transformed_delta_pose[3:6]
+                    transformed_delta_pose[:3] = policy_to_robot_rot.apply(delta_pos)
+                    transformed_delta_pose[3:6] = policy_to_robot_rot.apply(delta_rot)
+                    target_pose_xyz_rxryrz = self._apply_delta_pose(current_pose, transformed_delta_pose, current_delta_scale)
+                else:
+                    # Fallback to current pose
+                    target_pose_xyz_rxryrz = rtde_r.getActualTCPPose()
                 
                 # Convert to quaternion format
                 target_pose_quat = self._pose_to_quat(target_pose_xyz_rxryrz)
@@ -361,6 +497,11 @@ class RTDEInterpolationController(mp.Process):
                 for key in self.receive_keys:
                     state[key] = np.array(getattr(rtde_r, 'get'+key)())
                 state['robot_receive_timestamp'] = time.time()
+                
+                # Add end-effector pose and actions
+                state['ee_pose'] = np.array(curr_pose, dtype=np.float64)
+                state['ee_action'] = self._compute_ee_actions(np.array(target_pose_xyz_rxryrz, dtype=np.float64), np.array(curr_pose, dtype=np.float64))
+                
                 self.ring_buffer.put(state)
 
                 # fetch command from queue
@@ -383,14 +524,26 @@ class RTDEInterpolationController(mp.Process):
                             keep_running = False
                             # stop immediately, ignore later commands
                             break
-                        elif cmd == Command.ImpedanceControl.value:
+                        elif cmd == Command.FKCartesianImpedanceControl.value:
                             # Update target joint positions
                             current_target_joints = command['target_joints']
+                            current_control_mode = Command.FKCartesianImpedanceControl
                             current_gripper_close = command['close_gripper'][0] if isinstance(command['close_gripper'], np.ndarray) else command['close_gripper']
                             duration = float(command['duration'])
                             if self.verbose:
                                 print("[RTDEPositionalController] New joint "
                                       f"target:{current_target_joints} "
+                                      f"duration:{duration}s")
+                        elif cmd == Command.DeltaCartesianImpedanceControl.value:
+                            # Update delta cartesian pose
+                            current_delta_pose = command['delta_pose']
+                            current_delta_scale = float(command['delta_scale'])
+                            current_control_mode = Command.DeltaCartesianImpedanceControl
+                            current_gripper_close = command['close_gripper'][0] if isinstance(command['close_gripper'], np.ndarray) else command['close_gripper']
+                            duration = float(command['duration'])
+                            if self.verbose:
+                                print("[RTDEPositionalController] New delta cartesian "
+                                      f"delta:{current_delta_pose} scale:{current_delta_scale} "
                                       f"duration:{duration}s")
                         else:
                             keep_running = False

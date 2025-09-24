@@ -22,6 +22,8 @@ from diffusion_policy.common.cv2_util import (
 DEFAULT_OBS_KEY_MAP = {
     # robot
     'ActualQ': 'arm_joint_pos',
+    'ee_pose': 'end_effector_pose',
+    'ee_action': 'ee_action',
     # timestamps
     'step_idx': 'step_idx',
     'timestamp': 'timestamp'
@@ -47,7 +49,7 @@ class RealEnv:
             max_pos_speed=0.25,
             max_rot_speed=0.6,
             # robot
-            tcp_offset=0.13,
+            tcp_offset=0.1495,
             init_joints=True,
             custom_init_joints=None,  # NEW: Custom initial joint positions
             # video capture params
@@ -167,8 +169,12 @@ class RealEnv:
                 print(f"Using custom initial joint positions: {j_init}")
             else:
                 # Use default initial joint positions
-                j_init = np.array([0,-90,90,-90,-90,0]) / 180 * np.pi
+                # j_init = np.array([0,-90,90,-90,-90,0]) / 180 * np.pi
+                # j_init = np.array([13.43, -66.08, 99.0, -123.53, -95.6, -0.21]) / 180 * np.pi
+                j_init = np.array([16.85, -79.74, 99.80, -114.68, -91.09, 20.43]) / 180 * np.pi
+                # j_init = np.array([12.95, -63.51, 91.74, -119.57, -72.81, -44.61]) / 180 * np.pi
                 # j_init = np.array([-0.5748, -1.2212, 1.6753, -2.0596, -1.1225, -1.0952])
+                # j_init = np.array([10.32, -66.41, 107.13, -141.71, -80.48, -15.71]) / 180 * np.pi
                 print(f"Using default initial joint positions: {j_init}")
 
         robot = RTDEInterpolationController(
@@ -411,7 +417,7 @@ class RealEnv:
 
         # schedule waypoints for joint control
         for i in range(len(new_joint_actions)):
-            self.robot.impedance_control(
+            self.robot.fk_cartesian_control(
                 joints=new_joint_actions[i],
                 close_gripper=new_gripper_actions[i],
                 duration=1.0
@@ -430,6 +436,88 @@ class RealEnv:
             # Store the last n_obs_steps actions in a rolling buffer
             for action in new_actions:
                 self.action_buffer.append(action)
+
+    def exec_cartesian_actions(self, 
+            target_poses: np.ndarray, 
+            timestamps: np.ndarray, 
+            stages: Optional[np.ndarray]=None,
+            delta_actions: Optional[np.ndarray]=None):
+        """
+        Execute cartesian pose actions directly.
+        
+        Args:
+            target_poses: Target poses (shape: N x 6) where each pose is [x, y, z, rx, ry, rz]
+            timestamps: Action timestamps
+            stages: Optional stage information
+            delta_actions: Original delta actions from policy (for action buffer storage)
+        """
+        assert self.is_ready
+        if not isinstance(target_poses, np.ndarray):
+            target_poses = np.array(target_poses)
+        if not isinstance(timestamps, np.ndarray):
+            timestamps = np.array(timestamps)
+        if stages is None:
+            stages = np.zeros_like(timestamps, dtype=np.int64)
+        elif not isinstance(stages, np.ndarray):
+            stages = np.array(stages, dtype=np.int64)
+
+        # Filter for new actions
+        receive_time = time.time()
+        is_new = timestamps > receive_time
+        new_target_poses = target_poses[is_new]
+        new_timestamps = timestamps[is_new]
+        new_stages = stages[is_new]
+
+        # Validate delta actions shape for cartesian control
+        if delta_actions is not None and delta_actions.shape[-1] != 7:
+            raise ValueError(f"Delta actions must have 7 dimensions (6 delta pose + 1 gripper), got shape {delta_actions.shape}")
+        
+        # Filter delta actions for new timestamps (same as exec_actions does)
+        if delta_actions is not None:
+            filtered_delta_actions = delta_actions[is_new]
+            
+            # Schedule waypoints for cartesian delta control
+            for i in range(len(filtered_delta_actions)):
+                # First 6 dimensions are delta pose [dx, dy, dz, drx, dry, drz]
+                delta_pose = filtered_delta_actions[i][:6]
+                # 7th dimension is gripper: <0 is closed, >=0 is open (same as exec_actions)
+                close_gripper = filtered_delta_actions[i][6] < 0
+                
+                self.robot.delta_cartesian_control(
+                    delta_pose=delta_pose,
+                    close_gripper=close_gripper,
+                    delta_scale=getattr(self, '_delta_scale', 1.0),
+                    duration=1.0
+                )
+        else:
+            # No delta actions provided - this shouldn't happen in cartesian mode
+            raise ValueError("Delta actions must be provided for cartesian control")
+            
+        if self.action_accumulator is not None:
+            filtered_delta_actions = delta_actions[is_new]
+            self.action_accumulator.put(
+                filtered_delta_actions,  # Store the actual 7D delta actions
+                new_timestamps
+            )
+        if self.stage_accumulator is not None:
+            self.stage_accumulator.put(
+                new_stages,
+                new_timestamps
+            )
+        if self.action_buffer is not None:
+            # Store the last n_obs_steps actions in a rolling buffer
+            # Use original delta actions for action buffer (what policy expects to see)
+            filtered_delta_actions = delta_actions[is_new]
+            for i, delta in enumerate(filtered_delta_actions):
+                action = np.zeros(7)
+                action[:6] = delta[:6]  # Store delta pose action
+                # Store gripper action if available, otherwise default to open (>=0)
+                action[6] = delta[6] if delta.shape[0] >= 7 else 0
+                self.action_buffer.append(action)
+
+    def set_delta_scale(self, scale: float):
+        """Set the delta scale for cartesian control."""
+        self._delta_scale = scale
 
     def get_robot_state(self):
         return self.robot.get_state()

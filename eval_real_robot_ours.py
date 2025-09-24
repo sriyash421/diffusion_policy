@@ -18,6 +18,7 @@ Make sure you can hit the robot hardware emergency-stop button quickly!
 
 Recording control:
 Press "S" to stop evaluation and gain control back.
+Press "R" to reset robot to initial position and start new trajectory.
 """
 
 # %%
@@ -46,11 +47,53 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 
 # Add imageio import for video saving
 import imageio
+from scipy.spatial.transform import Rotation as R
 
 # Robomimic imports
 import robomimic.utils.torch_utils as TorchUtils
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
+
+
+def apply_delta_pose(source_pose: np.ndarray, delta_pose: np.ndarray, scale: float = 1.0, eps: float = 1.0e-6) -> np.ndarray:
+    """
+    Apply delta pose transformation on source pose with interpolation scaling.
+    
+    Args:
+        source_pose: Current TCP pose [x, y, z, rx, ry, rz] in axis-angle format
+        delta_pose: Position and orientation displacements [dx, dy, dz, drx, dry, drz]
+        scale: Interpolation factor (0.0 = no change, 1.0 = full delta)
+        eps: Tolerance to consider orientation displacement as zero
+        
+    Returns:
+        Target pose [x, y, z, rx, ry, rz] in axis-angle format
+    """
+    # Scale the delta pose
+    scaled_delta_pose = delta_pose * scale
+    
+    # Position delta: simply add scaled delta
+    target_pos = source_pose[:3] + scaled_delta_pose[:3]
+    
+    # Rotation delta: compose rotations with scaled delta
+    rot_actions = scaled_delta_pose[3:6]
+    angle = np.linalg.norm(rot_actions)
+    
+    if angle > eps:
+        # Convert delta rotation to rotation matrix
+        axis = rot_actions / angle
+        delta_rot = R.from_rotvec(rot_actions)
+        
+        # Convert current rotation to rotation matrix
+        current_rot = R.from_rotvec(source_pose[3:6])
+        
+        # Compose rotations: target = delta * current
+        target_rot = delta_rot * current_rot
+        target_rotvec = target_rot.as_rotvec()
+    else:
+        # No rotation change
+        target_rotvec = source_pose[3:6]
+    
+    return np.concatenate([target_pos, target_rotvec])
 
 
 @click.command()
@@ -65,21 +108,25 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
               help='Match specific episode from the match dataset')
 @click.option('--vis_camera_idx', default=0, type=int, 
               help="Which RealSense camera to visualize.")
-@click.option('--init_joints', '-j', is_flag=True, default=True, 
+@click.option('--init_joints', '-j', is_flag=True, default=False, 
               help="Whether to initialize robot joint configuration in the "
                    "beginning.")
 @click.option('--steps_per_inference', '-si', default=1, type=int, 
               help="Action horizon for inference.")
-@click.option('--max_duration', '-md', default=60, 
+@click.option('--max_duration', '-md', default=1000, 
               help='Max duration for each epoch in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, 
               help="Control frequency in Hz.")
 @click.option('--save_video', is_flag=True, default=False,
               help='Save video of concatenated camera views.')
+@click.option('--cartesian_delta', is_flag=True, default=True,
+              help='Use Cartesian delta control mode instead of joint control.')
+@click.option('--delta_scale', default=0.1, type=float,
+              help='Scale factor for delta poses (0.0 = no change, 1.0 = full delta).')
 def main(input, output, robot_ip, match_dataset, match_episode,
          vis_camera_idx, init_joints, 
          steps_per_inference, max_duration,
-         frequency, save_video):
+         frequency, save_video, cartesian_delta, delta_scale):
     # load match_dataset
     match_camera_idx = 0
     episode_first_frame_map = dict()
@@ -135,6 +182,8 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     print("n_obs_steps: ", n_obs_steps)
     print("steps_per_inference: ", steps_per_inference)
     print("n_action_steps: ", n_action_steps)
+    print("cartesian_delta mode: ", cartesian_delta)
+    print("delta_scale: ", delta_scale)
 
     with SharedMemoryManager() as shm_manager:
         with Spacemouse(shm_manager=shm_manager) as sm, RealEnv(
@@ -156,6 +205,10 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             # video recording quality, lower is better (but slower).
             video_crf=21,
             shm_manager=shm_manager) as env:
+            
+            # Set delta scale if in cartesian delta mode
+            if cartesian_delta:
+                env.set_delta_scale(delta_scale)
             cv2.setNumThreads(1)
 
             print("Waiting for realsense")
@@ -190,6 +243,8 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             if save_video:
                 frames_to_save = []
                 print("Video recording enabled - will save concatenated camera views")
+
+            actions = []
             
             while True:
                 # ========== policy control loop ==============
@@ -215,7 +270,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         # get obs
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
-                        print(f'Obs latency {time.time() - obs_timestamps[-1]}')
+                        # print(f'Obs latency {time.time() - obs_timestamps[-1]}')
 
                         # Capture frames for video if enabled
                         if save_video:
@@ -247,7 +302,13 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             result = policy.predict_action(obs_dict)
                             # this action starts from the first obs step
                             action = result['action'][0:1].detach().to('cpu').numpy() 
-                            print('Inference latency:', time.time() - s)
+
+                            # current_joints = env.get_robot_state()['ActualQ'][None, :]
+                            # action_joints = action[:, :6]
+                            # action_joints = current_joints + (action_joints - current_joints) * 0.05
+                            # action = np.concatenate([action_joints, action[:, 6:]], axis=1)
+
+                            # print('Inference latency:', time.time() - s)
                         # convert policy action to env actions
                         if delta_action:
                             assert len(action) == 1
@@ -283,31 +344,44 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         # this_target_poses[:,:2] = np.clip(
                         # this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
 
-                        # this_target_poses[:,:2] = np.clip(
+                        # this_target_poses[:,:2] = np.clip(Fexec_cartesian_actions
                         # this_target_poses[:,:2], [0.25, -0.45], [0.77, 0.40])
-                        env.exec_actions(
-                            actions=this_target_poses[:n_action_steps],
-                            timestamps=action_timestamps[:n_action_steps]
-                        )
+                        
+                        if cartesian_delta:
+                            # Use cartesian control method
+                            actions.append(this_target_poses)
+                            np.save('actions.npy', np.array(actions))
+                            env.exec_cartesian_actions(
+                                target_poses=this_target_poses[:n_action_steps],
+                                timestamps=action_timestamps[:n_action_steps],
+                                delta_actions=action[:n_action_steps]  # Pass original delta actions
+                            )
+                        else:
+                            # Use joint control method (default)
+                            env.exec_actions(
+                                actions=this_target_poses[:n_action_steps],
+                                timestamps=action_timestamps[:n_action_steps]
+                            )
                         print(f"Submitted {n_action_steps} steps of actions.")
 
-                        # Only causing an error because of camera names
-                        # visualize
-                        # episode_id = env.replay_buffer.n_episodes
-                        # vis_img = obs[f'camera_{vis_camera_idx}'][-1]
-                        # text = 'Episode: {}, Time: {:.1f}'.format(
-                        #     episode_id, time.monotonic() - t_start
-                        # )
-                        # cv2.putText(
-                        #     vis_img,
-                        #     text,
-                        #     (10,20),
-                        #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                        #     fontScale=0.5,
-                        #     thickness=1,
-                        #     color=(255,255,255)
-                        # )
-                        # cv2.imshow('default', vis_img[...,::-1])
+                        # Visualize camera feed for key detection
+                        episode_id = env.replay_buffer.n_episodes
+                        camera_key = 'side_rgb'
+                        if camera_key in obs:
+                            vis_img = obs[camera_key][-1]
+                            text = 'Episode: {}, Time: {:.1f}'.format(
+                                episode_id, time.monotonic() - t_start
+                            )
+                            cv2.putText(
+                                vis_img,
+                                text,
+                                (10,20),
+                                fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                fontScale=0.5,
+                                thickness=1,
+                                color=(255,255,255)
+                            )
+                            cv2.imshow('Policy Control', vis_img[...,::-1])
 
 
                         key_stroke = cv2.pollKey()
@@ -317,6 +391,45 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             env.end_episode()
                             print('Stopped.')
                             break
+                        elif key_stroke == ord('r'):
+                            # Reset robot and start new trajectory
+                            print('Resetting robot for new trajectory...')
+                            env.end_episode()
+                            
+                            # Save video if recording and we have frames
+                            if save_video and frames_to_save:
+                                episode_id = getattr(env.replay_buffer, 'n_episodes', 0)
+                                video_filename = f'policy_cameras_reset_{episode_id:03d}.mp4'
+                                video_path = pathlib.Path(output) / video_filename
+                                print(f"Saving reset video with {len(frames_to_save)} frames to {video_path}")
+                                imageio.mimsave(str(video_path), frames_to_save, 
+                                              fps=10, codec='libx264')
+                                frames_to_save = []  # Reset for next episode
+                            
+                            # Reset policy state
+                            policy.reset()
+                            
+                            # Move robot to initial position
+                            env.robot.reset_to_initial_position()
+                            
+                            # Wait a moment for robot to settle
+                            time.sleep(5.0)
+                            
+                            # Start new episode
+                            start_delay = 1.0
+                            eval_t_start = time.time() + start_delay
+                            t_start = time.monotonic() + start_delay
+                            env.start_episode(eval_t_start)
+                            precise_wait(eval_t_start - frame_latency, time_func=time.time)
+                            
+                            # Reset iteration counter and target pose
+                            iter_idx = 0
+                            term_area_start_timestamp = float('inf')
+                            perv_target_pose = None
+                            target_pose = env.get_robot_state()['TargetTCPPose']
+                            
+                            print('Robot reset complete! Starting new trajectory.')
+                            continue
 
                         # auto termination
                         terminate = False
@@ -383,4 +496,5 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
 # %%
 if __name__ == '__main__':
+
     main()

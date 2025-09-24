@@ -91,7 +91,9 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
             stop = False
             is_recording = False
             is_twisting = False
+            is_reverse_twisting = False
             twist_step_count = 0
+            reverse_twist_step_count = 0
             initial_wrist_position = 0.0
             while not stop:
                 # calculate timing
@@ -133,6 +135,13 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                     elif key_stroke == Key.up:
                         # Stop twisting macro
                         is_twisting = False
+                    elif key_stroke == Key.left:
+                        # Start reverse twisting macro (counter-clockwise)
+                        is_reverse_twisting = True
+                        reverse_twist_step_count = 0
+                    elif key_stroke == Key.right:
+                        # Stop reverse twisting macro
+                        is_reverse_twisting = False
 
 
 
@@ -183,7 +192,22 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                     unified_action = np.concatenate([modified_joints, [-1]])  # Close gripper
                     twist_step_count += 1
                 
-                elif twist_step_count > 0:
+                elif is_reverse_twisting:
+                    # Store initial wrist position on first reverse twist step
+                    if reverse_twist_step_count == 0:
+                        initial_wrist_position = current_joints[5]
+                    
+                    # Execute reverse screw motion: move TCP down and rotate wrist opposite direction
+                    modified_joints = current_joints.copy()
+                    modified_joints[1] += 0.0025  # Joint 1 adjustment
+                    modified_joints[2] += 0.0025  # Joint 2 adjustment  
+                    modified_joints[3] -= 0.005   # Joint 3 adjustment
+                    modified_joints[5] -= 0.5     # Reverse wrist rotation
+                    
+                    unified_action = np.concatenate([modified_joints, [-1]])  # Close gripper
+                    reverse_twist_step_count += 1
+                
+                elif twist_step_count > 0 or reverse_twist_step_count > 0:
                     # Return wrist to original position after twisting
                     wrist_error = initial_wrist_position - current_joints[5]
                     max_correction = np.pi/8
@@ -195,8 +219,9 @@ def main(output, robot_ip, mello_port, vis_camera_idx, init_joints, frequency, c
                         modified_joints[5] += wrist_correction
                         unified_action = np.concatenate([modified_joints, [1]])  # Open gripper
                     else:
-                        # Close enough to initial position, reset twist state
+                        # Close enough to initial position, reset twist states
                         twist_step_count = 0
+                        reverse_twist_step_count = 0
 
                 # execute teleop command
                 env.exec_actions(
