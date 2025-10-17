@@ -27,8 +27,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             kernel_size=5,
             n_groups=8,
             cond_predict_scale=True,
-            aux_loss_weight=0.0,
-            aux_as_input=False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -39,20 +37,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         action_dim = action_shape[0]
         # get feature dim
         obs_feature_dim = obs_encoder.output_shape()[0]
-        if shape_meta.get('auxiliary_obs', None) is not None:
-            self.aux_decoder_keys = sorted(shape_meta['auxiliary_obs'].keys())
-            self.aux_decoders = nn.ModuleDict({
-                key: nn.Sequential(
-                    nn.Linear(obs_encoder.output_shape()[0], shape_meta['auxiliary_obs'][key].shape[0])
-                )
-                for key in self.aux_decoder_keys
-            })
-        else:
-            self.aux_decoders = None
-        self.aux_as_input = aux_as_input
-        if self.aux_as_input:
-            obs_feature_dim = sum(value.shape[0] for value in shape_meta['auxiliary_obs'].values())
-
         # create diffusion model
         input_dim = action_dim + obs_feature_dim
         global_cond_dim = None
@@ -89,7 +73,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
-        self.aux_loss_weight = aux_loss_weight
 
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
@@ -178,14 +161,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_data[:,:To,Da:] = nobs_features
             cond_mask[:,:To,Da:] = True
 
-        if self.aux_as_input:
-            preds = []
-            for key in self.aux_decoder_keys:
-                decoder = self.aux_decoders[key]
-                pred = decoder(nobs_features)
-                preds.append(pred)
-            global_cond = torch.cat(preds, dim=-1).reshape(B, -1)
-
         # run sampling
         nsample = self.conditional_sample(
             cond_data, 
@@ -264,28 +239,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
         
-        # track losses
-        total_loss = 0.0
-
-        # aux loss
-        aux_losses = {}
-        aux_loss_mean = None
-        # Auxiliary reconstruction losses
-        if self.aux_decoders is not None:
-            preds = []
-            for key in self.aux_decoder_keys:
-                decoder = self.aux_decoders[key]
-                target = nobs[key].reshape(-1, *nobs[key].shape[2:])
-                pred = decoder(nobs_features)
-                preds.append(pred.detach())
-                aux_loss = F.mse_loss(pred, target, reduction='mean')
-                aux_losses[key] = aux_loss
-            aux_loss_mean = torch.stack(list(aux_losses.values())).mean()
-            total_loss += self.aux_loss_weight * aux_loss_mean
-
-            if self.aux_as_input:
-                global_cond = torch.cat(preds, dim=-1).reshape(batch_size, -1)
-
         # Predict the noise residual
         pred = self.model(noisy_trajectory, timesteps, 
             local_cond=local_cond, global_cond=global_cond)
@@ -303,11 +256,4 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
 
-        total_loss += loss
-
-        log_dict = {'diffusion_loss': loss}
-        for k, v in aux_losses.items():
-            log_dict[f'aux_loss_{k}'] = v
-        if aux_loss_mean is not None:
-            log_dict['aux_loss_mean'] = aux_loss_mean
-        return total_loss, log_dict
+        return loss
