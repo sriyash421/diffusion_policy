@@ -85,4 +85,4 @@ dataset:
   seed: 42
   val_ratio: 0.05
   use_cache: false
-  use_disk: false
+  use_disk: true
