@@ -48,7 +48,7 @@ class MLPImagePolicy(BaseImagePolicy):
         self.mean_head = nn.Linear(last_dim, action_dim)
         self.log_std_head = nn.Linear(last_dim, action_dim)
         
-        self.log_std_limits = (-20.0, 2.0)
+        self.log_std_limits = (-5.0, 2.0)
 
     def forward(self, obs_features: torch.Tensor) -> Normal:
         """

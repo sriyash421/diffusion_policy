@@ -164,6 +164,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
+                            if cfg.training.get('gradient_clip_norm', None) is not None:
+                                self.accelerator.clip_grad_norm_(self.model.parameters(), cfg.training.gradient_clip_norm)
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
