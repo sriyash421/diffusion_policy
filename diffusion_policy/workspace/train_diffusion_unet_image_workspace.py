@@ -27,7 +27,6 @@ from diffusion_policy.policy.diffusion_unet_image_policy import (
     DiffusionUnetImagePolicy)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
@@ -141,10 +140,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             )
 
         # configure checkpoint
-        topk_manager = TopKCheckpointManager(
-            save_dir=os.path.join(self.output_dir, 'checkpoints'),
-            **cfg.checkpoint.topk
-        )
         # accelerator prepare
         train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = self.accelerator.prepare(
             train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
@@ -186,7 +181,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss, log_dict = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                        raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
@@ -204,7 +199,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             'epoch': self.epoch,
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
-                        step_log.update(log_dict)
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:
@@ -236,17 +230,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
                         val_losses = list()
-                        val_log_dicts = dict()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss, log_dict = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                                loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
                                 val_losses.append(loss)
-                                for key, value in log_dict.items():
-                                    if key not in val_log_dicts:
-                                        val_log_dicts[key] = list()
-                                    val_log_dicts[key].append(value)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
@@ -254,8 +243,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             val_loss = torch.mean(torch.tensor(val_losses)).item()
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
-                            for key, value in val_log_dicts.items():
-                                step_log[f'val_{key}'] = torch.mean(torch.stack(value)).item()
 
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:
@@ -289,13 +276,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         new_key = key.replace('/', '_')
                         metric_dict[new_key] = value
                     
-                    # We can't copy the last checkpoint here
-                    # since save_checkpoint uses threads.
-                    # therefore at this point the file might have been empty!
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
                     self.model = model_ddp
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)

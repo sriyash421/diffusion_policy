@@ -47,17 +47,15 @@ policy:
     use_group_norm: True
     share_rgb_model: False
     imagenet_norm: True
-    feature_dim: 256
-    # extra_randomizations:
-    #   - name: ColorJitter
-    #     params: {brightness: 0.1, contrast: 0.1, saturation: 0.1, hue: 0.05}
-    #   - name: GaussianBlur
-    #     params: {kernel_size: 5, sigma: [0.1, 2.0]}
-    #   - name: RandomGrayscale
-    #     params: {p: 0.05}
-    #   - name: GaussianNoise
-    #     params: {std: 0.01}
-
+    extra_randomizations:
+      - name: ColorJitter
+        params: {brightness: 0.1, contrast: 0.1, saturation: 0.1, hue: 0.05}
+      - name: GaussianBlur
+        params: {kernel_size: 5, sigma: [0.1, 2.0]}
+      - name: RandomGrayscale
+        params: {p: 0.05}
+      - name: GaussianNoise
+        params: {std: 0.01}
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
@@ -68,8 +66,6 @@ policy:
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
-  aux_loss_weight: 1.0
-  aux_as_input: False
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -80,18 +76,22 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
+  prefetch_factor: 4
+  drop_last: True
 
 val_dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: True
+  prefetch_factor: 4
+  drop_last: True
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -115,8 +115,8 @@ training:
   # mixed_precision: no
   # training loop control
   # in epochs
-  rollout_every: 50
-  checkpoint_every: 1
+  rollout_every: 5000
+  checkpoint_every: 10000
   val_every: 1
   sample_every: 1
   # steps per epoch
