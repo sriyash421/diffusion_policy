@@ -12,7 +12,7 @@ shape_meta: &shape_meta
     #   shape: [3, 224, 224]
     #   type: rgb
     end_effector_pose:
-      shape: [6]
+      shape: [8]
       type: low_dim
     arm_joint_pos:
       shape: [6]
@@ -30,13 +30,13 @@ shape_meta: &shape_meta
     #   shape: [7]
     #   type: low_dim
     insertive_asset_pose:
-      shape: [6]
+      shape: [8]
       type: low_dim
     receptive_asset_pose:
-      shape: [6]
+      shape: [8]
       type: low_dim
     insertive_asset_in_receptive_asset_frame:
-      shape: [6]
+      shape: [8]
       type: low_dim
   action:
     shape: [7]
