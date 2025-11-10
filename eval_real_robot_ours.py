@@ -119,9 +119,9 @@ def apply_delta_pose(source_pose: np.ndarray, delta_pose: np.ndarray, scale: flo
               help="Control frequency in Hz.")
 @click.option('--save_video', is_flag=True, default=False,
               help='Save video of concatenated camera views.')
-@click.option('--cartesian_delta', is_flag=True, default=True,
+@click.option('--cartesian_delta', is_flag=True, default=False,
               help='Use Cartesian delta control mode instead of joint control.')
-@click.option('--delta_scale', default=0.1, type=float,
+@click.option('--delta_scale', default=1.0, type=float,
               help='Scale factor for delta poses (0.0 = no change, 1.0 = full delta).')
 def main(input, output, robot_ip, match_dataset, match_episode,
          vis_camera_idx, init_joints, 
@@ -301,7 +301,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
                             result = policy.predict_action(obs_dict)
                             # this action starts from the first obs step
-                            action = result['action'][0:1].detach().to('cpu').numpy() 
+                            action = result['action'][0:1].detach().to('cpu').numpy()
 
                             # current_joints = env.get_robot_state()['ActualQ'][None, :]
                             # action_joints = action[:, :6]

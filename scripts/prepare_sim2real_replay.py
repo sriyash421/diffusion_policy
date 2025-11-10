@@ -128,7 +128,7 @@ def main():
             dataset_path=dataset_dir,
             out_store=out_store,
             out_resolutions=(args.width, args.height),
-            lowdim_keys=["action", "arm_joint_pos", "stage", "timestamp"],
+            lowdim_keys=["action", "arm_joint_pos", "stage", "timestamp"], # , "end_effector_pose"],
             image_keys=None  # infer cameras present
         )
 
@@ -162,6 +162,7 @@ def main():
         "arm_joint_pos",
         "last_arm_action",
         "last_gripper_action",
+        # "end_effector_pose",
     ]:
         if key in data_grp:
             copy_array(obs_group, key, data_grp[key][:])

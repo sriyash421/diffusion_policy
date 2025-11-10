@@ -38,7 +38,7 @@ This guide covers the setup and usage of teleoperation for the robot arm using t
 
 ### Teleop the Arm
 ```bash
-python demo_real_robot.py -o /home/patrickhaoy/research/demo/ --robot_ip 192.168.1.2
+python demo_real_robot.py -o /home/patrickhaoy/research/demo/ --robot_ip 192.168.1.10
 ```
 
 ### Record Trajectories
@@ -52,3 +52,18 @@ You may need to adjust the robot's performance parameters:
 
 - **Gripper settings**: Modify `open_gripper`/`close_gripper` parameters in `diffusion_policy/real_world/real_env.py`
 - **Arm gains**: Adjust the gain parameter passed to `RTDEInterpolationController` in `real_env.py`
+
+
+### Train
+
+pip install pyserial huggingface_hub==0.16.4
+
+python scripts/prepare_sim2real_replay.py --dataset_dir ./tmp/ --output_zarr ./tmp/replay_buffer_processed 
+
+python train.py --config-name train_mlp_sim2real_image_workspace.yaml --config-dir diffusion_policy/config task.dataset.dataset_path=./tmp/replay_buffer_processed
+
+(Optional) accelerate launch --multi_gpu --num_processes=2 train.py --config-name train_mlp_sim2real_image_workspace.yaml --config-dir diffusion_policy/config task.dataset.dataset_path=./tmp/replay_buffer_processed
+
+python eval_real_robot_ours.py -i /home/joshuat26/Documents/Github/diffusion_policy/data/outputs/2025.10.13/16.41.44_train_mlp_image_sim2real_image/checkpoints/epoch_0020.ckpt -o ./tmp2 --robot_ip 192.168.1.10 -j --cartesian_delta
+
+python eval_real_robot_ours.py -i /home/joshuat26/Documents/Github/diffusion_policy/data/outputs/2025.10.13/16.41.44_train_mlp_image_sim2real_image/checkpoints/epoch_0020.ckpt -o ./tmp2 --robot_ip 192.168.1.10 -j

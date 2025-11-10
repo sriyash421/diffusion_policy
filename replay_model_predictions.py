@@ -204,6 +204,8 @@ def predict_actions_from_observations(policy: BaseImagePolicy, observations: Dic
                 env_obs=obs_window, 
                 shape_meta=cfg['shape_meta']
             )
+
+            import pdb; pdb.set_trace()
             
             # Convert to tensors
             obs_dict = {}
@@ -256,8 +258,8 @@ def get_camera_obs_key(vis_camera_idx):
 @click.option('--max_duration', '-md', default=60, help='Max duration for replay in seconds')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Command execution latency in seconds")
-@click.option('--cartesian_delta', is_flag=True, default=True, help='Use Cartesian delta control mode')
-@click.option('--delta_scale', default=0.1, type=float, help='Scale factor for delta poses')
+@click.option('--cartesian_delta', is_flag=True, default=False, help='Use Cartesian delta control mode')
+@click.option('--delta_scale', default=1.0, type=float, help='Scale factor for delta poses')
 @click.option('--device', default='cuda', help='Device to run inference on (cuda/cpu)')
 @click.option('--use_ground_truth', is_flag=True, default=False, help='Use ground truth actions instead of model predictions')
 def main(checkpoint, dataset, episode, output, robot_ip, vis_camera_idx, init_joints,

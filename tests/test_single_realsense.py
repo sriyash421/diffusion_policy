@@ -46,8 +46,8 @@ def test():
             # verbose=True
             ) as realsense:
             cv2.setNumThreads(1) 
-            realsense.set_exposure(exposure=500, gain=0)
-            realsense.set_white_balance(white_balance=2000)
+            # realsense.set_exposure(exposure=500, gain=0)
+            # realsense.set_white_balance(white_balance=2000)
             intr = realsense.get_intrinsics()
             print(intr)
 

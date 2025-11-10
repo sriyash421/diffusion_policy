@@ -447,11 +447,11 @@ class RTDEInterpolationController(mp.Process):
                     # Policy operates in (1,0,0,0) frame, robot base is (0,0,0,1) - 180 deg rotation
                     transformed_delta_pose = current_delta_pose.copy()
                     # Comment out the next 4 lines to disable coordinate transformation
-                    policy_to_robot_rot = R.from_quat([0, 0, 1, 0])  # 180 deg around Z
-                    delta_pos = transformed_delta_pose[:3]
-                    delta_rot = transformed_delta_pose[3:6]
-                    transformed_delta_pose[:3] = policy_to_robot_rot.apply(delta_pos)
-                    transformed_delta_pose[3:6] = policy_to_robot_rot.apply(delta_rot)
+                    # policy_to_robot_rot = R.from_quat([0, 0, 1, 0])  # 180 deg around Z
+                    # delta_pos = transformed_delta_pose[:3]
+                    # delta_rot = transformed_delta_pose[3:6]
+                    # transformed_delta_pose[:3] = policy_to_robot_rot.apply(delta_pos)
+                    # transformed_delta_pose[3:6] = policy_to_robot_rot.apply(delta_rot)
                     target_pose_xyz_rxryrz = self._apply_delta_pose(current_pose, transformed_delta_pose, current_delta_scale)
                 else:
                     # Fallback to current pose

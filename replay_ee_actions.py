@@ -110,7 +110,7 @@ def get_camera_obs_key(vis_camera_idx):
 @click.option('--max_duration', '-md', default=60, help='Max duration for each replay in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between command and execution in Sec.")
-@click.option('--cartesian_delta', is_flag=True, default=True, help='Use Cartesian delta control mode for ee_actions.')
+@click.option('--cartesian_delta', is_flag=True, default=False, help='Use Cartesian delta control mode for ee_actions.')
 @click.option('--delta_scale', default=0.1, type=float, help='Scale factor for delta poses.')
 def main(input, output, robot_ip, episode_idx, vis_camera_idx, init_joints, 
          max_duration, frequency, command_latency, cartesian_delta, delta_scale):
