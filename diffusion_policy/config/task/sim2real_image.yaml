@@ -8,9 +8,9 @@ shape_meta: &shape_meta
     side_rgb:
       shape: [3, 224, 224]
       type: rgb
-    wrist_rgb:
-      shape: [3, 224, 224]
-      type: rgb
+    # wrist_rgb:
+    #   shape: [3, 224, 224]
+    #   type: rgb
     end_effector_pose:
       shape: [6] #[9]
       type: low_dim
