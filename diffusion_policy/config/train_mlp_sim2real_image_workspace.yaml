@@ -51,7 +51,7 @@ policy:
   hidden_depth: 4
 
 dataloader:
-  batch_size: 32
+  batch_size: 16
   num_workers: 8
   shuffle: True
   pin_memory: True
@@ -60,7 +60,7 @@ dataloader:
   drop_last: True
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 16
   num_workers: 8
   shuffle: False
   pin_memory: True
