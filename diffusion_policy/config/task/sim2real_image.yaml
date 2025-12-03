@@ -80,7 +80,7 @@ dataset:
   dataset_config:
     - dataset_dir: /gpfs/scrubbed/pyin/datasets/11_30_25_peg_20k_reducerand
       sampling_ratio: 0.5
-    - dataset_dir: /gpfs/scrubbed/pyin/datasets/12_2_25_peg_1k_dagger
+    - dataset_dir: /gpfs/scrubbed/pyin/datasets/12_2_25_peg_5k_dagger
       sampling_ratio: 0.5
   
   use_streaming: false
