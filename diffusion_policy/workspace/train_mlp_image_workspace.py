@@ -70,24 +70,39 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         cfg = copy.deepcopy(self.cfg)
 
         # resume training
+        checkpoint_loaded = False
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+                checkpoint_loaded = True
 
         # configure dataset
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
+
+        # Use weighted sampler if available (for multi-dataset with sampling ratios)
+        dataloader_kwargs = dict(cfg.dataloader)
+        if hasattr(dataset, 'weighted_sampler') and dataset.weighted_sampler is not None:
+            dataloader_kwargs['sampler'] = dataset.weighted_sampler
+            dataloader_kwargs.pop('shuffle', None)  # Remove shuffle when using custom sampler
+
+        train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+
+        # Only recompute normalizer if checkpoint wasn't loaded or normalizer is empty
+        if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
+            print("Checkpoint loaded with normalizer - preserving existing normalizer statistics")
+            normalizer = self.model.normalizer
+        else:
+            print("Computing normalizer from dataset")
+            normalizer = dataset.get_normalizer()
+            self.model.set_normalizer(normalizer)
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-
-        self.model.set_normalizer(normalizer)
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(

@@ -841,10 +841,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 means.append(params['offset'])
                 stds.append(1.0 / params['scale'])
 
-                # Weight by dataset size * sampling ratio
-                dataset_weight = (
-                    self.dataset_lengths[i] * self.sampling_ratios[i])
-                weights.append(dataset_weight)
+                # Weight by sampling ratio (normalized) to match training distribution
+                weights.append(self.sampling_ratios[i])
 
             # Convert to tensors for computation
             means = torch.stack(means)
