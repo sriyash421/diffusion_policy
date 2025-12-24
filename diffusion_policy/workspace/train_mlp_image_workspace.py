@@ -104,6 +104,15 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
+        # configure additional validation dataset (optional)
+        extra_val_dataloader = None
+        if cfg.task.get('val_dataset', None) is not None:
+            print("Loading additional validation dataset...")
+            extra_val_dataset = hydra.utils.instantiate(cfg.task.val_dataset)
+            extra_val_dataset.set_normalizer(normalizer) if hasattr(extra_val_dataset, 'set_normalizer') else None
+            extra_val_dataloader = DataLoader(extra_val_dataset, **cfg.val_dataloader)
+            print(f"Additional validation dataset loaded with {len(extra_val_dataset)} samples")
+
         # configure lr scheduler
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
@@ -138,9 +147,14 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
         # configure checkpoint
         # accelerator prepare
-        train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = self.accelerator.prepare(
-            train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
-        )
+        if extra_val_dataloader is not None:
+            train_dataloader, val_dataloader, extra_val_dataloader, self.model, self.optimizer, lr_scheduler = self.accelerator.prepare(
+                train_dataloader, val_dataloader, extra_val_dataloader, self.model, self.optimizer, lr_scheduler
+            )
+        else:
+            train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = self.accelerator.prepare(
+                train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
+            )
         device = self.accelerator.device
         optimizer_to(self.optimizer, device)
 
@@ -256,6 +270,22 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             val_loss = torch.mean(torch.tensor(val_losses)).item()
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
+
+                        # run extra validation if configured
+                        if extra_val_dataloader is not None:
+                            extra_val_losses = list()
+                            with tqdm.tqdm(extra_val_dataloader, desc=f"Extra Validation epoch {self.epoch}", 
+                                    leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                                for batch_idx, batch in enumerate(tepoch):
+                                    batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                                    loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                                    extra_val_losses.append(loss)
+                                    if (cfg.training.max_val_steps is not None) \
+                                        and batch_idx >= (cfg.training.max_val_steps-1):
+                                        break
+                            if len(extra_val_losses) > 0:
+                                extra_val_loss = torch.mean(torch.tensor(extra_val_losses)).item()
+                                step_log['extra_val_loss'] = extra_val_loss
 
                 # run sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:

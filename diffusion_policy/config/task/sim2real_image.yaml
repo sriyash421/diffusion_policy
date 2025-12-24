@@ -101,3 +101,22 @@ dataset:
   val_ratio: 0.05
   use_cache: false
   use_disk: true
+
+# Optional: Additional validation dataset (e.g. for OOD testing)
+# Uncomment and set path to enable
+# val_dataset: null
+val_dataset:
+  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  dataset_dir: ../OctiLab/datasets_ood
+  use_streaming: false
+  samples_per_file_multiplier: 1.0
+  shape_meta: *shape_meta
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+  seed: 42
+  val_ratio: 0.0  # Use entire dataset for validation
+  use_cache: false
+  use_disk: true
