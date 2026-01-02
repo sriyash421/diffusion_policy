@@ -5,9 +5,9 @@ shape_meta: &shape_meta
     front_rgb:
       shape: [3, 224, 224]
       type: rgb
-    side_rgb:
-      shape: [3, 224, 224]
-      type: rgb
+    # side_rgb:
+    #   shape: [3, 224, 224]
+    #   type: rgb
     wrist_rgb:
       shape: [3, 224, 224]
       type: rgb
