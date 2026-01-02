@@ -23,15 +23,15 @@ shape_meta: &shape_meta
     last_gripper_action:
       shape: [1]
       type: low_dim
-    # right_inner_finger_contact_force:
-    #   shape: [3]
-    #   type: low_dim 
-    # left_inner_finger_contact_force:
-    #   shape: [3]
-    #   type: low_dim
-    # end_effector_wrench:
-    #   shape: [6]
-    #   type: low_dim
+    right_inner_finger_contact_force:
+      shape: [3]
+      type: low_dim 
+    left_inner_finger_contact_force:
+      shape: [3]
+      type: low_dim
+    end_effector_wrench:
+      shape: [6]
+      type: low_dim
     # held_asset_pose:
     #   shape: [6] #[9]
     #   type: low_dim
