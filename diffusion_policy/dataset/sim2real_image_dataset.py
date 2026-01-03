@@ -58,9 +58,12 @@ class Sim2RealImageDataset(BaseImageDataset):
         val_ratio=0.0,
         use_cache: bool = False,
         use_disk: bool = True,
+        return_sequences: bool = False
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
+        if return_sequences:
+            assert pad_before == 0 and pad_after == 0 and horizon >= 100
 
         # Load data and create replay buffer
         self.replay_buffer = self._create_replay_buffer_from_zarr(
@@ -99,7 +102,9 @@ class Sim2RealImageDataset(BaseImageDataset):
             pad_before=pad_before,
             pad_after=pad_after,
             episode_mask=train_mask,
-            key_first_k=key_first_k)
+            key_first_k=key_first_k,
+            return_sequences=return_sequences
+        )
 
         # Store parameters
         self.horizon = horizon
@@ -112,6 +117,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.shape_meta = shape_meta
         self.val_mask = val_mask
         self.train_mask = train_mask
+        self.return_sequences = return_sequences
 
     def _create_replay_buffer_from_zarr(
             self, dataset_path, shape_meta, use_cache=False, use_disk=True):
@@ -216,7 +222,9 @@ class Sim2RealImageDataset(BaseImageDataset):
             sequence_length=self.horizon + self.n_latency_steps,
             pad_before=self.pad_before,
             pad_after=self.pad_after,
-            episode_mask=self.val_mask)
+            episode_mask=self.val_mask,
+            return_sequences=self.return_sequences
+            )
         val_set.val_mask = ~self.val_mask
         return val_set
 
@@ -250,7 +258,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         # since the rest will be discarded anyway.
         # when self.n_obs_steps is None
         # this slice does nothing (takes all)
-        T_slice = slice(self.n_obs_steps)
+        T_slice = slice(self.n_obs_steps) if not self.return_sequences else slice(None)
 
         obs_dict = dict()
         for key in self.rgb_keys:
@@ -651,6 +659,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         use_disk: bool = True,
         use_streaming: bool = False,
         samples_per_file_multiplier: float = 1.0,
+        return_sequences: bool = False
     ):
         super().__init__()
 
@@ -733,7 +742,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'seed': seed,
             'val_ratio': val_ratio,
             'use_cache': use_cache,
-            'use_disk': use_disk
+            'use_disk': use_disk,
+            'return_sequences': return_sequences
         }
 
         for config in self.dataset_config:
@@ -760,6 +770,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         self.weighted_sampler = CustomWeightedRandomSampler(
             weights=self.weights, num_samples=self.total_length,
             replacement=True)
+        
+        self.return_sequences = return_sequences
 
     def _calculate_weights(self) -> torch.Tensor:
         """Calculate per-sample weights based on dataset sizes and sampling ratios."""

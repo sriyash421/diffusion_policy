@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: sim2real_image
+  - task: sim2real_image_pomdp
 
 name: train_mlp_image
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace

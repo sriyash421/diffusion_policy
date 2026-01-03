@@ -30,6 +30,8 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
+from diffusion_policy.common.sampler import get_collate_fn
+
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class TrainMLPImageWorkspace(BaseWorkspace):
@@ -89,7 +91,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             dataloader_kwargs['sampler'] = dataset.weighted_sampler
             dataloader_kwargs.pop('shuffle', None)  # Remove shuffle when using custom sampler
 
-        train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+        collate_fn = get_collate_fn() if dataset.return_sequences else None
+        train_dataloader = DataLoader(dataset, collate_fn=collate_fn, **dataloader_kwargs)
 
         # Only recompute normalizer if checkpoint wasn't loaded or normalizer is empty
         if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
@@ -102,7 +105,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(
@@ -264,6 +267,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
                         gt_action = batch['action'][:, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1].squeeze()
+                        if batch.get('attention_mask', None) is not None:
+                            obs_dict['attention_mask'] = batch['attention_mask']
                         result = policy.predict_action(obs_dict)
                         pred_action = result['action']
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)

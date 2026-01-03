@@ -1,15 +1,16 @@
 from typing import Optional
 import numpy as np
 import numba
+import torch
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-
+from diffusion_policy.common.pytorch_util import dict_apply
 
 @numba.jit(nopython=True)
 def create_indices(
     episode_ends:np.ndarray, sequence_length:int, 
     episode_mask: np.ndarray,
     pad_before: int=0, pad_after: int=0,
-    debug:bool=True) -> np.ndarray:
+    debug:bool=True, return_sequences: bool = False) -> np.ndarray:
     episode_mask.shape == episode_ends.shape        
     pad_before = min(max(pad_before, 0), sequence_length-1)
     pad_after = min(max(pad_after, 0), sequence_length-1)
@@ -25,6 +26,9 @@ def create_indices(
         end_idx = episode_ends[i]
         episode_length = end_idx - start_idx
         
+        if return_sequences:
+            sequence_length = episode_length
+
         min_start = -pad_before
         max_start = episode_length - sequence_length + pad_after
         
@@ -74,6 +78,32 @@ def downsample_mask(mask, max_n, seed=0):
         assert np.sum(train_mask) == n_train
     return train_mask
 
+def _collate(batch_item):
+    collected_item = torch.nn.utils.rnn.pad_sequence(
+        batch_item, batch_first=True, padding_value=0.0)
+    return collected_item
+
+def collate_fn(batch):
+    obs_dict = {key: [item['obs'][key] for item in batch] for key in batch[0]['obs'].keys()}
+    collated_obs = dict_apply(obs_dict, lambda x: _collate(x))
+    collated_actions = _collate([item['action'] for item in batch])
+    #TODO: collate expert mask
+
+    max_len = collated_actions.shape[1]
+    seq_lens = [item['action'].shape[0] for item in batch]
+    attention_mask = torch.zeros((len(batch), max_len), dtype=torch.bool)
+    for i, l in enumerate(seq_lens):
+        attention_mask[i, :l] = 1
+    collated_batch = {
+        'obs': collated_obs,
+        'action': collated_actions,
+        'attention_mask': attention_mask
+    }
+    return collated_batch
+
+def get_collate_fn():
+    return collate_fn
+
 class SequenceSampler:
     def __init__(self, 
         replay_buffer: ReplayBuffer, 
@@ -83,6 +113,7 @@ class SequenceSampler:
         keys=None,
         key_first_k=dict(),
         episode_mask: Optional[np.ndarray]=None,
+        return_sequences: bool = False
         ):
         """
         key_first_k: dict str: int
@@ -103,7 +134,8 @@ class SequenceSampler:
                 sequence_length=sequence_length, 
                 pad_before=pad_before, 
                 pad_after=pad_after,
-                episode_mask=episode_mask
+                episode_mask=episode_mask,
+                return_sequences=return_sequences
                 )
         else:
             indices = np.zeros((0,4), dtype=np.int64)
@@ -114,6 +146,7 @@ class SequenceSampler:
         self.sequence_length = sequence_length
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k
+        self.return_sequences = return_sequences
     
     def __len__(self):
         return len(self.indices)
@@ -122,6 +155,13 @@ class SequenceSampler:
         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
             = self.indices[idx]
         result = dict()
+        if self.return_sequences:
+            for key in self.keys:
+                input_arr = self.replay_buffer[key]
+                data = input_arr[buffer_start_idx:buffer_end_idx]
+                result[key] = data
+            return result
+
         for key in self.keys:
             input_arr = self.replay_buffer[key]
             # performance optimization, avoid small allocation if possible
