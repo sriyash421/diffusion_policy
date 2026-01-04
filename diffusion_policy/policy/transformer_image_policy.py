@@ -108,6 +108,7 @@ class TransformerImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
+        expert_mask = batch['expert_mask']
         B = nactions.shape[0]
         T = nactions.shape[1]
         Da = self.action_dim
@@ -124,7 +125,8 @@ class TransformerImagePolicy(BaseImagePolicy):
         
         # Get action distribution and compute loss
         dist = self.forward(nobs_features, attention_mask=attention_mask) # B x T x Da
+        loss_mask = expert_mask * attention_mask  # B x T
         log_prob = dist.log_prob(target).sum(dim=-1) # B x T
-        loss = -(log_prob * attention_mask).sum() / attention_mask.sum()
+        loss = -(log_prob * loss_mask).sum() / loss_mask.sum()
         
         return loss 

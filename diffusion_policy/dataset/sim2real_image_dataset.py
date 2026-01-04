@@ -196,6 +196,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
         episode_ends = z['meta']['episode_ends']
+        expert_mask = z['data']['expert_mask']
 
         # Create replay buffer
         replay_buffer = ReplayBuffer.create_empty_numpy()
@@ -212,6 +213,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         # Always load to memory as it's small
         replay_buffer.root['data']['action'] = action_arr[:]
         replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
+        replay_buffer.root['data']['expert_mask'] = expert_mask[:]
 
         return replay_buffer
 
@@ -276,6 +278,7 @@ class Sim2RealImageDataset(BaseImageDataset):
             del data[key]
 
         action = data['action'].astype(np.float32)
+        expert_mask = data['expert_mask'].astype(np.float32)
         # handle latency by dropping first n_latency_steps action
         # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
@@ -284,6 +287,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         torch_data = {
             'obs': dict_apply(obs_dict, torch.from_numpy),
             'action': torch.from_numpy(action),
+            'expert_mask': torch.from_numpy(expert_mask),
         }
         return torch_data
 
