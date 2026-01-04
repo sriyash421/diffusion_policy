@@ -19,14 +19,11 @@ export HF_DATASETS_CACHE="$SCRUBBED_PATH/hf_datasets_cache"
 module load conda
 conda activate robodiff
 
-# python train.py \
-#     --config-name train_transformer_sim2real_image_workspace.yaml \
-#     --config-dir diffusion_policy/config \
-#     task.dataset.dataset_dir=/gpfs/scrubbed/sriyash/pg_final
+dataset="/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
 
 python train.py \
-    --config-name train_transformer_sim2real_image_pomdp_workspace.yaml \
+    --config-name $1 \
     --config-dir diffusion_policy/config \
-    task.dataset.dataset_dir=/gpfs/scrubbed/sriyash/pg_final
+    task.dataset.dataset_dir=$dataset
 
 

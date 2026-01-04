@@ -125,7 +125,7 @@ class TransformerImagePolicy(BaseImagePolicy):
         
         # Get action distribution and compute loss
         dist = self.forward(nobs_features, attention_mask=attention_mask) # B x T x Da
-        loss_mask = expert_mask * attention_mask  # B x T
+        loss_mask = expert_mask[...,0] * attention_mask  # B x T
         log_prob = dist.log_prob(target).sum(dim=-1) # B x T
         loss = -(log_prob * loss_mask).sum() / loss_mask.sum()
         

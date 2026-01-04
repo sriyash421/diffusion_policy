@@ -87,7 +87,7 @@ def collate_fn(batch):
     obs_dict = {key: [item['obs'][key] for item in batch] for key in batch[0]['obs'].keys()}
     collated_obs = dict_apply(obs_dict, lambda x: _collate(x))
     collated_actions = _collate([item['action'] for item in batch])
-    #TODO: collate expert mask
+    collated_expert_mask = _collate([item['expert_mask'] for item in batch])
 
     max_len = collated_actions.shape[1]
     seq_lens = [item['action'].shape[0] for item in batch]
@@ -97,6 +97,7 @@ def collate_fn(batch):
     collated_batch = {
         'obs': collated_obs,
         'action': collated_actions,
+        'expert_mask': collated_expert_mask,
         'attention_mask': attention_mask
     }
     return collated_batch
