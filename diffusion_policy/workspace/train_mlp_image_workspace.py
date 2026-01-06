@@ -70,7 +70,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
-
         # resume training
         checkpoint_loaded = False
         if cfg.training.resume:
@@ -79,6 +78,21 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+
+        if cfg.checkpoint.get('pretrained_ckpt_path', None) is not None:
+            pretrained_ckpt_path = pathlib.Path(
+                hydra.utils.to_absolute_path(cfg.checkpoint.pretrained_ckpt_path))
+            if pretrained_ckpt_path.is_file():
+                print(f"Loading pretrained weights from {pretrained_ckpt_path}")
+                self.load_checkpoint(path=pretrained_ckpt_path,
+                    exclude_keys=['optimizer'],
+                    include_keys=['model']
+                )
+            else:
+                # print(f"Pretrained checkpoint path {pretrained_ckpt_path} not found - skipping")
+                raise FileNotFoundError(
+                    f"Pretrained checkpoint path {pretrained_ckpt_path} not found"
+                )
 
         # configure dataset
         dataset: BaseImageDataset

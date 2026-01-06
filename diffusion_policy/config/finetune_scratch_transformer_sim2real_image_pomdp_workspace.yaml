@@ -1,12 +1,12 @@
 defaults:
   - _self_
-  - task: sim2real_image
+  - task: sim2real_image_pomdp
 
-name: train_transformer_image
+name: finetune_scratch_transformer_image
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
-task_name: '${task.name}'
+task_name: 'transformer-${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
@@ -22,6 +22,12 @@ obs_as_global_cond: True
 task:
   dataset:
     return_sequences: true
+    dataset_config:
+      - dataset_dir: "/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
+        sampling_ratio: 0.5
+      - dataset_dir: "/gpfs/scrubbed/sriyash/pg_exploration_step1"
+        sampling_ratio: 0.5
+      
 
 policy:
   _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
@@ -109,6 +115,7 @@ checkpoint:
     format_str: 'epoch={epoch:04d}-train_action_mse_error={train_action_mse_error:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
+  pretrained_ckpt_path: null
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}

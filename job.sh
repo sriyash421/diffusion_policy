@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=pg_pomdp_transformer
 #SBATCH --qos=normal
-#SBATCH --gpus=4
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=512G
+#SBATCH --account=socialrl
+#SBATCH --gpus=2
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=480G
 #SBATCH --time=12:00:00
 #SBATCH --output=/gpfs/projects/weirdlab/sriyash/slurm_logs/slurm-%x-%j.out
 
@@ -23,7 +24,7 @@ dataset="/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
 
 python train.py \
     --config-name $1 \
-    --config-dir diffusion_policy/config \
-    task.dataset.dataset_dir=$dataset
+    --config-dir diffusion_policy/config $2
+    
 
 

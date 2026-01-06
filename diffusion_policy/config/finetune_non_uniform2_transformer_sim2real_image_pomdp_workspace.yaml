@@ -1,12 +1,12 @@
 defaults:
   - _self_
-  - task: sim2real_image
+  - task: sim2real_image_pomdp
 
-name: train_transformer_image
+name: finetune_uniform2_transformer_image
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
-task_name: '${task.name}'
+task_name: 'transformer-${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
@@ -22,6 +22,15 @@ obs_as_global_cond: True
 task:
   dataset:
     return_sequences: true
+    dataset_config:
+      - dataset_dir: "/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
+        sampling_ratio: 0.05
+      - dataset_dir: "/gpfs/scrubbed/sriyash/pg_exploration_step1"
+        sampling_ratio: 0.15
+      - dataset_dir: "/gpfs/scrubbed/sriyash/pg_exploration_step2"
+        sampling_ratio: 0.8
+      
+      
 
 policy:
   _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
@@ -67,7 +76,7 @@ val_dataloader:
 
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: 1.0e-5
   betas: [0.95, 0.999]
   eps: 1.0e-8
   weight_decay: 1.0e-6
@@ -109,6 +118,7 @@ checkpoint:
     format_str: 'epoch={epoch:04d}-train_action_mse_error={train_action_mse_error:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
+  pretrained_ckpt_path: data/outputs/2026.01.04/18.25.56_train_transformer_image_transformer-sim2real_image_pomdp/checkpoints/step_0040000.ckpt 
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
