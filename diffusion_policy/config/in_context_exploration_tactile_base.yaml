@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  - task: sim2real_image_pomdp
+  - task: tactile_lowdim
 
-name: in-context-exploration-debug
+name: in-context-exploration
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -10,7 +10,7 @@ task_name: '${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 1024
+horizon: 256
 n_obs_steps: 1
 n_action_steps: 1
 n_latency_steps: 0
@@ -23,6 +23,10 @@ task:
   dataset:
     return_sequences: true
     # dataset_config:
+    #   - dataset_dir:  datasets/tactile_pick_step0
+    #     sampling_ratio: 1.0
+    
+    # dataset_config:
     #   - dataset_dir: "/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
     #     sampling_ratio: 0.2
     #   - dataset_dir: "/gpfs/scrubbed/sriyash/pg_exploration_step1"
@@ -30,24 +34,12 @@ task:
     #   - dataset_dir: "/gpfs/scrubbed/sriyash/pg_exploration_step2"
     #     sampling_ratio: 0.5
       
-      
-
 policy:
   _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
   shape_meta: ${shape_meta}
   obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
     shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      weights: IMAGENET1K_V1
-    resize_shape: null
-    crop_shape: null
-    random_crop: False
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
   horizon: ${horizon}
   n_action_steps: ${n_action_steps}
   n_obs_steps: ${n_obs_steps}
@@ -58,20 +50,20 @@ policy:
 
 dataloader:
   batch_size: 8
-  num_workers: 2
+  num_workers: 16
   shuffle: True
   pin_memory: True
   persistent_workers: True
-  prefetch_factor: 4
+  prefetch_factor: 8
   drop_last: False
 
 val_dataloader:
   batch_size: 8
-  num_workers: 2
+  num_workers: 16
   shuffle: False
   pin_memory: True
   persistent_workers: True
-  prefetch_factor: 4
+  prefetch_factor: 8
   drop_last: False
 
 optimizer:
@@ -97,7 +89,7 @@ training:
   checkpoint_every: 10000  # checkpoint every 10000 gradient steps
   val_every: 1
   sample_every: 1
-  max_train_steps: null
+  max_train_steps: 50000
   max_val_steps: null
   tqdm_interval_sec: 1.0
 
@@ -108,7 +100,7 @@ logging:
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: null
+  group: "tactile_in_context_exploration_debug"
 
 checkpoint:
   topk:
