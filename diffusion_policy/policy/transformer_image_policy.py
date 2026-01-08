@@ -21,6 +21,7 @@ class TransformerImagePolicy(BaseImagePolicy):
             hidden_depth: int = 4,
             n_head: int = 8,
             dropout: float = 0.1,
+            sample_timesteps: bool = False,
             **kwargs):
         assert n_action_steps == 1, "MLPImagePolicy only supports n_action_steps=1"
         
@@ -60,13 +61,22 @@ class TransformerImagePolicy(BaseImagePolicy):
         self.log_std_head = nn.Linear(hidden_dim, action_dim)
         
         self.log_std_limits = (-5.0, 2.0)
+        self.sample_timesteps = sample_timesteps
 
-    def forward(self, obs_features: torch.Tensor, attention_mask: torch.Tensor = None) -> Normal:
+    def forward(self, obs_features: torch.Tensor, attention_mask: torch.Tensor = None, sample_timesteps: bool = False) -> Normal:
         """
         Returns a Normal(mean, std) distribution over actions given observation features.
         """
         obs_features = self.input_proj(obs_features)
-        h = self.transformer(inputs_embeds=obs_features, attention_mask=attention_mask).last_hidden_state
+        position_ids = None
+        if sample_timesteps:
+            B, T, D = obs_features.shape
+            # sample initial timesteps
+            rand_timesteps = torch.randint(0, self.kwargs.horizon - T + 1, (B,), device=obs_features.device)
+            position_ids = torch.arange(T, device=obs_features.device).unsqueeze(0).expand(B, -1)
+            position_ids = position_ids + rand_timesteps.unsqueeze(1)
+
+        h = self.transformer(inputs_embeds=obs_features, attention_mask=attention_mask, position_ids=position_ids).last_hidden_state
         mean = self.mean_head(h)
         log_std = self.log_std_head(h).clamp(min=self.log_std_limits[0], max=self.log_std_limits[1])
         std = torch.exp(log_std)
@@ -91,7 +101,7 @@ class TransformerImagePolicy(BaseImagePolicy):
         nobs_features = self.obs_encoder(this_nobs).reshape(B, T, -1)
             
         # Get action distribution
-        dist = self.forward(nobs_features, attention_mask=attention_mask)
+        dist = self.forward(nobs_features, attention_mask=attention_mask, sample_timesteps=False)
         action_pred = dist.rsample()  # Sample from distribution
         action = self.normalizer['action'].unnormalize(action_pred)
         seq_lens = attention_mask.sum(dim=1)
@@ -124,7 +134,7 @@ class TransformerImagePolicy(BaseImagePolicy):
         target = nactions
         
         # Get action distribution and compute loss
-        dist = self.forward(nobs_features, attention_mask=attention_mask) # B x T x Da
+        dist = self.forward(nobs_features, attention_mask=attention_mask, sample_timesteps=self.sample_timesteps) # B x T x Da
         loss_mask = expert_mask[...,0] * attention_mask  # B x T
         log_prob = dist.log_prob(target).sum(dim=-1) # B x T
         loss = -(log_prob * loss_mask).sum() / loss_mask.sum()

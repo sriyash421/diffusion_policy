@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: tactile_lowdim
 
-name: in-context-exploration
+name: spoc-tactile
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -10,7 +10,7 @@ task_name: '${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 256
+horizon: 128
 n_obs_steps: 1
 n_action_steps: 1
 n_latency_steps: 0
@@ -24,9 +24,9 @@ iteration: null
 task:
   dataset:
     return_sequences: true
-    # dataset_config:
-    #   - dataset_dir:  datasets/tactile_pick_step0
-    #     sampling_ratio: 1.0
+    dataset_config:
+      - dataset_dir:  datasets/tactile_pick_step0
+        sampling_ratio: 1.0
     
     # dataset_config:
     #   - dataset_dir: "/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
@@ -49,6 +49,7 @@ policy:
   hidden_depth: 4
   n_head: 4
   dropout: 0.1
+  sample_timesteps: True
 
 dataloader:
   batch_size: 8

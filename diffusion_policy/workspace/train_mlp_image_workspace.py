@@ -177,6 +177,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
+                if cfg.training.get('max_gradient_steps', None) is not None:
+                    if self.global_step >= cfg.training.max_gradient_steps:
+                        break
                 step_log = dict()
                 # ========= train for this epoch ==========
                 if cfg.training.freeze_encoder:
