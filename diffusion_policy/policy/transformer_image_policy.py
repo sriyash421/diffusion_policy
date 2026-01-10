@@ -72,7 +72,7 @@ class TransformerImagePolicy(BaseImagePolicy):
         if sample_timesteps:
             B, T, D = obs_features.shape
             # sample initial timesteps
-            rand_timesteps = torch.randint(0, self.kwargs.horizon - T + 1, (B,), device=obs_features.device)
+            rand_timesteps = torch.randint(0, self.kwargs['horizon'] - T + 1, (B,), device=obs_features.device)
             position_ids = torch.arange(T, device=obs_features.device).unsqueeze(0).expand(B, -1)
             position_ids = position_ids + rand_timesteps.unsqueeze(1)
 
@@ -139,4 +139,114 @@ class TransformerImagePolicy(BaseImagePolicy):
         log_prob = dist.log_prob(target).sum(dim=-1) # B x T
         loss = -(log_prob * loss_mask).sum() / loss_mask.sum()
         
-        return loss 
+        return loss
+
+class DPTImagePolicy(TransformerImagePolicy):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def forward(self, obs_features: torch.Tensor, target: torch.Tensor = None, attention_mask: torch.Tensor = None, sample_timesteps: bool = False) -> Normal:
+        """
+        Returns a Normal(mean, std) distribution over actions given observation features.
+        """
+        obs_features = self.input_proj(obs_features)
+
+        # randomly permute the obs_features along the time dimension for DPT (only valid positions), 
+        # target action is the first action of the permuted sequence
+        target_actions = []
+        for i in range(obs_features.shape[0]):
+            seq_len = attention_mask[i].sum().item()
+            perm = torch.randperm(seq_len)
+            obs_features[i, :seq_len] = obs_features[i, :seq_len][perm]
+            if target is not None:
+                target_actions.append(target[i, perm[0], :].unsqueeze(0))
+        if target is not None:
+            target = torch.cat(target_actions, dim=0) # B x Da
+            # repeat to make it B x T x Da
+            target = target.unsqueeze(1).repeat(1, obs_features.shape[1], 1)
+        
+        position_ids = torch.zeros_like(attention_mask).long()
+        position_ids[:, 0] = 1
+
+        h = self.transformer(inputs_embeds=obs_features, attention_mask=attention_mask, position_ids=position_ids).last_hidden_state
+        mean = self.mean_head(h)
+        log_std = self.log_std_head(h).clamp(min=self.log_std_limits[0], max=self.log_std_limits[1])
+        std = torch.exp(log_std)
+        return Normal(mean, std), target  # B x T x Da
+
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        assert 'past_action' not in obs_dict
+        assert 'attention_mask' in obs_dict, "attention_mask is required for TransformerImagePolicy"
+        attention_mask = obs_dict.pop('attention_mask')
+        nobs = self.normalizer.normalize(obs_dict)
+        value = next(iter(nobs.values()))
+        B, T = value.shape[:2]
+        To = self.n_obs_steps
+
+        device = self.device
+        dtype = self.dtype
+        # Encode obs: flatten all obs steps
+        if isinstance(nobs, dict):
+            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1,*x.shape[2:]))
+        else:
+            this_nobs = nobs.reshape(-1,*nobs.shape[2:])
+        nobs_features = self.obs_encoder(this_nobs).reshape(B, T, -1)
+
+        obs_features = self.input_proj(nobs_features) # B x T x D
+
+        # Permute it such that the last valid observation is at position 0, and rest follow
+        for i in range(B):
+            seq_len = attention_mask[i].sum().item()
+            if seq_len < 2:
+                continue
+            perm = torch.arange(seq_len)
+            perm = torch.cat([perm[-1:], perm[:-1]], dim=0)
+            obs_features[i, :seq_len] = obs_features[i, :seq_len][perm]
+        
+        position_ids = torch.zeros_like(attention_mask).long()
+        position_ids[:, 0] = 1
+        
+        h = self.transformer(inputs_embeds=obs_features, attention_mask=attention_mask, position_ids=position_ids).last_hidden_state
+        mean = self.mean_head(h)
+        log_std = self.log_std_head(h).clamp(min=self.log_std_limits[0], max=self.log_std_limits[1])
+        std = torch.exp(log_std)
+        dist = Normal(mean, std)
+
+        action_pred = dist.rsample()  # Sample from distribution
+        action = self.normalizer['action'].unnormalize(action_pred)
+        seq_lens = attention_mask.sum(dim=1)
+        action_pred = action_pred[torch.arange(B), seq_lens - 1, :]  # Get last valid action prediction
+        action = action[torch.arange(B), seq_lens - 1, :]  # Get last valid action
+        return {
+            'action': action,
+            'action_pred': action_pred
+        }
+
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        self.normalizer.load_state_dict(normalizer.state_dict())
+
+    def compute_loss(self, batch):
+        nobs = self.normalizer.normalize(batch['obs'])
+        nactions = self.normalizer['action'].normalize(batch['action'])
+        # expert_mask = batch['expert_mask']
+        B = nactions.shape[0]
+        T = nactions.shape[1]
+        Da = self.action_dim
+
+        # Encode obs
+        if isinstance(nobs, dict):
+            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1,*x.shape[2:]))
+        else:
+            this_nobs = nobs.reshape(-1,*nobs.shape[2:])
+        nobs_features = self.obs_encoder(this_nobs)
+        nobs_features = nobs_features.reshape(B, T, -1)
+        attention_mask = batch['attention_mask']
+        target = nactions
+        
+        # Get action distribution and compute loss
+        dist, target_action = self.forward(nobs_features, target, attention_mask=attention_mask, sample_timesteps=self.sample_timesteps) # B x T x Da
+        loss_mask = attention_mask  # B x T
+        log_prob = dist.log_prob(target_action).sum(dim=-1) # B x T
+        loss = -(log_prob * loss_mask).sum() / loss_mask.sum()
+        
+        return loss
