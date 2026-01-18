@@ -327,10 +327,12 @@ class FileStreamManager:
     """
     Manages file loading queue and double-buffering for streaming datasets.
     """
-    def __init__(self, file_paths: list, 
-                 samples_per_file_multiplier: float = 1.0):
+    def __init__(self, file_paths: list,
+                 samples_per_file_multiplier: float = 1.0,
+                 dataset_class=None):
         self.file_paths = file_paths
         self.samples_per_file_multiplier = samples_per_file_multiplier
+        self.dataset_class = dataset_class if dataset_class is not None else Sim2RealImageDataset
         self.file_queue = deque(file_paths.copy())
         self.current_file_path = None
         self.next_file_path = None
@@ -372,9 +374,10 @@ class FileStreamManager:
         self.next_dataset_future = self.executor.submit(
             self._load_dataset, dataset_kwargs)
 
-    def _load_dataset(self, dataset_kwargs: dict) -> 'Sim2RealImageDataset':
+    def _load_dataset(self, dataset_kwargs: dict):
         """Load dataset in background thread."""
-        return Sim2RealImageDataset(**dataset_kwargs)
+        return self.dataset_class(**dataset_kwargs)
+
     def get_next_dataset(self) -> 'Sim2RealImageDataset':
         """Get the next loaded dataset, blocking if necessary."""
         if self.next_dataset_future is None:
@@ -424,8 +427,10 @@ class StreamingMultiDataset(BaseImageDataset):
         use_cache: bool = False,
         use_disk: bool = False,
         samples_per_file_multiplier: float = 1.0,
+        dataset_class=Sim2RealImageDataset,
     ):
         super().__init__()
+        self.dataset_class = dataset_class
 
         # Handle file discovery
         if dataset_dir is not None:
@@ -453,7 +458,7 @@ class StreamingMultiDataset(BaseImageDataset):
 
         # Initialize file manager
         self.file_manager = FileStreamManager(
-            file_paths, samples_per_file_multiplier)
+            file_paths, samples_per_file_multiplier, self.dataset_class)
 
         # Double buffering state
         self.active_dataset = None
@@ -480,7 +485,7 @@ class StreamingMultiDataset(BaseImageDataset):
         for file_path in file_paths:
             temp_kwargs = dataset_kwargs.copy()
             temp_kwargs['dataset_path'] = file_path
-            temp_dataset = Sim2RealImageDataset(**temp_kwargs)
+            temp_dataset = self.dataset_class(**temp_kwargs)
 
             # Accumulate epoch length
             file_length = len(temp_dataset)
@@ -551,7 +556,7 @@ class StreamingMultiDataset(BaseImageDataset):
         first_path = self.file_manager.get_next_file_path()
         first_kwargs = self.common_dataset_kwargs.copy()
         first_kwargs['dataset_path'] = first_path
-        self.active_dataset = Sim2RealImageDataset(**first_kwargs)
+        self.active_dataset = self.dataset_class(**first_kwargs)
         self.target_samples_for_active = int(
             len(self.active_dataset) * 
             self.file_manager.samples_per_file_multiplier)
@@ -640,6 +645,106 @@ class StreamingMultiDataset(BaseImageDataset):
             self.file_manager.shutdown()
 
 
+class Sim2RealImageRLDataset(Sim2RealImageDataset):
+    """
+    Dataset for RL data with expert demonstrations.
+    Loads obs, expert_obs, expert_action, reward, and done from zarr files.
+    """
+
+    def _load_zarr_data(self, dataset_path, use_disk=True):
+        """Override to load expert_obs, expert_action, reward, and done."""
+        z = zarr.open(dataset_path, mode='r')
+        obs_group = z['data']['obs']
+        actions = z['data']['actions']
+        expert_obs_arr = z['data']['expert_obs']
+        expert_action_arr = z['data']['expert_actions']
+        reward_arr = z['data']['rewards']
+        done_arr = z['data']['dones']
+        episode_ends = z['meta']['episode_ends']
+        expert_mask = z['data']['expert_mask']
+
+        # Create replay buffer
+        replay_buffer = ReplayBuffer.create_empty_numpy()
+
+        # Add observations (RGB and low-dim)
+        for key in obs_group.keys():
+            if use_disk:
+                # Keep data on disk (memory mapped)
+                replay_buffer.root['data'][key] = obs_group[key]
+            else:
+                # Load into memory
+                replay_buffer.root['data'][key] = obs_group[key][:]
+
+        # Add expert observations, actions, rewards, and dones (low-dim only)
+        if use_disk:
+            replay_buffer.root['data']['expert_obs'] = expert_obs_arr
+            replay_buffer.root['data']['reward'] = reward_arr
+            replay_buffer.root['data']['done'] = done_arr
+        else:
+            replay_buffer.root['data']['expert_obs'] = expert_obs_arr[:]
+            replay_buffer.root['data']['reward'] = reward_arr[:]
+            replay_buffer.root['data']['done'] = done_arr[:]
+
+        # Always load to memory as it's small
+        replay_buffer.root['data']['expert_action'] = expert_action_arr[:]
+        replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
+        replay_buffer.root['data']['expert_mask'] = expert_mask[:]
+        replay_buffer.root['data']['action'] = actions[:]
+
+        return replay_buffer
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Override to return obs, expert_obs, expert_action, reward, and done."""
+        threadpool_limits(1)
+        data = self.sampler.sample_sequence(idx)
+
+        # to save RAM, only return first n_obs_steps of OBS
+        # since the rest will be discarded anyway.
+        # when self.n_obs_steps is None
+        # this slice does nothing (takes all)
+        T_slice = slice(self.n_obs_steps) if not self.return_sequences else slice(None)
+
+        obs_dict = dict()
+
+        # Process regular observations (RGB and low-dim)
+        for key in self.rgb_keys:
+            # move channel last to channel first
+            # T,H,W,C
+            # convert uint8 image to float32
+            obs_dict[key] = (np.moveaxis(data[key][T_slice], -1, 1)
+                             .astype(np.float32) / 255.)
+            # T,C,H,W
+            # save ram
+            del data[key]
+        for key in self.lowdim_keys:
+            obs_dict[key] = data[key][T_slice].astype(np.float32)
+            # save ram
+            del data[key]
+
+        # Process expert observations, actions, rewards, and dones (low-dim only)
+        expert_obs = data['expert_obs'][T_slice].astype(np.float32)
+        expert_action = data['expert_action'].astype(np.float32)
+        reward = data['reward'].astype(np.float32)
+        done = data['done'].astype(np.float32)
+        action = data['action'].astype(np.float32)
+        expert_mask = data['expert_mask'].astype(np.float32)
+
+        # handle latency by dropping first n_latency_steps action
+        # observations are already taken care of by T_slice
+        if self.n_latency_steps > 0:
+            expert_action = expert_action[self.n_latency_steps:]
+
+        torch_data = {
+            'obs': dict_apply(obs_dict, torch.from_numpy),
+            'expert_obs': torch.from_numpy(expert_obs),
+            'expert_action': torch.from_numpy(expert_action),
+            'reward': torch.from_numpy(reward),
+            'done': torch.from_numpy(done),
+            'action': torch.from_numpy(action),
+            'expert_mask': torch.from_numpy(expert_mask),
+        }
+        return torch_data
+
 class Sim2RealImageMultiDataset(BaseImageDataset):
     """
     Multi-dataset wrapper that combines multiple Sim2RealImageDataset instances
@@ -663,10 +768,13 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         use_disk: bool = True,
         use_streaming: bool = False,
         samples_per_file_multiplier: float = 1.0,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        dataset_class=Sim2RealImageDataset
     ):
         super().__init__()
-
+        if isinstance(dataset_class, str):
+            dataset_class = eval(dataset_class)
+        self.dataset_class = dataset_class
         # Handle different input formats
         if dataset_dir is not None:
             file_paths = discover_zarr_files(dataset_dir)
@@ -706,6 +814,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
         # Use streaming implementation if requested
         if use_streaming:
+            # Get dataset class to use (can be overridden by subclasses)
+            dataset_class = self.dataset_class
             self.streaming_dataset = StreamingMultiDataset(
                 file_paths=file_paths,
                 dataset_dir=None,  # Already resolved to file_paths above
@@ -720,6 +830,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 use_cache=use_cache,
                 use_disk=use_disk,
                 samples_per_file_multiplier=samples_per_file_multiplier,
+                dataset_class=dataset_class,
             )
             self.is_streaming = True
             return
@@ -753,8 +864,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         for config in self.dataset_config:
             dataset_kwargs = {**common_kwargs}
             dataset_kwargs['dataset_path'] = config['dataset_path']
-
-            dataset = Sim2RealImageDataset(**dataset_kwargs)
+            dataset = self.dataset_class(**dataset_kwargs)
 
             self.datasets.append(dataset)
             self.dataset_lengths.append(len(dataset))

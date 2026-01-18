@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: sim2real_image_pomdp
 
-name: in-context-exploration
+name: aawr-rgb
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -23,10 +23,12 @@ iteration: null
 
 task:
   dataset:
+    _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+    dataset_class: "Sim2RealImageRLDataset"
     return_sequences: true
-      
+
 policy:
-  _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
+  _target_: diffusion_policy.policy.transformer_image_policy.AAWRImagePolicy
   shape_meta: ${shape_meta}
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
@@ -48,6 +50,12 @@ policy:
   hidden_depth: 4
   n_head: 4
   dropout: 0.1
+  # AAWR-specific parameters
+  critic_obs_dim: 225  # Will be inferred from expert_obs shape
+  beta: 0.5  # Advantage weighting temperature
+  expectile: 0.7  # IQL expectile for V-function
+  discount: 0.99  # Discount factor for TD targets
+  use_exp_weights: True  # Use exponential advantage weighting
 
 dataloader:
   batch_size: 8
@@ -81,7 +89,7 @@ training:
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 100
+  num_epochs: 200
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
   use_ema: False
@@ -92,7 +100,7 @@ training:
   sample_every: 1
   max_train_steps: null
   max_val_steps: null
-  max_gradient_steps: 50000
+  max_gradient_steps: 100000
   tqdm_interval_sec: 1.0
 
 logging:
@@ -102,7 +110,7 @@ logging:
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: "rgb_in_context_exploration_debug"
+  group: "aawr_rgb"
 
 checkpoint:
   topk:
@@ -125,4 +133,4 @@ hydra:
     dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
     dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
-    subdir: ${hydra.job.num} 
+    subdir: ${hydra.job.num}

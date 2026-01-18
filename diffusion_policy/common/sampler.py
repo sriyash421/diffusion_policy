@@ -100,6 +100,16 @@ def collate_fn(batch):
         'expert_mask': collated_expert_mask,
         'attention_mask': attention_mask
     }
+    if 'reward' in batch[0]:
+        collated_rewards = _collate([item['reward'] for item in batch])
+        collated_batch['reward'] = collated_rewards
+        collated_dones = _collate([item['done'] for item in batch])
+        collated_batch['done'] = collated_dones
+        collated_expert_action = _collate([item['expert_action'] for item in batch])
+        collated_batch['expert_action'] = collated_expert_action
+        collated_expert_obs = _collate([item['expert_obs'] for item in batch])
+        collated_batch['expert_obs'] = collated_expert_obs
+        
     return collated_batch
 
 def get_collate_fn():
