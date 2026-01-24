@@ -74,6 +74,9 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.rgb_keys = [
             k for k, v in shape_meta['obs'].items()
             if v.get('type', 'low_dim') == 'rgb']
+        self.depth_keys = [
+            k for k, v in shape_meta['obs'].items()
+            if v.get('type', 'low_dim') == 'depth']
         self.lowdim_keys = [
             k for k, v in shape_meta['obs'].items()
             if v.get('type', 'low_dim') == 'low_dim']
@@ -85,7 +88,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         # Create key_first_k for performance optimization
         key_first_k = dict()
         if n_obs_steps is not None:
-            for key in self.rgb_keys + self.lowdim_keys:
+            for key in self.rgb_keys + self.lowdim_keys + self.depth_keys:
                 key_first_k[key] = n_obs_steps
 
         # Split train/val
@@ -240,7 +243,7 @@ class Sim2RealImageDataset(BaseImageDataset):
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
                 self.replay_buffer[key], mode="gaussian")
         # don't normalize rgb, obs_encoder has image_net norm
-        for key in self.rgb_keys:
+        for key in self.rgb_keys + self.depth_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_identity()
         # for key in self.rgb_keys:
         #     normalizer[key] = get_image_range_normalizer()
@@ -264,15 +267,23 @@ class Sim2RealImageDataset(BaseImageDataset):
 
         obs_dict = dict()
         for key in self.rgb_keys:
-            # move channel last to channel first
-            # T,H,W,C
             # convert uint8 image to float32
-            obs_dict[key] = (np.moveaxis(data[key][T_slice], -1, 1)
-                             .astype(np.float32) / 255.)
+            if data[key].shape[-1] == 3:
+                # move channel last to channel first
+                # T,H,W,C
+                obs_dict[key] = np.moveaxis(data[key][T_slice], -1, 1)
+            else:
+                obs_dict[key] = data[key][T_slice]
             # T,C,H,W
+            obs_dict[key] = obs_dict[key].astype(np.float32) / 255.0
             # save ram
             del data[key]
         for key in self.lowdim_keys:
+            obs_dict[key] = data[key][T_slice].astype(np.float32)
+            # save ram
+            del data[key]
+            
+        for key in self.depth_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             # save ram
             del data[key]
@@ -717,6 +728,11 @@ class Sim2RealImageRLDataset(Sim2RealImageDataset):
             # save ram
             del data[key]
         for key in self.lowdim_keys:
+            obs_dict[key] = data[key][T_slice].astype(np.float32)
+            # save ram
+            del data[key]
+        
+        for key in self.depth_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             # save ram
             del data[key]

@@ -1,0 +1,125 @@
+defaults:
+  - _self_
+  - task: tactile_lowdim
+
+name: tactile-bc
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+output_dir: null
+
+task_name: '${task.name}'
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 128
+n_obs_steps: 1
+n_action_steps: 1
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+seed: null
+iteration: null
+
+sample_timesteps: False 
+task:
+  dataset:
+    _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+    dataset_class: "Sim2RealImageRLDataset"
+    return_sequences: true
+    dataset_config:
+    - dataset_dir: /gpfs/scrubbed/sriyash/tactile_baseline_no_noise
+      sampling_ratio: 1.0
+
+policy:
+  _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+    shape_meta: ${shape_meta}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  hidden_dim: 256
+  hidden_depth: 4
+  n_head: 4
+  dropout: 0.1
+  sample_timesteps: ${sample_timesteps}
+
+dataloader:
+  batch_size: 8
+  num_workers: 16
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+  prefetch_factor: 8
+  drop_last: False
+
+val_dataloader:
+  batch_size: 8
+  num_workers: 16
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+  prefetch_factor: 8
+  drop_last: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-5
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda"
+  seed: ${seed}
+  debug: False
+  resume: True
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 200
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  use_ema: False
+  freeze_encoder: False
+  rollout_every: 5000
+  checkpoint_every: 10000  # checkpoint every 10000 gradient steps
+  val_every: 1
+  sample_every: 1
+  max_train_steps: null
+  max_val_steps: null
+  max_gradient_steps: 100000
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: tactile_distillation
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: "supervised_baseline"
+
+checkpoint:
+  topk:
+    monitor_key: train_action_mse_error
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-train_action_mse_error={train_action_mse_error:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+  pretrained_ckpt_path: null
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

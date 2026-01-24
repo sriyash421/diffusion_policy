@@ -72,6 +72,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             imagenet_norm: bool=False,
             extra_randomizations=None,
             feature_dim: int=None,
+            depth_model: nn.Module = None
         ):
         """
         Assumes rgb input: B,C,H,W
@@ -80,6 +81,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         super().__init__()
 
         rgb_keys = list()
+        depth_keys = list()
         low_dim_keys = list()
         key_model_map = nn.ModuleDict()
         key_transform_map = nn.ModuleDict()
@@ -176,6 +178,9 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                 
                 this_transform = nn.Sequential(this_resizer, this_randomizer, randomization_module, this_normalizer)
                 key_transform_map[key] = this_transform
+            elif type == 'depth':
+                depth_keys.append(key)
+                key_model_map[key] = copy.deepcopy(depth_model)
             elif type == 'low_dim':
                 low_dim_keys.append(key)
             else:
@@ -188,6 +193,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         self.key_transform_map = key_transform_map
         self.share_rgb_model = share_rgb_model
         self.rgb_keys = rgb_keys
+        self.depth_keys = depth_keys
         self.low_dim_keys = low_dim_keys
         self.key_shape_map = key_shape_map
         self.feature_dim = feature_dim
@@ -231,6 +237,21 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                 assert img.shape[1:] == self.key_shape_map[key]
                 img = self.key_transform_map[key](img)
                 feature = self.key_model_map[key](img)
+                features.append(feature)
+        
+        if self.depth_keys:
+            # process depth input
+            for key in self.depth_keys:
+                data = obs_dict[key]
+                if data.ndim == 5:
+                    data = data.squeeze(2)  # B,C,1,H,W -> B,C,H,W
+                if batch_size is None:
+                    batch_size = data.shape[0]
+                else:
+                    assert batch_size == data.shape[0]
+                
+                assert data.shape[1:] == self.key_shape_map[key]
+                feature = self.key_model_map[key](data)
                 features.append(feature)
         
         # process lowdim input

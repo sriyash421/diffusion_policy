@@ -68,8 +68,8 @@ def shuffle_along_axis(a, axis):
     return np.take_along_axis(a, idx, axis=axis)
 
 
-def transpose_batch_timestep(*args):
-    return (einops.rearrange(arg, "b t ... -> t b ...") for arg in args)
+# def _batch_timestep(*args):
+#     return (einops.rearrange(arg, "b t ... -> t b ...") for arg in args)
 
 
 class TrainWithLogger:

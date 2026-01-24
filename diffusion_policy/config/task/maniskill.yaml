@@ -1,36 +1,39 @@
-name: tactile_lowdim
+name: maniskill
 
 shape_meta: &shape_meta
   obs:
-    end_effector_pose:
-      shape: [6]
+    agent_state:
+      shape: [24]
       type: low_dim
-    arm_joint_pos:
-      shape: [6]
-      type: low_dim
-    last_arm_action:
-      shape: [6]
-      type: low_dim
-    last_gripper_action:
-      shape: [1]
-      type: low_dim
-    right_inner_finger_contact_force:
+    base_pose:
       shape: [3]
-      type: low_dim 
-    left_inner_finger_contact_force:
-      shape: [3]
+      type: low_dim
+    fetch_hand_rgb:
+      shape: [3, 128, 128]
+      type: rgb
+    fetch_head_rgb:
+      shape: [3, 128, 128]
+      type: rgb
+    state:
+      shape: [42]
+      type: low_dim
+    tcp_pose:
+      shape: [7]
       type: low_dim
   action:
-    shape: [7]
+    shape: [13]
 
-task_name: &task_name sim2real_image
+task_name: &task_name maniskill
 
 env_runner:
   _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
 
 dataset:
   _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  # Option 1: Single dataset directory (backward compatible)
+  # dataset_dir: ../OctiLab/datasets_test
   
+  # Option 2: Multiple dataset directories with sampling ratios
   # dataset_config:
   #   - dataset_dir: ../OctiLab/datasets/0
   #     sampling_ratio: 0.9
@@ -45,5 +48,6 @@ dataset:
   n_latency_steps: ${n_latency_steps}
   seed: 42
   val_ratio: 0.05
-  use_cache: true
-  use_disk: false
+  use_cache: false
+  use_disk: true
+  return_sequences: true

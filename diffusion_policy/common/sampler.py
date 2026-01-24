@@ -154,6 +154,9 @@ class SequenceSampler:
         # (buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx)
         self.indices = indices 
         self.keys = list(keys) # prevent OmegaConf list performance problem
+        if "pixels" in self.keys:
+            self.keys.remove("pixels")
+
         self.sequence_length = sequence_length
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k

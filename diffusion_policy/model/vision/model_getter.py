@@ -26,3 +26,18 @@ def get_r3m(name, **kwargs):
     resnet_model = r3m_model.convnet
     resnet_model = resnet_model.to('cpu')
     return resnet_model
+
+
+# create a depth encoder with a custom CNN backbone
+# class DepthEncoder(torch.nn.Module):
+#     def __init__(self, name='resnet18', weights=None):
+#         super(DepthEncoder, self).__init__()
+#         self.base_model = get_resnet(name, weights=weights)
+#         self.base_model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+#     def forward(self, x):
+#         return self.base_model(x)
+
+def get_depth_encoder(name='resnet18', weights=None):
+    # return DepthEncoder(name=name, weights=weights)
+    return get_resnet(name, weights=None)
