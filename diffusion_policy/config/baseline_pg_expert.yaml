@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  - task: maniskill
+  - task: sim2real_image
 
-name: icl_maniskill
+name: supervised-baseline
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -10,7 +10,7 @@ task_name: '${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 1024
+horizon: 512
 n_obs_steps: 1
 n_action_steps: 1
 n_latency_steps: 0
@@ -21,12 +21,11 @@ obs_as_global_cond: True
 seed: null
 iteration: null
 
+sample_timesteps: False 
 task:
   dataset:
-    dataset_config:
-      - dataset_dir:  /gpfs/projects/weirdlab/sriyash/mshab/datasets/tidy_house_mini_5k
-        sampling_ratio: 1.0
-      
+    return_sequences: True
+
 policy:
   _target_: diffusion_policy.policy.transformer_image_policy.TransformerImagePolicy
   shape_meta: ${shape_meta}
@@ -37,10 +36,6 @@ policy:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
       name: resnet18
       weights: IMAGENET1K_V1
-    depth_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_depth_encoder
-      name: resnet18
-      weights: null
     resize_shape: null
     crop_shape: null
     random_crop: False
@@ -54,6 +49,7 @@ policy:
   hidden_depth: 4
   n_head: 4
   dropout: 0.1
+  sample_timesteps: ${sample_timesteps}
 
 dataloader:
   batch_size: 8
@@ -75,7 +71,7 @@ val_dataloader:
 
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: 1.0e-5
   betas: [0.95, 0.999]
   eps: 1.0e-8
   weight_decay: 1.0e-6
@@ -86,8 +82,8 @@ training:
   debug: False
   resume: True
   lr_scheduler: cosine
-  lr_warmup_steps: 100
-  num_epochs: 500
+  lr_warmup_steps: 500
+  num_epochs: 200
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
   use_ema: False
@@ -98,17 +94,17 @@ training:
   sample_every: 1
   max_train_steps: null
   max_val_steps: null
-  max_gradient_steps: 50000
+  max_gradient_steps: 100000
   tqdm_interval_sec: 1.0
 
 logging:
-  project: maniskill-icl
+  project: peg_insertion_distillation
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: "maniskill-expert"
+  group: "supervised_baseline"
 
 checkpoint:
   topk:
@@ -131,4 +127,4 @@ hydra:
     dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
     dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
-    subdir: ${hydra.job.num} 
+    subdir: ${hydra.job.num}

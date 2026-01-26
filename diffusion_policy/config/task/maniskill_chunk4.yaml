@@ -1,4 +1,4 @@
-name: maniskill
+name: maniskill_chunk4
 
 shape_meta: &shape_meta
   obs:
@@ -21,9 +21,9 @@ shape_meta: &shape_meta
       shape: [7]
       type: low_dim
   action:
-    shape: [13]
+    shape: [52]
 
-task_name: &task_name maniskill
+task_name: &task_name maniskill_chunk4
 
 env_runner:
   _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner

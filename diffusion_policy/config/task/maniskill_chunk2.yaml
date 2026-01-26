@@ -1,10 +1,10 @@
-name: maniskill
+name: maniskill_chunk2
 
 shape_meta: &shape_meta
   obs:
-    # agent_state:
-    #   shape: [24]
-    #   type: low_dim
+    agent_state:
+      shape: [24]
+      type: low_dim
     base_pose:
       shape: [3]
       type: low_dim
@@ -14,16 +14,16 @@ shape_meta: &shape_meta
     fetch_head_rgb:
       shape: [3, 128, 128]
       type: rgb
-    # state:
-    #   shape: [42]
-    #   type: low_dim
+    state:
+      shape: [42]
+      type: low_dim
     tcp_pose:
       shape: [7]
       type: low_dim
   action:
-    shape: [13]
+    shape: [26]
 
-task_name: &task_name maniskill
+task_name: &task_name maniskill_chunk2
 
 env_runner:
   _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
@@ -48,6 +48,6 @@ dataset:
   n_latency_steps: ${n_latency_steps}
   seed: 42
   val_ratio: 0.05
-  use_cache: true
+  use_cache: false
   use_disk: true
   return_sequences: true
