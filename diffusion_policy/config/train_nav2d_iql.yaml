@@ -33,7 +33,7 @@ policy:
   horizon: ${horizon}
   n_action_steps: ${n_action_steps}
   n_obs_steps: ${n_obs_steps}
-  hidden_dim: 256
+  hidden_dim: 1024
   hidden_depth: 4
   discount: 0.99
   expectile: 0.9
@@ -72,7 +72,7 @@ training:
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 20
+  num_epochs: 1000
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
   use_ema: False
