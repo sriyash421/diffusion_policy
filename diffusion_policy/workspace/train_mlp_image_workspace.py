@@ -205,6 +205,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
+                            if hasattr(self.model, "update_target_network"):
+                                self.model.update_target_network()
                         raw_loss_cpu = raw_loss.item()
                         tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
                         train_losses.append(raw_loss_cpu)

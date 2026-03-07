@@ -199,7 +199,11 @@ class Sim2RealImageDataset(BaseImageDataset):
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
         episode_ends = z['meta']['episode_ends']
-        expert_mask = z['data']['expert_mask']
+        # expert_mask = z['data']['expert_mask']
+        if 'expert_mask' in z['data']:
+            expert_mask = z['data']['expert_mask']
+        else:
+            expert_mask = np.ones_like(action_arr, dtype=np.float32)
 
         # Create replay buffer
         replay_buffer = ReplayBuffer.create_empty_numpy()
@@ -658,21 +662,35 @@ class StreamingMultiDataset(BaseImageDataset):
 
 class Sim2RealImageRLDataset(Sim2RealImageDataset):
     """
-    Dataset for RL data with expert demonstrations.
-    Loads obs, expert_obs, expert_action, reward, and done from zarr files.
+    Dataset for RL data.
+    Samples one extra timestep and constructs next_obs by shifting the
+    observation sequence by one step, avoiding separate next_obs storage.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        key_first_k = dict()
+        if self.n_obs_steps is not None:
+            for key in self.rgb_keys + self.lowdim_keys + self.depth_keys:
+                key_first_k[key] = self.n_obs_steps + 1
+        self.sampler = SequenceSampler(
+            replay_buffer=self.replay_buffer,
+            sequence_length=self.horizon + self.n_latency_steps + 1,
+            pad_before=self.pad_before,
+            pad_after=self.pad_after,
+            episode_mask=self.train_mask,
+            key_first_k=key_first_k,
+            return_sequences=self.return_sequences
+        )
+
     def _load_zarr_data(self, dataset_path, use_disk=True):
-        """Override to load expert_obs, expert_action, reward, and done."""
+        """Override to load reward and done in addition to obs and action."""
         z = zarr.open(dataset_path, mode='r')
         obs_group = z['data']['obs']
         actions = z['data']['actions']
-        expert_obs_arr = z['data']['expert_obs']
-        expert_action_arr = z['data']['expert_actions']
         reward_arr = z['data']['rewards']
         done_arr = z['data']['dones']
         episode_ends = z['meta']['episode_ends']
-        expert_mask = z['data']['expert_mask']
 
         # Create replay buffer
         replay_buffer = ReplayBuffer.create_empty_numpy()
@@ -688,24 +706,33 @@ class Sim2RealImageRLDataset(Sim2RealImageDataset):
 
         # Add expert observations, actions, rewards, and dones (low-dim only)
         if use_disk:
-            replay_buffer.root['data']['expert_obs'] = expert_obs_arr
             replay_buffer.root['data']['reward'] = reward_arr
             replay_buffer.root['data']['done'] = done_arr
         else:
-            replay_buffer.root['data']['expert_obs'] = expert_obs_arr[:]
             replay_buffer.root['data']['reward'] = reward_arr[:]
             replay_buffer.root['data']['done'] = done_arr[:]
 
         # Always load to memory as it's small
-        replay_buffer.root['data']['expert_action'] = expert_action_arr[:]
         replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
-        replay_buffer.root['data']['expert_mask'] = expert_mask[:]
         replay_buffer.root['data']['action'] = actions[:]
 
         return replay_buffer
 
+    def get_validation_dataset(self):
+        val_set = copy.copy(self)
+        val_set.sampler = SequenceSampler(
+            replay_buffer=self.replay_buffer,
+            sequence_length=self.horizon + self.n_latency_steps + 1,
+            pad_before=self.pad_before,
+            pad_after=self.pad_after,
+            episode_mask=self.val_mask,
+            return_sequences=self.return_sequences
+        )
+        val_set.val_mask = ~self.val_mask
+        return val_set
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Override to return obs, expert_obs, expert_action, reward, and done."""
+        """Override to return obs, next_obs, action, reward, and done."""
         threadpool_limits(1)
         data = self.sampler.sample_sequence(idx)
 
@@ -716,48 +743,42 @@ class Sim2RealImageRLDataset(Sim2RealImageDataset):
         T_slice = slice(self.n_obs_steps) if not self.return_sequences else slice(None)
 
         obs_dict = dict()
+        next_obs_dict = dict()
 
         # Process regular observations (RGB and low-dim)
         for key in self.rgb_keys:
-            # move channel last to channel first
-            # T,H,W,C
-            # convert uint8 image to float32
-            obs_dict[key] = (np.moveaxis(data[key][T_slice], -1, 1)
+            obs_data = data[key][:-1]
+            next_obs_data = data[key][1:]
+            obs_dict[key] = (np.moveaxis(obs_data[T_slice], -1, 1)
                              .astype(np.float32) / 255.)
-            # T,C,H,W
-            # save ram
+            next_obs_dict[key] = (np.moveaxis(next_obs_data[T_slice], -1, 1)
+                                  .astype(np.float32) / 255.)
             del data[key]
         for key in self.lowdim_keys:
-            obs_dict[key] = data[key][T_slice].astype(np.float32)
-            # save ram
+            obs_dict[key] = data[key][:-1][T_slice].astype(np.float32)
+            next_obs_dict[key] = data[key][1:][T_slice].astype(np.float32)
             del data[key]
         
         for key in self.depth_keys:
-            obs_dict[key] = data[key][T_slice].astype(np.float32)
-            # save ram
+            obs_dict[key] = data[key][:-1][T_slice].astype(np.float32)
+            next_obs_dict[key] = data[key][1:][T_slice].astype(np.float32)
             del data[key]
 
-        # Process expert observations, actions, rewards, and dones (low-dim only)
-        expert_obs = data['expert_obs'][T_slice].astype(np.float32)
-        expert_action = data['expert_action'].astype(np.float32)
-        reward = data['reward'].astype(np.float32)
-        done = data['done'].astype(np.float32)
-        action = data['action'].astype(np.float32)
-        expert_mask = data['expert_mask'].astype(np.float32)
+        action = data['action'][:-1].astype(np.float32)
+        reward = data['reward'][:-1].astype(np.float32)
+        done = data['done'][:-1].astype(np.float32)
 
         # handle latency by dropping first n_latency_steps action
         # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
-            expert_action = expert_action[self.n_latency_steps:]
+            action = action[self.n_latency_steps:]
 
         torch_data = {
             'obs': dict_apply(obs_dict, torch.from_numpy),
-            'expert_obs': torch.from_numpy(expert_obs),
-            'expert_action': torch.from_numpy(expert_action),
+            'next_obs': dict_apply(next_obs_dict, torch.from_numpy),
             'reward': torch.from_numpy(reward),
             'done': torch.from_numpy(done),
             'action': torch.from_numpy(action),
-            'expert_mask': torch.from_numpy(expert_mask),
         }
         return torch_data
 
