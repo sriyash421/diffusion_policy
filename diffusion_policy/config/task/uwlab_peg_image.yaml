@@ -1,0 +1,38 @@
+name: uwlab_peg_image
+
+dataset_dir: &dataset_dir /home/harine/UWLab/data/peg_expert_1000
+
+shape_meta: &shape_meta
+  obs:
+    # 3 cameras, 224x224, THWC stored on disk -> CHW in shape_meta
+    front_rgb:
+      shape: [3, 224, 224]
+      type: rgb
+    side_rgb:
+      shape: [3, 224, 224]
+      type: rgb
+    wrist_rgb:
+      shape: [3, 224, 224]
+      type: rgb
+    # low-dim proprioception (5-step history baked in by env)
+    end_effector_pose:
+      shape: [30]
+      type: low_dim
+  action:
+    shape: [7]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.uwlab_dummy_runner.UwlabDummyImageRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.uwlab_trajectory_image_dataset.UwlabTrajectoryImageDataset
+  shape_meta: *shape_meta
+  dataset_dir: *dataset_dir
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${n_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null

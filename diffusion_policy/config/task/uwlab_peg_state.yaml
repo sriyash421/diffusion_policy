@@ -1,0 +1,38 @@
+name: uwlab_peg_state
+
+dataset_dir: &dataset_dir /home/harine/UWLab/data/peg_expert_imgs
+
+# Dimensions include 5-step history baked in by the env:
+#   prev_actions      7*5 = 35
+#   joint_pos        14*5 = 70
+#   end_effector_pose 6*5 = 30
+#   insertive_asset_pose              6*5 = 30
+#   receptive_asset_pose              6*5 = 30
+#   insertive_asset_in_receptive_frame 6*5 = 30
+#   ─────────────────────────────────────────
+#   total                                  225
+obs_dim: &obs_dim 225
+action_dim: &action_dim 7
+keypoint_dim: &keypoint_dim 3
+
+obs_keys: &obs_keys
+  - prev_actions
+  - joint_pos
+  - end_effector_pose
+  - insertive_asset_pose
+  - receptive_asset_pose
+  - insertive_asset_in_receptive_asset_frame
+
+env_runner:
+  _target_: diffusion_policy.env_runner.uwlab_dummy_runner.UwlabDummyLowdimRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.uwlab_trajectory_lowdim_dataset.UwlabTrajectoryLowdimDataset
+  dataset_dir: *dataset_dir
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  obs_keys: *obs_keys
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null

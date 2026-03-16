@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: real_pusht_image
+  - task: uwlab_peg_image
 
 name: train_robomimic_image
 _target_: diffusion_policy.workspace.train_robomimic_image_workspace.TrainRobomimicImageWorkspace
@@ -23,9 +23,10 @@ policy:
   algo_name: bc_rnn
   obs_type: image
   # oc.select resolver: key, default
-  task_name: ${oc.select:task.task_name,tool_hang}
+  task_name: ${oc.select:task.task_name,uwlab_peg_image}
   dataset_type: ${oc.select:task.dataset_type,ph}
-  crop_shape: [216, 288] # ch, cw 320x240 90%
+  # use full 224x224 crops for UWLab cameras
+  crop_shape: [224, 224] # ch, cw
 
 dataloader:
   batch_size: 32
