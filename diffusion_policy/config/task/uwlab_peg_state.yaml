@@ -1,6 +1,6 @@
 name: uwlab_peg_state
 
-dataset_dir: &dataset_dir /home/harine/UWLab/data/peg_expert_imgs
+dataset_dir: /home/harine/UWLab/data/peg_expert
 
 # Dimensions include 5-step history baked in by the env:
 #   prev_actions      7*5 = 35
@@ -28,7 +28,7 @@ env_runner:
 
 dataset:
   _target_: diffusion_policy.dataset.uwlab_trajectory_lowdim_dataset.UwlabTrajectoryLowdimDataset
-  dataset_dir: *dataset_dir
+  dataset_dir: ${task.dataset_dir}
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
   pad_after: ${eval:'${n_action_steps}-1'}
