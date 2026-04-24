@@ -1,0 +1,104 @@
+defaults:
+  - _self_
+  - task: maze
+
+name: train_search
+_target_: train_search.TrainSearchWorkspace
+maze_path: data/maze.npy
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 16
+n_obs_steps: 1
+n_action_steps: ${horizon}
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+
+policy:
+  _target_: diffusion_policy.policy.search_policy.SearchPolicy
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+    shape_meta: ${shape_meta}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  hidden_dim: 256
+  hidden_depth: 4
+  corrupt_obs: False
+
+dataloader:
+  batch_size: 256
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+  drop_last: True
+
+val_dataloader:
+  batch_size: 256
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+  drop_last: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda"
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 20
+  num_iterations: 9
+  max_actions: 8
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  val_every: 1
+  checkpoint_every: 1000
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: maze_search
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: val_min_mse
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-val_min_mse={val_min_mse:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
