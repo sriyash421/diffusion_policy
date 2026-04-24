@@ -283,13 +283,27 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
-                        gt_action = batch['action'][:, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1].squeeze()
+                        gt_action = batch['action'][
+                            :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
+                        ]
                         if batch.get('attention_mask', None) is not None:
                             obs_dict['attention_mask'] = batch['attention_mask']
-                        result = policy.predict_action(obs_dict)
-                        pred_action = result['action']
-                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
-                        step_log['train_action_mse_error'] = mse.item()
+                        
+                        if hasattr(policy, 'verifier'):
+                            result = policy.predict_action(obs_dict, verifier=policy.verifier, n_actions=policy.max_actions)
+                            pred_action, values = result
+                            pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
+                            mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions
+                            min_mse, _ = torch.min(mse, dim=-1) # B
+                            avg_mse = mse.mean(dim=-1) # B
+                            step_log['train_action_mse_error_min'] = min_mse.mean().item()
+                            step_log['train_action_mse_error_avg'] = avg_mse.mean().item()
+                            step_log['train_action_value'] = values.mean().item()
+                        else:
+                            result = policy.predict_action(obs_dict)
+                            pred_action = result['action']
+                            mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                            step_log['train_action_mse_error'] = mse.item()
                         del batch
                         del obs_dict
                         del gt_action

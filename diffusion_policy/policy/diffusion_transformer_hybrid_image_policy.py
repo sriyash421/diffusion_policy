@@ -43,6 +43,7 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             time_as_cond=True,
             obs_as_cond=True,
             pred_action_steps_only=False,
+            corrupt_obs=False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -179,6 +180,16 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
+
+        self.corrupt_obs = corrupt_obs
+        self.obs_noise_scheduler = DDPMScheduler(
+            num_train_timesteps=noise_scheduler.config.num_train_timesteps,
+            beta_start=noise_scheduler.config.beta_start,
+            beta_end=noise_scheduler.config.beta_end,
+            prediction_type=noise_scheduler.config.prediction_type,
+        )
+        if corrupt_obs:
+            print("Corrupting obs with a separate noise scheduler")
     
     # ========= inference  ============
     def conditional_sample(self, 
@@ -244,7 +255,8 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         cond_mask = None
         if self.obs_as_cond:
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self.encode_obs_features(this_nobs)
+            nobs_features = self.corrupt_obs_features(nobs_features)
             # reshape back to B, To, Do
             cond = nobs_features.reshape(B, To, -1)
             shape = (B, T, Da)
@@ -255,13 +267,14 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         else:
             # condition through impainting
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self.encode_obs_features(this_nobs)
+            cond_obs_features = self.corrupt_obs_features(nobs_features)
             # reshape back to B, To, Do
-            nobs_features = nobs_features.reshape(B, To, -1)
+            cond_obs_features = cond_obs_features.reshape(B, To, -1)
             shape = (B, T, Da+Do)
             cond_data = torch.zeros(size=shape, device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-            cond_data[:,:To,Da:] = nobs_features
+            cond_data[:,:To,Da:] = cond_obs_features
             cond_mask[:,:To,Da:] = True
 
         # run sampling
@@ -311,6 +324,23 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         )
         return optimizer
 
+    def encode_obs_features(self, obs):
+        return self.obs_encoder(obs)
+
+    def corrupt_obs_features(self, obs_features):
+        if not self.corrupt_obs:
+            return obs_features
+
+        # Add noise to encoded obs features to simulate corrupted context.
+        obs_noise = torch.randn_like(obs_features)
+        bsz = obs_features.shape[0]
+        timesteps = torch.randint(
+            0, self.obs_noise_scheduler.config.num_train_timesteps, 
+            (bsz,), device=obs_features.device
+        ).long()
+        return self.obs_noise_scheduler.add_noise(
+            obs_features, obs_noise, timesteps)
+
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
@@ -323,24 +353,34 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         # handle different ways of passing observation
         cond = None
         trajectory = nactions
+        condition_data = trajectory
         if self.obs_as_cond:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self.encode_obs_features(this_nobs)
+            nobs_features = self.corrupt_obs_features(nobs_features)
             # reshape back to B, T, Do
             cond = nobs_features.reshape(batch_size, To, -1)
             if self.pred_action_steps_only:
                 start = To - 1
                 end = start + self.n_action_steps
                 trajectory = nactions[:,start:end]
+                condition_data = trajectory
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self.encode_obs_features(this_nobs)
             # reshape back to B, T, Do
             nobs_features = nobs_features.reshape(batch_size, horizon, -1)
             trajectory = torch.cat([nactions, nobs_features], dim=-1).detach()
+            condition_data = trajectory.clone()
+            if self.corrupt_obs:
+                noisy_obs_prefix = self.corrupt_obs_features(
+                    nobs_features[:, :To, :].reshape(-1, nobs_features.shape[-1])
+                )
+                noisy_obs_prefix = noisy_obs_prefix.reshape(batch_size, To, -1)
+                condition_data[:, :To, Da:] = noisy_obs_prefix
 
         # generate impainting mask
         if self.pred_action_steps_only:
@@ -365,8 +405,8 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         loss_mask = ~condition_mask
 
         # apply conditioning
-        noisy_trajectory[condition_mask] = trajectory[condition_mask]
-        
+        noisy_trajectory[condition_mask] = condition_data[condition_mask]
+
         # Predict the noise residual
         pred = self.model(noisy_trajectory, timesteps, cond)
 

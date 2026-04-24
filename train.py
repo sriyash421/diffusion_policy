@@ -30,7 +30,7 @@ def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
 
     cls = hydra.utils.get_class(cfg._target_)
-    workspace: BaseWorkspace = cls(cfg, output_dir=cfg.output_dir)
+    workspace: BaseWorkspace = cls(cfg)
     workspace.run()
 
 
