@@ -31,9 +31,9 @@ env_runner:
 dataset:
   _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
   
-  # dataset_config:
-  #   - dataset_dir: ../OctiLab/datasets/0
-  #     sampling_ratio: 0.9
+  dataset_config:
+    - dataset_dir: ../OctiLab/datasets/0
+      sampling_ratio: 0.9
   
   use_streaming: false
   samples_per_file_multiplier: 1.0
