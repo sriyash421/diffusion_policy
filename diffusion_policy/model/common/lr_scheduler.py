@@ -1,7 +1,9 @@
+from typing import Optional, Union
+
 from diffusers.optimization import (
-    Union, SchedulerType, Optional,
-    Optimizer, TYPE_TO_SCHEDULER_FUNCTION
+    SchedulerType, TYPE_TO_SCHEDULER_FUNCTION
 )
+from torch.optim import Optimizer
 
 def get_scheduler(
     name: Union[str, SchedulerType],

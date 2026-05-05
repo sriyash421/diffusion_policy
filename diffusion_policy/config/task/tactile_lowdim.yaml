@@ -14,12 +14,19 @@ shape_meta: &shape_meta
     last_gripper_action:
       shape: [1]
       type: low_dim
-    right_inner_finger_contact_force:
-      shape: [3]
-      type: low_dim 
-    left_inner_finger_contact_force:
-      shape: [3]
+    gripper_pos:
+      shape: [1]
       type: low_dim
+    # Contact forces dropped — UWLab's data_collection_tactile_cfg leaves the
+    # *_inner_finger_contact_sensor terms commented out (TODO: replace with
+    # force-torque sensors), so the zarr dataset has no contact_force keys.
+    # Re-enable in shape_meta once the sensors are wired in TactileDataCollectionCfg.
+    # right_inner_finger_contact_force:
+    #   shape: [3]
+    #   type: low_dim
+    # left_inner_finger_contact_force:
+    #   shape: [3]
+    #   type: low_dim
   action:
     shape: [7]
 
