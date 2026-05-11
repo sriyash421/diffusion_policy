@@ -1,0 +1,37 @@
+name: procgen_maze
+
+image_shape: &image_shape [3, 11, 11]
+shape_meta: &shape_meta
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+    agent_pos:
+      shape: [2]
+      type: low_dim
+    goal_pos:
+      shape: [2]
+      type: low_dim
+  action:
+    shape: [2]
+
+task_name: &task_name procgen_maze
+
+env_runner:
+  _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  dataset_dir: data/procgen_maze_expert
+  use_streaming: false
+  samples_per_file_multiplier: 1.0
+  shape_meta: *shape_meta
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+  seed: 42
+  val_ratio: 0.05
+  use_cache: true
+  use_disk: false
