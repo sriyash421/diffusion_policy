@@ -2,8 +2,12 @@ from typing import Union
 import copy
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as T
+try:
+    import torchvision
+    import torchvision.transforms as T
+except Exception:
+    torchvision = None
+    T = None
 from diffusion_policy.model.vision.crop_randomizer import CropRandomizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.common.pytorch_util import replace_submodules
@@ -295,12 +299,26 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         return output_shape
 
 class FlattenObsEncoder(nn.Module):
-    """flattens each tensor in the input dict and concatenates them."""
+    """Flatten each tensor in the input dict and concatenate them.
 
-    def __init__(self, shape_meta):
+    Skips rgb/depth keys by default — those are typically routed to a separate
+    encoder (or directly to a verifier), and flattening a (3,H,W) image into an
+    MLP input is rarely meaningful. Set `flatten_image_types=True` to restore
+    the legacy "flatten everything" behavior.
+    """
+
+    def __init__(self, shape_meta, flatten_image_types: bool = False):
         super().__init__()
         self.shape_meta = shape_meta
-        self.keys = list(shape_meta['obs'].keys()) if shape_meta is not None else None
+        self.flatten_image_types = bool(flatten_image_types)
+        if shape_meta is None:
+            self.keys = None
+        else:
+            self.keys = [
+                k for k, attr in shape_meta['obs'].items()
+                if self.flatten_image_types
+                or (attr or {}).get('type', 'low_dim') not in ('rgb', 'depth')
+            ]
 
     def forward(self, obs_dict: dict) -> torch.Tensor:
         keys = self.keys or sorted(obs_dict.keys())
@@ -319,9 +337,13 @@ class FlattenObsEncoder(nn.Module):
 
     @torch.no_grad()
     def output_shape(self) -> tuple:
-        """Given shape_meta like in original file, return flattened output shape (features,)."""
+        """Flattened output shape (features,), counting only the keys actually
+        consumed by `forward` (i.e. skipping rgb/depth unless opted in)."""
+        included = set(self.keys) if self.keys is not None else None
         total = 0
         for k, attr in self.shape_meta['obs'].items():
+            if included is not None and k not in included:
+                continue
             shape = tuple(attr['shape'])
             total += int(torch.tensor(shape).prod().item())
         return (total,)

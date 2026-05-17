@@ -139,3 +139,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Local agent settings / scratch image transfers
+.claude/
+transfer_images/

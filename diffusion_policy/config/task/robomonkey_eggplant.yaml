@@ -1,0 +1,76 @@
+# Task config for the RoboMonkey "put the eggplant in the basket" manipulation
+# task running in the SIMPLER / ManiSkill environment.
+#
+# Shape conventions
+# -----------------
+#  rgb obs  : (C, H, W) = (3, 256, 256)  — wrist-mounted camera (after the
+#             save_reward_image 256×256 resize used by the RoboMonkey verifier)
+#  low-dim  : proprioception (end-effector pose + joints) matching the
+#             build_obs_step output in
+#             RoboMonkey/scriptsv2/eval_diffusion_policy_carrot.py
+#  action   : 7D OpenVLA-convention delta action
+#             (dx, dy, dz, droll, dpitch, dyaw, gripper)
+#
+# Dataset
+# -------
+# Point task.dataset.dataset_dir at your collected SIMPLER trajectories
+# (zarr format compatible with Sim2RealImageMultiDataset).
+
+name: robomonkey_eggplant
+
+shape_meta: &shape_meta
+  obs:
+    # Wrist-mounted camera image (CHW, float32 in [0, 1] after normalisation)
+    agentview_image:
+      shape: [3, 256, 256]
+      type: rgb
+    # End-effector pose: [x, y, z, roll, pitch, yaw, gripper] (7D)
+    end_effector_pose:
+      shape: [7]
+      type: low_dim
+    # Arm joint positions (6 DOF WidowX-style arm)
+    arm_joint_pos:
+      shape: [6]
+      type: low_dim
+    # Arm joint velocities
+    joint_vel:
+      shape: [6]
+      type: low_dim
+    # Previous arm action
+    last_arm_action:
+      shape: [6]
+      type: low_dim
+    # Previous gripper action (scalar, clipped to {-1, +1})
+    last_gripper_action:
+      shape: [1]
+      type: low_dim
+  action:
+    # 7D: (dx, dy, dz, droll, dpitch, dyaw, gripper)
+    shape: [7]
+
+task_name: &task_name robomonkey_eggplant
+
+env_runner:
+  _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  # Set dataset_dir to your collected SIMPLER rollout data.
+  # The directory should contain zarr replay buffers produced by
+  # RoboMonkey/scriptsv2/collect_trajectories.py (or equivalent).
+  dataset_dir: data/robomonkey_eggplant
+  use_streaming: false
+  samples_per_file_multiplier: 1.0
+  shape_meta: *shape_meta
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+  seed: 42
+  val_ratio: 0.05
+  use_cache: false
+  use_disk: true
+  # Set to true to keep only episodes whose terminal `rewards` step > 0.
+  success_only: false
+  success_reward_key: rewards

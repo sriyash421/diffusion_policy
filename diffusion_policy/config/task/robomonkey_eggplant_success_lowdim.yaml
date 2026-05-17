@@ -1,0 +1,64 @@
+name: robomonkey_eggplant_success_lowdim
+
+# State-based eggplant task. Mirrors the harine/pi_bc `simpler_lowdim`
+# layout (53-dim obs) but is pointed at the eggplant_in_basket dataset
+# with `success_only: true` so only successful trajectories are used
+# for training/validation.
+shape_meta: &shape_meta
+  obs:
+    end_effector_pose:
+      shape: [7]
+      type: low_dim
+    end_effector_vel_lin_ang_b:
+      shape: [6]
+      type: low_dim
+    arm_joint_pos:
+      shape: [6]
+      type: low_dim
+    joint_vel:
+      shape: [6]
+      type: low_dim
+    last_arm_action:
+      shape: [6]
+      type: low_dim
+    last_gripper_action:
+      shape: [1]
+      type: low_dim
+    insertive_asset_pose:
+      shape: [7]
+      type: low_dim
+    receptive_asset_pose:
+      shape: [7]
+      type: low_dim
+    insertive_asset_in_receptive_asset_frame:
+      shape: [7]
+      type: low_dim
+  action:
+    shape: [7]
+
+obs_dim: 53
+action_dim: 7
+task_name: &task_name robomonkey_eggplant_success_lowdim
+
+env_runner:
+  _target_: diffusion_policy.env_runner.dummy_runner.DummyRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
+  # Auto-discovers state0.zarr and state1.zarr in this dir.
+  dataset_dir: /home/harine/RoboMonkey/openvla-mini/data/eggplant_in_basket_with_images_01
+  use_streaming: false
+  samples_per_file_multiplier: 1.0
+  shape_meta: *shape_meta
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+  seed: 42
+  val_ratio: 0.05
+  use_cache: false
+  use_disk: false
+  # Train on successful trajectories only (terminal reward > 0).
+  success_only: true
+  success_reward_key: rewards

@@ -58,7 +58,9 @@ class Sim2RealImageDataset(BaseImageDataset):
         val_ratio=0.0,
         use_cache: bool = False,
         use_disk: bool = True,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        success_only: bool = False,
+        success_reward_key: str = 'rewards',
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
@@ -91,12 +93,32 @@ class Sim2RealImageDataset(BaseImageDataset):
             for key in self.rgb_keys + self.lowdim_keys + self.depth_keys:
                 key_first_k[key] = n_obs_steps
 
+        # Optionally restrict to successful episodes (terminal reward > 0)
+        success_mask = None
+        if success_only:
+            success_mask = self._compute_success_mask(
+                dataset_path, reward_key=success_reward_key)
+            n_episodes = self.replay_buffer.n_episodes
+            assert success_mask.shape[0] == n_episodes, (
+                f"success_mask length {success_mask.shape[0]} != "
+                f"n_episodes {n_episodes} for {dataset_path}")
+            n_success = int(success_mask.sum())
+            print(f"[Sim2RealImageDataset] success_only=True for "
+                  f"{dataset_path}: keeping {n_success}/{n_episodes} "
+                  f"successful episodes")
+        self.success_only = success_only
+        self.success_mask = success_mask
+
         # Split train/val
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes,
             val_ratio=val_ratio,
             seed=seed)
         train_mask = ~val_mask
+        if success_mask is not None:
+            # Filter both train and val to successful episodes only
+            train_mask = train_mask & success_mask
+            val_mask = val_mask & success_mask
 
         # Create sampler
         self.sampler = SequenceSampler(
@@ -193,13 +215,37 @@ class Sim2RealImageDataset(BaseImageDataset):
 
         return replay_buffer
 
+    def _compute_success_mask(
+            self, dataset_path: str,
+            reward_key: str = 'rewards') -> np.ndarray:
+        """Per-episode success mask using terminal reward > 0.
+
+        Reads ``data/<reward_key>`` and ``meta/episode_ends`` from the
+        zarr at ``dataset_path``. An episode is "successful" iff the
+        reward at the last step of the episode is strictly positive.
+        """
+        z = zarr.open(dataset_path, mode='r')
+        episode_ends = z['meta']['episode_ends'][:]
+        if reward_key not in z['data']:
+            raise KeyError(
+                f"success_only=True but '{reward_key}' not found in "
+                f"{dataset_path}/data. Available: "
+                f"{list(z['data'].keys())}")
+        rewards = z['data'][reward_key][:]
+        # rewards has shape (T,) — last step index per episode is end-1
+        terminal_rewards = rewards[episode_ends - 1]
+        return terminal_rewards > 0
+
     def _load_zarr_data(self, dataset_path, use_disk=True):
         """Load zarr data with disk/memory options"""
         z = zarr.open(dataset_path, mode='r')
         obs_group = z['data']['obs']
         action_arr = z['data']['actions']
         episode_ends = z['meta']['episode_ends']
-        expert_mask = z['data']['expert_mask']
+        if 'expert_mask' in z['data']:
+            expert_mask = z['data']['expert_mask'][:]
+        else:
+            expert_mask = np.ones((action_arr.shape[0],), dtype=np.bool_)
 
         # Create replay buffer
         replay_buffer = ReplayBuffer.create_empty_numpy()
@@ -216,7 +262,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         # Always load to memory as it's small
         replay_buffer.root['data']['action'] = action_arr[:]
         replay_buffer.root['meta']['episode_ends'] = episode_ends[:]
-        replay_buffer.root['data']['expert_mask'] = expert_mask[:]
+        replay_buffer.root['data']['expert_mask'] = expert_mask
 
         return replay_buffer
 
@@ -439,6 +485,8 @@ class StreamingMultiDataset(BaseImageDataset):
         use_disk: bool = False,
         samples_per_file_multiplier: float = 1.0,
         dataset_class=Sim2RealImageDataset,
+        success_only: bool = False,
+        success_reward_key: str = 'rewards',
     ):
         super().__init__()
         self.dataset_class = dataset_class
@@ -460,7 +508,9 @@ class StreamingMultiDataset(BaseImageDataset):
             'seed': seed,
             'val_ratio': val_ratio,
             'use_cache': use_cache,
-            'use_disk': use_disk
+            'use_disk': use_disk,
+            'success_only': success_only,
+            'success_reward_key': success_reward_key,
         }
 
         # Calculate total epoch length and normalizer from all files in one pass
@@ -785,7 +835,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         use_streaming: bool = False,
         samples_per_file_multiplier: float = 1.0,
         return_sequences: bool = False,
-        dataset_class=Sim2RealImageDataset
+        dataset_class=Sim2RealImageDataset,
+        success_only: bool = False,
+        success_reward_key: str = 'rewards',
     ):
         super().__init__()
         if isinstance(dataset_class, str):
@@ -847,6 +899,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 use_disk=use_disk,
                 samples_per_file_multiplier=samples_per_file_multiplier,
                 dataset_class=dataset_class,
+                success_only=success_only,
+                success_reward_key=success_reward_key,
             )
             self.is_streaming = True
             return
@@ -874,7 +928,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'val_ratio': val_ratio,
             'use_cache': use_cache,
             'use_disk': use_disk,
-            'return_sequences': return_sequences
+            'return_sequences': return_sequences,
+            'success_only': success_only,
+            'success_reward_key': success_reward_key,
         }
 
         for config in self.dataset_config:
