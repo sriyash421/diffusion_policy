@@ -33,12 +33,6 @@ class SearchTransformerForDiffusion(nn.Module):
             causal_attn: bool = True,
         ) -> None:
         super().__init__()
-        if n_cond_layers != 0:
-            raise ValueError(
-                "Parallel search masking requires n_cond_layers=0. "
-                "A self-attention condition encoder would mix future action/value "
-                "tokens into memory before the decoder cross-attention mask is applied."
-            )
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.horizon = horizon
@@ -46,6 +40,7 @@ class SearchTransformerForDiffusion(nn.Module):
         self.max_context_actions = max_context_actions
         self.max_candidates = max_context_actions + 1
         self.n_head = n_head
+        self.n_cond_layers = n_cond_layers
 
         self.input_emb = nn.Linear(action_dim, n_emb)
         self.obs_emb = nn.Linear(obs_feature_dim, n_emb)
@@ -54,15 +49,30 @@ class SearchTransformerForDiffusion(nn.Module):
 
         self.pos_emb = nn.Parameter(torch.zeros(1, horizon, n_emb))
         self.cond_pos_emb = nn.Parameter(
-            torch.zeros(1, self.max_candidates + n_obs_steps + max_context_actions, n_emb)
+            torch.zeros(1, n_obs_steps + max_context_actions, n_emb)
         )
         self.drop = nn.Dropout(p_drop_emb)
 
-        self.encoder = nn.Sequential(
-            nn.Linear(n_emb, 4 * n_emb),
-            nn.Mish(),
-            nn.Linear(4 * n_emb, n_emb),
-        )
+        if n_cond_layers > 0:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=n_emb,
+                nhead=n_head,
+                dim_feedforward=4 * n_emb,
+                dropout=p_drop_attn,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True,
+            )
+            self.encoder = nn.TransformerEncoder(
+                encoder_layer=encoder_layer,
+                num_layers=n_cond_layers,
+            )
+        else:
+            self.encoder = nn.Sequential(
+                nn.Linear(n_emb, 4 * n_emb),
+                nn.Mish(),
+                nn.Linear(4 * n_emb, n_emb),
+            )
 
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=n_emb,
@@ -82,7 +92,6 @@ class SearchTransformerForDiffusion(nn.Module):
 
         if causal_attn:
             mask = torch.triu(torch.ones(horizon, horizon), diagonal=1).bool()
-            mask = mask.float().masked_fill(mask, float('-inf'))
             self.register_buffer("mask", mask)
         else:
             self.mask = None
@@ -168,7 +177,24 @@ class SearchTransformerForDiffusion(nn.Module):
                 (candidate_ids[:, None] == candidate_ids[None, :])
                 & (step_ids[:, None] < step_ids[None, :])
             )
-        return invalid.float().masked_fill(invalid, float('-inf'))
+        return invalid
+
+    def _build_encoder_mask(self, device: torch.device) -> torch.Tensor:
+        S = self.n_obs_steps + self.max_context_actions
+        obs_ids = torch.arange(self.n_obs_steps, device=device)
+        action_ids = torch.arange(self.max_context_actions, device=device)
+        invalid = torch.ones(S, S, dtype=torch.bool, device=device)
+
+        invalid[obs_ids[:, None], obs_ids[None, :]] = False
+
+        query_actions = self.n_obs_steps + action_ids
+        invalid[query_actions[:, None], obs_ids[None, :]] = False
+        causal_actions = action_ids[:, None] >= action_ids[None, :]
+        invalid[
+            query_actions[:, None],
+            self.n_obs_steps + action_ids[None, :],
+        ] = ~causal_actions
+        return invalid
 
     def _build_memory_masks(
             self,
@@ -179,8 +205,7 @@ class SearchTransformerForDiffusion(nn.Module):
             device: torch.device,
         ):
         S = self.cond_pos_emb.shape[1]
-        obs_offset = self.max_candidates
-        action_offset = obs_offset + self.n_obs_steps
+        action_offset = self.n_obs_steps
 
         if context_lengths is None:
             if n_candidates == 1:
@@ -214,16 +239,13 @@ class SearchTransformerForDiffusion(nn.Module):
             dtype=torch.bool,
             device=device,
         )
-        candidate_positions = torch.arange(n_candidates, device=device)
-        invalid[:, candidate_positions, candidate_positions] = False
-        invalid[:, :, obs_offset:action_offset] = False
+        invalid[:, :, :action_offset] = False
 
         action_positions = torch.arange(self.max_context_actions, device=device)
         valid_actions = action_positions[None, None, :] < context_lengths[:, :, None]
         invalid[:, :, action_offset:] = ~valid_actions
 
         memory_mask = invalid.repeat_interleave(self.horizon, dim=1)
-        memory_mask = memory_mask.float().masked_fill(memory_mask, float('-inf'))
         memory_mask = memory_mask.unsqueeze(1).expand(
             batch_size,
             self.n_head,
@@ -232,8 +254,7 @@ class SearchTransformerForDiffusion(nn.Module):
         ).reshape(batch_size * self.n_head, n_candidates * self.horizon, S)
 
         key_padding = torch.ones(batch_size, S, dtype=torch.bool, device=device)
-        key_padding[:, :n_candidates] = False
-        key_padding[:, obs_offset:action_offset] = False
+        key_padding[:, :action_offset] = False
         if n_context_actions > 0:
             key_padding[:, action_offset:action_offset + n_context_actions] = False
         return memory_mask, key_padding
@@ -272,19 +293,6 @@ class SearchTransformerForDiffusion(nn.Module):
         device = sample.device
         timesteps = self._normalize_timesteps(timestep, B, K_decode, device)
 
-        time_slots = torch.zeros(
-            B,
-            self.max_candidates,
-            self.cond_pos_emb.shape[-1],
-            dtype=sample.dtype,
-            device=device,
-        )
-        time_slots[:, :K_decode] = self.time_emb(timesteps.reshape(-1)).reshape(
-            B,
-            K_decode,
-            -1,
-        )
-
         if actions is None:
             K_context = 0
             action_value_tokens = torch.zeros(
@@ -315,7 +323,6 @@ class SearchTransformerForDiffusion(nn.Module):
                 action_value_tokens = torch.cat([action_value_tokens, pad], dim=1)
 
         memory = torch.cat([
-            time_slots,
             self.obs_emb(obs_cond),
             action_value_tokens,
         ], dim=1)
@@ -327,11 +334,19 @@ class SearchTransformerForDiffusion(nn.Module):
             context_lengths=context_lengths,
             device=device,
         )
-        memory = self.encoder(memory)
+        if isinstance(self.encoder, nn.TransformerEncoder):
+            memory = self.encoder(
+                memory,
+                mask=self._build_encoder_mask(device),
+                src_key_padding_mask=memory_key_padding_mask,
+            )
+        else:
+            memory = self.encoder(memory)
 
         x = self.input_emb(sample)
         pos_emb = self.pos_emb[:, None, :self.horizon, :]
-        x = self.drop(x + pos_emb)
+        time_emb = self.time_emb(timesteps.reshape(-1)).reshape(B, K_decode, 1, -1)
+        x = self.drop(x + pos_emb + time_emb)
         x = x.reshape(B, K_decode * self.horizon, -1)
         x = self.decoder(
             tgt=x,

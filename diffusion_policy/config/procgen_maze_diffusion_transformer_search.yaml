@@ -43,7 +43,7 @@ policy:
   num_inference_steps: 8
 
   n_layer: 4
-  n_cond_layers: 0
+  n_cond_layers: 2
   n_head: 4
   n_emb: 256
   p_drop_emb: 0.0
