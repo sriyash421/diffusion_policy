@@ -38,7 +38,11 @@ class SearchPolicy(BaseImagePolicy):
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
-        self.verifier = MazeVerifier(maze_path=kwargs['maze_path'], device=kwargs['device'])
+        self.verifier = MazeVerifier(
+            maze_path=kwargs.get('maze_path', None),
+            device=kwargs.get('device', 'cpu'),
+            noise=kwargs.get('verifier_noise', 0.0),
+        )
         self.kwargs = kwargs
         self.mask_obs = mask_obs
         self.concat_obs = concat_obs
