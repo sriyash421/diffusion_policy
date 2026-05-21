@@ -1,8 +1,22 @@
 # README_L2S_RoboMonkey — Eggplant-in-basket, state-based L2S
 
-End-to-end recipe for training the state-based RoboMonkey search policy
-(`SearchPolicyRoboMonkey`) on the SIMPLER `widowx_put_eggplant_in_basket`
-task, scored by the RoboMonkey verifier (`monkey-verifier`).
+End-to-end recipe for training the state-based RoboMonkey search policies on
+the SIMPLER `widowx_put_eggplant_in_basket` task, scored by the RoboMonkey
+verifier (`monkey-verifier`).
+
+Two policy variants are available:
+
+| Policy class | Action head | Config |
+|---|---|---|
+| `SearchPolicyRoboMonkey` | Gaussian (`Normal` per token) | `robomonkey_eggplant_search_state.yaml` |
+| `SearchPolicyRoboMonkeyDiffusion` | Conditional diffusion (encoder-decoder transformer, joint K-candidate denoising) | `robomonkey_eggplant_search_state_diffusion.yaml` |
+
+Both classes live in [diffusion_policy/policy/search_policy_robomonkey.py](diffusion_policy/policy/search_policy_robomonkey.py).
+
+The diffusion variant is a port of Sriyash's maze
+`DiffusionTransformerSearchPolicy` — same `SearchTransformerForDiffusion`
+backbone, with the verifier injected via Hydra and a `_state_keys` filter
+that keeps RGB out of the policy's obs encoder.
 
 The **policy input is state only**. Images are used solely by the verifier
 to score candidate actions during `compute_loss`. There are two ways to get
@@ -15,7 +29,7 @@ images into the verifier:
 
 Repos and locations:
 
-- This repo: `~/diffusion_policy`
+- This repo: `~/RoboMonkey/diffusion_policy`
 - RoboMonkey: `~/RoboMonkey`
 - Verifier server (HTTP mode): `~/RoboMonkey/monkey-verifier/src/infer_server.py`
 - State-only data: `~/data/eggplant_in_basket/state_only/state0.zarr`
@@ -130,9 +144,9 @@ We also need the env vars the SIMPLER collector uses:
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate simpler_env
 
-cd ~/diffusion_policy
+cd ~/RoboMonkey/diffusion_policy
 export PRISMATIC_DATA_ROOT=$HOME/RoboMonkey/openvla-mini
-export PYTHONPATH=$HOME/RoboMonkey/openvla-mini:$HOME/diffusion_policy:$HOME/RoboMonkey/monkey-verifier/src
+export PYTHONPATH=$HOME/RoboMonkey/openvla-mini:$HOME/RoboMonkey/diffusion_policy:$HOME/RoboMonkey/monkey-verifier/src
 export MONKEY_VERIFIER_SRC=$HOME/RoboMonkey/monkey-verifier/src
 export MUJOCO_GL=${MUJOCO_GL:-osmesa}
 export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-osmesa}
@@ -170,7 +184,7 @@ is `RoboMonkeyVerifier` with `image_obs_key: agentview_image`).
 # terminal D
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate simpler_env       # or monkey-verifier if using in_process
-cd ~/diffusion_policy
+cd ~/RoboMonkey/diffusion_policy
 export MONKEY_VERIFIER_SRC=$HOME/RoboMonkey/monkey-verifier/src
 
 # (1) Noised — DDPM obs-feature corruption ON  → name=..._corrupt
@@ -199,10 +213,58 @@ python diffusion_policy/workspace/train_mlp_image_workspace.py \
     training.max_train_steps=1 logging.mode=disabled
 ```
 
+### 3c. Conditional-diffusion variant — `SearchPolicyRoboMonkeyDiffusion`
+
+Same task / dataset / verifier as §3b but the action head is a conditional
+diffusion transformer instead of a Gaussian. The verifier defaults to
+`in_process` in the config, so no HTTP server is needed — train inside the
+`monkey-verifier` env (or set `MONKEY_VERIFIER_SRC`).
+
+Files:
+
+- Policy: [diffusion_policy/policy/search_policy_robomonkey.py](diffusion_policy/policy/search_policy_robomonkey.py) — `SearchPolicyRoboMonkeyDiffusion` (alongside the Gaussian `SearchPolicyRoboMonkey`)
+- Backbone (shared with maze): [diffusion_policy/policy/diffusion_transformer_search_policy.py](diffusion_policy/policy/diffusion_transformer_search_policy.py) — `SearchTransformerForDiffusion`
+- Training config: [diffusion_policy/config/robomonkey_eggplant_search_state_diffusion.yaml](diffusion_policy/config/robomonkey_eggplant_search_state_diffusion.yaml)
+
+```bash
+# terminal D
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate monkey-verifier         # in-process verifier needs these deps
+cd ~/RoboMonkey/diffusion_policy
+export MONKEY_VERIFIER_SRC=$HOME/RoboMonkey/monkey-verifier/src
+
+# (1) Noised — DDPM obs-feature corruption ON  → name=..._diffusion_corrupt
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion
+
+# (2) Un-noised                                → name=..._diffusion_clean
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion \
+    policy.corrupt_obs=False
+
+# (3) HTTP verifier instead of in-process (start §2a server first)
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion \
+    policy.verifier.server_url=http://127.0.0.1:3100
+
+# (4) Faster sampling during rollouts (fewer DDIM steps)
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion \
+    policy.num_inference_steps=4
+```
+
+Smoke test:
+
+```bash
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion \
+    training.max_train_steps=1 logging.mode=disabled
+```
+
 ### Output dir per run
 
 ```
-~/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_{corrupt,clean}_<task_name>>/
+~/RoboMonkey/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_{corrupt,clean}_<task_name>>/
     ├── checkpoints/
     ├── .hydra/config.yaml         # frozen config snapshot (corrupt_obs baked in)
     └── wandb/
@@ -213,7 +275,7 @@ python diffusion_policy/workspace/train_mlp_image_workspace.py \
 ## 4. Evaluate in SIMPLER
 
 Use the RoboMonkey eval driver — it loads checkpoints from
-`~/diffusion_policy/data/outputs/...`:
+`~/RoboMonkey/diffusion_policy/data/outputs/...`:
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -222,7 +284,7 @@ cd ~/RoboMonkey
 
 TASK=widowx_put_eggplant_in_basket \
 bash scriptsv2/run_eval_diffusion_policy.sh \
-    ~/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_corrupt_*>/checkpoints/latest.ckpt \
+    ~/RoboMonkey/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_corrupt_*>/checkpoints/latest.ckpt \
     100
 ```
 

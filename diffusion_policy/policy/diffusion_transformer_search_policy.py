@@ -11,7 +11,6 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from l2s.verifier import MazeVerifier
 
 
 class SearchTransformerForDiffusion(nn.Module):
@@ -392,6 +391,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         self.obs_encoder = obs_encoder
         self.noise_scheduler = noise_scheduler
         self.normalizer = LinearNormalizer()
+        from l2s.verifier import MazeVerifier
         self.verifier = MazeVerifier(
             maze_path=kwargs.get('maze_path', None),
             device=kwargs.get('device', 'cpu'),
