@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: robomonkey_eggplant_state
 
-name: robomonkey_eggplant_search_state_diffusion${eval:'"_corrupt" if ${policy.corrupt_obs} else "_clean"'}
+name: robomonkey_eggplant_search_state_diffusion_mse${eval:'"_corrupt" if ${policy.corrupt_obs} else "_clean"'}
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -54,20 +54,15 @@ policy:
   max_actions: 16
 
   verifier:
-    # Default is the in-process verifier (no HTTP server, no JPEG round-trip).
-    # Requires monkey-verifier deps importable — run inside the `monkey-verifier`
-    # conda env or set MONKEY_VERIFIER_SRC=$HOME/RoboMonkey/monkey-verifier/src.
-    # Override `policy.verifier.server_url=http://127.0.0.1:3100` to use HTTP.
-    _target_: diffusion_policy.policy.verifiers.RoboMonkeyVerifier
-    server_url: in_process
-    instruction: "put the eggplant in the basket"
-    image_obs_key: agentview_image
-    image_save_dir: /tmp/robomonkey_obs
-    action_chunk_index: -1
-    request_timeout: 300
-    max_workers: 8
-    keep_jpegs: False
-    health_check: True
+    # MSE-to-expert verifier: scores each candidate action by negative MSE
+    # against the dataset expert action chunk. Pure torch, no reward-model
+    # deps — train in the `simpler_env` env, no monkey-verifier needed.
+    _target_: diffusion_policy.policy.verifiers.MSEVerifier
+    expert_action_key: action
+    # Gaussian noise added to each score to simulate an imperfect verifier.
+    # noise = std of the perturbation; noise_bias = constant offset (mean).
+    noise: 0.0
+    noise_bias: 0.0
 
 dataloader:
   batch_size: 256

@@ -585,8 +585,10 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         obs_cond = self.encode_obs_cond(batch['obs'])
 
         with torch.inference_mode():
+            # Pass the expert action alongside obs so verifiers that score
+            # against ground truth (e.g. MSEVerifier) can read it.
             actions, values = self.predict_action(
-                batch['obs'],
+                {**batch['obs'], 'action': batch['action']},
                 verifier=self.verifier,
                 n_actions=self.max_actions - 1,
             )

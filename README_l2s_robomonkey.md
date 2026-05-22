@@ -261,6 +261,62 @@ python diffusion_policy/workspace/train_mlp_image_workspace.py \
     training.max_train_steps=1 logging.mode=disabled
 ```
 
+### 3d. MSE-to-expert verifier variant — `SearchPolicyRoboMonkeyDiffusion` + `MSEVerifier`
+
+Same conditional-diffusion policy as §3c, but the verifier is swapped for
+`MSEVerifier` — it scores each candidate action by its negative MSE against
+the dataset expert action chunk. Pure torch, **no reward-model deps**: no
+HTTP server, no `monkey-verifier` env, no `MONKEY_VERIFIER_SRC`. Train in
+the plain `simpler_env` env.
+
+`MSEVerifier` can optionally perturb its score with Gaussian noise to
+simulate an imperfect verifier — `policy.verifier.noise` is the std of the
+perturbation and `policy.verifier.noise_bias` is a constant offset (the mean
+of the noise: a systematically optimistic / pessimistic verifier). Both
+default to `0.0`. This is independent of `policy.corrupt_obs` (DDPM
+obs-feature noising, baked into the run name as `_corrupt` / `_clean`).
+
+Files:
+
+- Policy: [diffusion_policy/policy/search_policy_robomonkey.py](diffusion_policy/policy/search_policy_robomonkey.py) — `SearchPolicyRoboMonkeyDiffusion`
+- Verifier: [diffusion_policy/policy/verifiers.py](diffusion_policy/policy/verifiers.py) — `MSEVerifier`
+- Training config: [diffusion_policy/config/robomonkey_eggplant_search_state_diffusion_mse.yaml](diffusion_policy/config/robomonkey_eggplant_search_state_diffusion_mse.yaml)
+
+```bash
+# terminal D
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate simpler_env             # MSEVerifier needs no reward-model deps
+cd ~/RoboMonkey/diffusion_policy
+
+# (1) Un-noised MSE-error policy — verifier noise OFF (the config default)
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion_mse
+
+# (2) Noised MSE-error policy — Gaussian verifier noise ON (std = 0.1)
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion_mse \
+    policy.verifier.noise=0.1
+
+# (3) Noised + biased — add a constant offset to every verifier score
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion_mse \
+    policy.verifier.noise=0.1 \
+    policy.verifier.noise_bias=0.05
+
+# (4) Un-noised obs (corrupt_obs OFF)          → name=..._diffusion_mse_clean
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion_mse \
+    policy.corrupt_obs=False
+```
+
+Smoke test:
+
+```bash
+python diffusion_policy/workspace/train_mlp_image_workspace.py \
+    --config-name=robomonkey_eggplant_search_state_diffusion_mse \
+    training.max_train_steps=1 logging.mode=disabled
+```
+
 ### Output dir per run
 
 ```

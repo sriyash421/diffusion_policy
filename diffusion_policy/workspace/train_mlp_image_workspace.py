@@ -290,7 +290,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             obs_dict['attention_mask'] = batch['attention_mask']
                         
                         if hasattr(policy, 'verifier'):
-                            result = policy.predict_action(obs_dict, verifier=policy.verifier, n_actions=policy.max_actions)
+                            # Include the expert action so ground-truth verifiers (e.g. MSEVerifier) can read it.
+                            result = policy.predict_action({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
                             pred_action, values = result
                             pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
                             mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions

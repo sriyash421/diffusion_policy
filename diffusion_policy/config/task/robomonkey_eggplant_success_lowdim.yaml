@@ -57,7 +57,7 @@ dataset:
   n_latency_steps: ${n_latency_steps}
   seed: 42
   val_ratio: 0.05
-  use_cache: false
+  use_cache: true
   use_disk: false
   # Train on successful trajectories only (terminal reward > 0).
   success_only: true

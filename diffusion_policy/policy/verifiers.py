@@ -307,3 +307,69 @@ class RoboMonkeyStateVerifier:
         )  # (B, H, W, 3)
         rendered_t = torch.from_numpy(rendered).unsqueeze(1)  # (B, 1, H, W, 3)
         return self._inner.get_value({"_rendered": rendered_t}, action)
+
+
+class MSEVerifier:
+    """Verifier scoring an action by its closeness to the dataset expert action.
+
+    Returns the negative MSE between the predicted action chunk and the expert
+    action chunk read from ``obs_dict`` — negated so that higher = closer to
+    the expert, matching the "higher is better" convention of the reward-model
+    verifiers. The expert action is only available at training time, so this
+    verifier is meant for training the search policy, not eval-time rollouts.
+
+    Optionally, Gaussian noise can be added to the score to simulate an
+    imperfect verifier during training. The noise is drawn per call from
+    ``Normal(noise_bias, noise)``, so ``noise`` controls the magnitude of the
+    random perturbation and ``noise_bias`` shifts the score by a constant
+    offset (a systematically optimistic or pessimistic verifier).
+
+    Args:
+        expert_action_key: Key in ``obs_dict`` holding the expert action,
+            shape ``(B, horizon, action_dim)``.
+        noise: Standard deviation of the Gaussian noise added to each score.
+            ``0.0`` (default) disables the random perturbation.
+        noise_bias: Constant offset (the mean of the Gaussian noise) added to
+            each score. ``0.0`` (default) adds no bias.
+    """
+
+    def __init__(
+        self,
+        expert_action_key: str = "action",
+        noise: float = 0.0,
+        noise_bias: float = 0.0,
+    ) -> None:
+        self.expert_action_key = expert_action_key
+        self.noise = float(noise)
+        self.noise_bias = float(noise_bias)
+
+    @torch.no_grad()
+    def get_value(
+        self,
+        obs_dict: Dict[str, Any],
+        action: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score one action per batch element. Returns (B,) on action.device."""
+        if action.dim() != 3:
+            raise ValueError(
+                f"Expected action (B, horizon, action_dim); got {tuple(action.shape)}"
+            )
+        if self.expert_action_key not in obs_dict:
+            raise KeyError(
+                f"MSEVerifier: obs_dict missing expert action key "
+                f"'{self.expert_action_key}'. Available: {sorted(obs_dict.keys())}"
+            )
+        expert = obs_dict[self.expert_action_key]
+        if not isinstance(expert, torch.Tensor):
+            expert = torch.as_tensor(expert)
+        expert = expert.to(device=action.device, dtype=action.dtype)
+        if expert.shape != action.shape:
+            raise ValueError(
+                f"Expert action shape {tuple(expert.shape)} does not match "
+                f"predicted action shape {tuple(action.shape)}"
+            )
+        value = -((action - expert) ** 2).mean(dim=(-1, -2))
+        if self.noise > 0.0 or self.noise_bias != 0.0:
+            perturbation = torch.randn_like(value) * self.noise + self.noise_bias
+            value = value + perturbation
+        return value
