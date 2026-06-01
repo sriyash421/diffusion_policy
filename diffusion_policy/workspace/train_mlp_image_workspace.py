@@ -317,7 +317,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
-        self.accelerator.end_training()
+        # Guard: end_training() iterates self.accelerator.trackers, which is
+        # only set inside init_trackers(); we never call it (no log_with=),
+        # so skip cleanly on accelerate versions that don't lazy-init it.
+        if hasattr(self.accelerator, 'trackers'):
+            self.accelerator.end_training()
 
 @hydra.main(
     version_base=None,

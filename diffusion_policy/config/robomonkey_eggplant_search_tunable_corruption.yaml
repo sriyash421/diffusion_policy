@@ -1,20 +1,27 @@
-# Noising + Learning-to-Search on the RoboMonkey "put the eggplant in the
-# basket" task with RGB observations and the RoboMonkey HTTP verifier.
+# State + conditional-diffusion Learning-to-Search policy with a *tunable*
+# observation-noise level (cf. tmrl ContextSmoothedFlowPolicy in
+# tmrl/tmrl/models/flow.py).
 #
-# Before training, start the RoboMonkey verifier server:
-#   conda activate monkey-verifier
-#   cd /path/to/RoboMonkey/monkey-verifier/src
-#   python infer_server.py          # listens on 0.0.0.0:3100
+# `policy.obs_noise_level` is a float in [0, 1]:
+#   - null  : random per-batch timestep at train time, clean at eval (legacy).
+#   - 0.0   : no noise (equivalent to corrupt_obs=False at this magnitude).
+#   - x>0   : every train *and* eval forward fixes the DDPM timestep to
+#             round(x * (num_train_timesteps-1)). Same scheduler as before
+#             (100 steps, beta 1e-3 -> 2e-2), so x=1.0 is maximum corruption.
 #
-# Then launch training:
-#   python diffusion_policy/workspace/train_mlp_image_workspace.py \
-#       --config-name=robomonkey_eggplant_search_corruption
+# Sweep example:
+#   for L in 0.0 0.1 0.25 0.5 0.75 1.0; do
+#     python diffusion_policy/workspace/train_mlp_image_workspace.py \
+#       --config-name=robomonkey_eggplant_search_tunable_corruption \
+#       policy.obs_noise_level=$L \
+#       logging.name=eggplant_search_tunable_noise_${L}
+#   done
 
 defaults:
   - _self_
-  - task: robomonkey_eggplant
+  - task: robomonkey_eggplant_state
 
-name: robomonkey_eggplant_search_corruption
+name: robomonkey_eggplant_search_tunable_corruption_noise${policy.obs_noise_level}
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 output_dir: null
 
@@ -22,9 +29,9 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 8
+horizon: 16
 n_obs_steps: 2
-n_action_steps: 4
+n_action_steps: 8
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
@@ -32,64 +39,63 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.search_policy.SearchPolicyRGB
+  _target_: diffusion_policy.policy.search_policy_robomonkey.SearchPolicyRoboMonkeyDiffusion
   shape_meta: ${shape_meta}
-
-  # RGB obs encoder — ResNet-18 backbone, one copy per camera
   obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
     shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      weights: IMAGENET1K_V1
-    resize_shape: null
-    crop_shape: null
-    random_crop: False
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
 
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
-  hidden_dim: 512
-  hidden_depth: 4
+  num_inference_steps: 8
 
-  # Noising: corrupt encoded obs features with DDPM noise at training time
+  n_layer: 4
+  n_cond_layers: 2
+  n_head: 4
+  n_emb: 256
+  p_drop_emb: 0.0
+  p_drop_attn: 0.2
+  causal_attn: False
+
+  # Tunable observation corruption — override on the command line.
   corrupt_obs: True
+  obs_noise_level: 0.5
 
-  # Search width: number of (action, value) candidates the transformer
-  # conditions on.  Memory grows as max_actions * (horizon * action_dim + 1).
   max_actions: 16
 
-  # RoboMonkey verifier. Two backends:
-  #   server_url: http://127.0.0.1:3100   -> POST to infer_server.py (HTTP).
-  #   server_url: in_process              -> load RobotRewardModel locally
-  #                                          (no HTTP, no disk image; batches
-  #                                          all B rows in one GPU forward).
-  # Override on the CLI: `policy.verifier.server_url=in_process`.
   verifier:
     _target_: diffusion_policy.policy.verifiers.RoboMonkeyVerifier
-    server_url: http://127.0.0.1:3100
+    server_url: in_process
     instruction: "put the eggplant in the basket"
     image_obs_key: agentview_image
     image_save_dir: /tmp/robomonkey_obs
-    action_chunk_index: -1          # which step in the chunk to score
+    action_chunk_index: -1
     request_timeout: 300
     max_workers: 8
     keep_jpegs: False
     health_check: True
 
 dataloader:
-  batch_size: 32
+  batch_size: 256
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 256
   num_workers: 8
   shuffle: False
   pin_memory: True
@@ -127,7 +133,7 @@ logging:
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
-  tags: ["${name}", "${task_name}", "${exp_name}"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "tunable_corruption"]
   id: null
   group: null
 
