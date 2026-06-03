@@ -24,9 +24,9 @@ iteration: null
 task:
   dataset:
     return_sequences: true
-    # dataset_config:
-    #   - dataset_dir:  datasets/tactile_pick_step0
-    #     sampling_ratio: 1.0
+    dataset_config:
+      - dataset_dir:  datasets/tactile_pick_step0
+        sampling_ratio: 1.0
     
     # dataset_config:
     #   - dataset_dir: "/gpfs/scrubbed/sriyash/pg_no_randomization_5k"
