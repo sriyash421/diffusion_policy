@@ -18,6 +18,60 @@ from transformers import GPT2Config, GPT2Model
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 
 
+def _run_search(policy, obs_dict, n_actions, **predict_kwargs):
+    """Run the policy's autoregressive verifier search.
+
+    When ROBOMONKEY_KV_PREFIX=1 and the verifier supports it (in-process), the
+    batch is split into image-chunks of ROBOMONKEY_KV_CHUNK; each chunk runs all
+    `n_actions` rounds while the verifier reuses each image's cached prefix KV,
+    then the cache is cleared so GPU memory stays bounded by the chunk size.
+    Otherwise this is a transparent pass-through to ``policy.predict_action``.
+    Bit-equivalent either way (the search is per-row independent).
+    """
+    import os as _os
+    verifier = policy.verifier
+    chunk = int(_os.environ.get("ROBOMONKEY_KV_CHUNK", "16"))
+    enabled = (_os.environ.get("ROBOMONKEY_KV_PREFIX", "0") == "1"
+               and getattr(verifier, "supports_kv_prefix", False) and chunk > 0)
+    if not enabled:
+        return policy.predict_action(
+            obs_dict, verifier=verifier, n_actions=n_actions, **predict_kwargs)
+
+    B = None
+    for _v in obs_dict.values():
+        if torch.is_tensor(_v):
+            B = _v.shape[0]
+            break
+    if B is None or B <= chunk:
+        verifier.set_kv_prefix(True)
+        try:
+            verifier.clear_prefix_cache()
+            return policy.predict_action(
+                obs_dict, verifier=verifier, n_actions=n_actions, **predict_kwargs)
+        finally:
+            verifier.set_kv_prefix(False)
+            verifier.clear_prefix_cache()
+
+    verifier.set_kv_prefix(True)
+    acts, vals = [], []
+    try:
+        for s in range(0, B, chunk):
+            e = min(s + chunk, B)
+            sub_obs = {k: (v[s:e] if torch.is_tensor(v) else v)
+                       for k, v in obs_dict.items()}
+            sub_kw = {k: (v[s:e] if torch.is_tensor(v) else v)
+                      for k, v in predict_kwargs.items()}
+            verifier.clear_prefix_cache()
+            a, vv = policy.predict_action(
+                sub_obs, verifier=verifier, n_actions=n_actions, **sub_kw)
+            acts.append(a)
+            vals.append(vv)
+    finally:
+        verifier.set_kv_prefix(False)
+        verifier.clear_prefix_cache()
+    return torch.cat(acts, dim=0), torch.cat(vals, dim=0)
+
+
 class SearchPolicyRoboMonkey(BaseImagePolicy):
     def __init__(self,
             shape_meta: dict[str, Any],
@@ -338,10 +392,8 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         obs_features = self.obs_projection(obs_features) # B, hidden_dim
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
-                batch['obs'],
-                verifier=self.verifier,
-                n_actions=self.max_actions-1
+            actions, values = _run_search(
+                self, batch['obs'], self.max_actions - 1,
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
         actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
@@ -616,10 +668,9 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         with torch.inference_mode():
             # Pass the expert action alongside obs so verifiers that score
             # against ground truth (e.g. MSEVerifier) can read it.
-            actions, values = self.predict_action(
-                {**batch['obs'], 'action': batch['action']},
-                verifier=self.verifier,
-                n_actions=self.max_actions - 1,
+            actions, values = _run_search(
+                self, {**batch['obs'], 'action': batch['action']},
+                self.max_actions - 1,
             )
 
         trajectory = target_actions.unsqueeze(1).expand(
@@ -882,10 +933,8 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
         obs_cond = self.encode_obs_cond(batch['obs'], tcont_context=tcont)
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
-                batch['obs'],
-                verifier=self.verifier,
-                n_actions=self.max_actions - 1,
+            actions, values = _run_search(
+                self, batch['obs'], self.max_actions - 1,
                 tcont_context=tcont,
             )
 

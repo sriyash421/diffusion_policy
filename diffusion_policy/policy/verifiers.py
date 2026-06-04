@@ -78,6 +78,13 @@ def _to_hwc_uint8(img: torch.Tensor) -> np.ndarray:
     return arr.numpy()
 
 
+def _image_key(im: np.ndarray) -> bytes:
+    """Content hash of a HWC uint8 image, used to key the verifier's prefix-KV
+    cache so the same observation reuses its encoded prefix across rounds."""
+    import hashlib
+    return hashlib.blake2b(np.ascontiguousarray(im).tobytes(), digest_size=16).digest()
+
+
 class RoboMonkeyVerifier:
     """RoboMonkey reward-model client. Supports in-process and HTTP modes.
 
@@ -170,10 +177,19 @@ class RoboMonkeyVerifier:
 
         if self._client.in_process:
             images = [_to_hwc_uint8(last_frames[b]) for b in range(B)]
-            rewards = self._client.score_paired(
-                self.instruction, images, action_step,
-                max_workers=(self.max_workers or 1),
-            )
+            if getattr(self, "_use_kv_prefix", False):
+                # Same images recur across the policy's autoregressive rounds:
+                # reuse each image's cached prefix KV, forward only the action
+                # suffix. Caller chunks the batch + clears between chunks.
+                keys = [_image_key(im) for im in images]
+                rewards = self._client.score_paired_kvprefix(
+                    self.instruction, images, action_step, keys,
+                )
+            else:
+                rewards = self._client.score_paired(
+                    self.instruction, images, action_step,
+                    max_workers=(self.max_workers or 1),
+                )
             return torch.tensor(rewards, dtype=action.dtype, device=action.device)
 
         run_id = uuid.uuid4().hex
@@ -199,6 +215,21 @@ class RoboMonkeyVerifier:
                     except OSError:
                         pass
         return torch.tensor(rewards, dtype=action.dtype, device=action.device)
+
+    # --- per-image prefix-KV controls (in-process training speedup) ---------
+    @property
+    def supports_kv_prefix(self) -> bool:
+        """KV-prefix reuse is only available for the in-process verifier."""
+        return bool(self._client.in_process)
+
+    def set_kv_prefix(self, enabled: bool) -> None:
+        """Route get_value through the cached-prefix path while True."""
+        self._use_kv_prefix = bool(enabled) and self.supports_kv_prefix
+
+    def clear_prefix_cache(self) -> None:
+        """Drop cached prefix KV (call between independent image chunks)."""
+        if self.supports_kv_prefix:
+            self._client.clear_prefix_cache()
 
 
 class RoboMonkeyStateVerifier:
