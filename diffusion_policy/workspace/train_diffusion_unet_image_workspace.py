@@ -36,7 +36,8 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
 class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
-    include_keys = ['global_step', 'epoch', 'last_checkpoint_step']
+    include_keys = ['global_step', 'epoch', 'last_checkpoint_step',
+                    'best_val_loss']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
@@ -63,6 +64,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
         self.last_checkpoint_step = 0  # Track last checkpoint step
+        # Lowest validation loss seen so far; drives saving of best.ckpt.
+        self.best_val_loss = float('inf')
 
         # accelerator
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -265,6 +268,27 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
 
+                            # Save the best-validation checkpoint: whenever this
+                            # epoch's val_loss is a new minimum, write best.ckpt.
+                            # This is the "model before val loss starts rising"
+                            # used for downstream eval (the topk config block is
+                            # not otherwise consumed by this workspace).
+                            if val_loss < self.best_val_loss and \
+                                    self.accelerator.is_main_process:
+                                self.best_val_loss = val_loss
+                                best_ckpt_path = os.path.join(
+                                    self.output_dir, 'checkpoints', 'best.ckpt')
+                                os.makedirs(os.path.dirname(best_ckpt_path),
+                                            exist_ok=True)
+                                model_ddp = self.model
+                                self.model = self.accelerator.unwrap_model(
+                                    self.model)
+                                self.save_checkpoint(path=best_ckpt_path)
+                                self.model = model_ddp
+                                print(f"[train] new best val_loss="
+                                      f"{val_loss:.5f} at epoch {self.epoch} "
+                                      f"(step {self.global_step}) -> best.ckpt")
+
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
@@ -303,7 +327,15 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
-        self.accelerator.end_training()
+        # end_training() can raise AttributeError('trackers') on some accelerate
+        # versions because this workspace logs to wandb manually rather than via
+        # accelerate's tracker integration. Training + checkpoints are already
+        # complete by here, so guard the teardown to avoid a non-zero exit that
+        # mislabels a finished run as FAILED.
+        try:
+            self.accelerator.end_training()
+        except Exception as e:
+            print(f"[train] accelerator.end_training() teardown skipped: {e!r}")
 
 @hydra.main(
     version_base=None,

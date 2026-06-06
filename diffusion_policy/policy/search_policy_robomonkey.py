@@ -724,6 +724,121 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         return loss.mean()
 
 
+class BCSearchWrapper(nn.Module):
+    """Wraps a plain BC diffusion policy (e.g. DiffusionUnetImagePolicy) to
+    support N-sample inference-time search via an external verifier.
+
+    At eval time, ``predict_n_actions`` calls the base policy N times
+    independently (each call draws a fresh diffusion sample), scores each
+    candidate with the verifier, and returns the stacked results — the same
+    interface as ``SearchPolicyRoboMonkeyDiffusion.predict_n_actions``.
+
+    eval_search.py auto-detects BC checkpoints (no predict_n_actions) and
+    wraps them automatically:
+        wrapper = BCSearchWrapper(base_policy, verifier, max_actions=128)
+    """
+
+    def __init__(self, base_policy, verifier, max_actions: int = 128):
+        super().__init__()
+        self._base = base_policy
+        self.verifier = verifier
+        self.max_actions = max_actions
+        # Proxy attributes accessed by eval_search._search_policy_predict
+        self.normalizer = base_policy.normalizer
+        self.n_obs_steps = base_policy.n_obs_steps
+        self.n_action_steps = base_policy.n_action_steps
+
+    @torch.no_grad()
+    def predict_n_actions(
+        self,
+        obs_dict: Dict[str, Any],
+        verifier,
+        n_actions: int,
+        **_kw,
+    ):
+        """Run BC policy n_actions times; verifier-score each sample.
+
+        Returns:
+            actions: (B, n_actions, horizon, action_dim)
+            values:  (B, n_actions)
+        """
+        # Verifier scoring. The RoboMonkey verifier scores ONE 7-D action vs the
+        # current image ("What action should the robot take ..."). To score a
+        # whole chunk we evaluate EVERY executed action against the current frame
+        # and aggregate into a chunk score, then BoN/softmax picks the best chunk.
+        #
+        # BC_VERIFIER_SCORE:
+        #   "chunk" (default) -> score all n_action_steps executed actions
+        #       (result['action'], horizon steps [start:end]) against the current
+        #       frame; aggregate per BC_VERIFIER_AGG into one chunk value.
+        #   "exec"  -> score a single executed step (index BC_VERIFIER_STEP).
+        #   "full"  -> score the full-horizon tail step (action_pred[:, -1]); BC
+        #       candidates collapse there, so this ties the verifier (parity only).
+        # BC_VERIFIER_AGG (chunk mode): mean (default) | sum | min | last | first.
+        import os as _os
+        score_mode = _os.environ.get("BC_VERIFIER_SCORE", "chunk").lower()
+        step = int(_os.environ.get("BC_VERIFIER_STEP", "0"))
+        agg = _os.environ.get("BC_VERIFIER_AGG", "mean").lower()
+
+        # 1) Draw the N candidate chunks.
+        full_list, exec_list = [], []
+        for _ in range(n_actions):
+            result = self._base.predict_action(obs_dict)
+            full_list.append(result.get("action_pred", result["action"]))  # (B,H,7)
+            exec_list.append(result["action"])                              # (B,S,7)
+        actions = torch.stack(full_list, dim=1)   # (B, N, H, 7) -> returned
+        B, N = actions.shape[0], actions.shape[1]
+
+        if score_mode == "full":
+            vals = [verifier.get_value(obs_dict, full_list[i]) for i in range(N)]
+            return actions, torch.stack(vals, dim=1)
+
+        execs = torch.stack(exec_list, dim=1)      # (B, N, S, 7)
+        S = execs.shape[2]
+        if score_mode == "exec":
+            sel = execs[:, :, step:step + 1, :]    # (B, N, 1, 7)
+            steps_to_score = [step]
+        else:  # "chunk": score every executed action
+            sel = execs                            # (B, N, S, 7)
+            steps_to_score = list(range(S))
+        Ssel = sel.shape[2]
+
+        # 2) Score all (candidate, step) pairs against the current frame in one
+        #    batched verifier call. Rollout is B=1; replicate the single image to
+        #    M = N*Ssel rows (identical image -> verifier image-feature cache hits).
+        assert B == 1, "BCSearchWrapper chunk scoring assumes rollout batch B=1"
+        img_key = getattr(verifier, "image_obs_key", None)
+        img = obs_dict[img_key]                    # (1, To, ...) verifier reads [:, -1]
+        M = N * Ssel
+        batched_img = img.expand(M, *img.shape[1:])
+        flat_actions = sel.reshape(M, 1, 7)        # (M, 1, 7); get_value reads [:, -1]
+        flat_vals = verifier.get_value({img_key: batched_img}, flat_actions)  # (M,)
+        per_step = flat_vals.reshape(N, Ssel)      # (N, S or 1)
+
+        # 3) Aggregate per-step scores into one value per candidate chunk.
+        if agg == "sum":
+            chunk_vals = per_step.sum(dim=1)
+        elif agg == "min":
+            chunk_vals = per_step.min(dim=1).values
+        elif agg == "last":
+            chunk_vals = per_step[:, -1]
+        elif agg == "first":
+            chunk_vals = per_step[:, 0]
+        else:  # mean
+            chunk_vals = per_step.mean(dim=1)
+        return actions, chunk_vals.unsqueeze(0)    # (B=1, N)
+
+    def predict_action(self, obs_dict):
+        return self._base.predict_action(obs_dict)
+
+    def set_normalizer(self, normalizer):
+        self._base.set_normalizer(normalizer)
+        self.normalizer = normalizer
+
+    def compute_loss(self, batch):
+        return self._base.compute_loss(batch)
+
+
 class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
     """Noise-conditioned variant of SearchPolicyRoboMonkeyDiffusion.
 

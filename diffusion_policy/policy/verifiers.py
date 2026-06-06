@@ -114,6 +114,14 @@ class RoboMonkeyVerifier:
         image_obs_key: str,
         image_save_dir: str = "/tmp/robomonkey_obs",
         action_chunk_index: int = -1,
+        # Chunk scoring: when score_indices is set (e.g. the executed action
+        # window [1..n_action_steps]), get_value scores EACH of those horizon
+        # steps against the current frame and aggregates via score_agg
+        # (mean | sum | min) into one value per candidate. Set in the policy
+        # config so it holds in BOTH training and inference (the checkpoint
+        # carries it). None -> legacy single-step (action_chunk_index) scoring.
+        score_indices: Optional[list] = None,
+        score_agg: str = "mean",
         request_timeout: float = 300.0,
         max_workers: Optional[int] = 8,
         keep_jpegs: bool = False,
@@ -130,6 +138,9 @@ class RoboMonkeyVerifier:
         self.instruction = instruction
         self.image_obs_key = image_obs_key
         self.action_chunk_index = action_chunk_index
+        self.score_indices = (list(score_indices)
+                              if score_indices is not None else None)
+        self.score_agg = str(score_agg)
         self.image_save_dir = Path(image_save_dir)
         self.max_workers = max_workers
         self.keep_jpegs = bool(keep_jpegs)
@@ -162,7 +173,16 @@ class RoboMonkeyVerifier:
         obs_dict: Dict[str, Any],
         action: torch.Tensor,
     ) -> torch.Tensor:
-        """Score one action per batch element. Returns (B,) on action.device."""
+        """Score each candidate against the current frame. Returns (B,).
+
+        By default scores a single horizon step (``action_chunk_index``). If
+        ``score_indices`` is set (e.g. the executed action window steps), scores
+        EACH of those steps against the same current frame and aggregates them
+        into one value per candidate via ``score_agg`` (mean / sum / min). This
+        makes "value" reflect the quality of the whole executed chunk rather
+        than one step. Cost scales with the number of indices (M steps -> M x
+        the verifier forwards).
+        """
         if action.dim() != 3:
             raise ValueError(
                 f"Expected action (B, horizon, action_dim); got {tuple(action.shape)}"
@@ -173,48 +193,70 @@ class RoboMonkeyVerifier:
             raise ValueError(
                 f"Batch size mismatch: action B={B} but obs B={last_frames.shape[0]}"
             )
-        action_step = action[:, self.action_chunk_index, :].detach().cpu().numpy()
+
+        # Horizon step(s) to score. Default: single configured index.
+        idxs = getattr(self, "score_indices", None)
+        if idxs is None:
+            idxs = [self.action_chunk_index]
+        idxs = [int(i) for i in idxs]
+        M = len(idxs)
+        # (B, M, action_dim) -> (B*M, action_dim), row order b-major:
+        # [b0:i0, b0:i1, ..., b1:i0, ...]. Each (image_b, action_{b,m}) is one
+        # scored pair; the image is repeated M times within a batch row.
+        action_step = action[:, idxs, :].detach().cpu().numpy().reshape(B * M, action.shape[-1])
 
         if self._client.in_process:
-            images = [_to_hwc_uint8(last_frames[b]) for b in range(B)]
+            frames = [_to_hwc_uint8(last_frames[b]) for b in range(B)]
+            images = [frames[b] for b in range(B) for _ in range(M)]
             if getattr(self, "_use_kv_prefix", False):
                 # Same images recur across the policy's autoregressive rounds:
                 # reuse each image's cached prefix KV, forward only the action
                 # suffix. Caller chunks the batch + clears between chunks.
-                keys = [_image_key(im) for im in images]
-                rewards = self._client.score_paired_kvprefix(
+                keys = [_image_key(frames[b]) for b in range(B) for _ in range(M)]
+                flat = self._client.score_paired_kvprefix(
                     self.instruction, images, action_step, keys,
                 )
             else:
-                rewards = self._client.score_paired(
+                flat = self._client.score_paired(
                     self.instruction, images, action_step,
                     max_workers=(self.max_workers or 1),
                 )
-            return torch.tensor(rewards, dtype=action.dtype, device=action.device)
+        else:
+            run_id = uuid.uuid4().hex
+            jpeg_paths = [
+                self.image_save_dir / f"obs_{run_id}_{b}.jpg" for b in range(B)
+            ]
+            for b in range(B):
+                Image.fromarray(_to_hwc_uint8(last_frames[b])).save(
+                    str(jpeg_paths[b]), format="JPEG", quality=95
+                )
+            try:
+                images = [str(jpeg_paths[b]) for b in range(B) for _ in range(M)]
+                flat = self._client.score_paired(
+                    self.instruction, images, action_step,
+                    max_workers=(self.max_workers or 1),
+                )
+            finally:
+                if not self.keep_jpegs:
+                    for p in jpeg_paths:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
 
-        run_id = uuid.uuid4().hex
-        jpeg_paths = [
-            self.image_save_dir / f"obs_{run_id}_{b}.jpg" for b in range(B)
-        ]
-        for b in range(B):
-            Image.fromarray(_to_hwc_uint8(last_frames[b])).save(
-                str(jpeg_paths[b]), format="JPEG", quality=95
-            )
-        try:
-            rewards = self._client.score_paired(
-                self.instruction,
-                [str(p) for p in jpeg_paths],
-                action_step,
-                max_workers=(self.max_workers or 1),
-            )
-        finally:
-            if not self.keep_jpegs:
-                for p in jpeg_paths:
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-        return torch.tensor(rewards, dtype=action.dtype, device=action.device)
+        rewards = torch.tensor(
+            flat, dtype=action.dtype, device=action.device
+        ).reshape(B, M)
+        if M == 1:
+            return rewards[:, 0]
+        agg = getattr(self, "score_agg", "mean")
+        if agg == "mean":
+            return rewards.mean(dim=1)
+        if agg == "sum":
+            return rewards.sum(dim=1)
+        if agg == "min":
+            return rewards.min(dim=1).values
+        raise ValueError(f"unknown score_agg {agg!r} (use mean/sum/min)")
 
     # --- per-image prefix-KV controls (in-process training speedup) ---------
     @property
