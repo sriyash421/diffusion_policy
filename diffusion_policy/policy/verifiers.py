@@ -53,6 +53,43 @@ def _ensure_verifier_client_on_path() -> None:
     )
 
 
+_TOKEN_ACTION_CONVERTER = None
+
+
+def _get_token_action_converter():
+    """Lazily build (and cache) the EXACT reference RoboMonkey/OpenVLA action
+    tokenizer (`experiments.robot.token_action_converter.TokenActionConverter`).
+
+    The RoboMonkey verifier server only ever scores OpenVLA action *token IDs*:
+    a raw (un-normalized) action is normalized with OpenVLA's `bridge_orig`
+    norm-stats, discretized into 256 bins, and mapped to the top of the vocab
+    (`vocab_size - disc - 1`). The in-process verifier must tokenize continuous
+    actions the SAME way so its scores match the server. Reusing the reference
+    class (rather than re-implementing) keeps it byte-identical.
+    """
+    global _TOKEN_ACTION_CONVERTER
+    if _TOKEN_ACTION_CONVERTER is not None:
+        return _TOKEN_ACTION_CONVERTER
+    env_root = os.environ.get("OPENVLA_MINI_ROOT")
+    candidates = []
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.extend([
+        Path(__file__).resolve().parents[3] / "openvla-mini",
+        Path.home() / "RoboMonkey" / "openvla-mini",
+    ])
+    for c in candidates:
+        if (c / "experiments" / "robot" / "token_action_converter.py").is_file():
+            p = str(c)
+            if p not in sys.path:
+                sys.path.insert(0, p)
+            break
+    from experiments.robot.token_action_converter import TokenActionConverter
+    key = os.environ.get("ROBOMONKEY_UNNORM_KEY", "bridge_orig")
+    _TOKEN_ACTION_CONVERTER = TokenActionConverter(n_action_bins=256, unnorm_key=key)
+    return _TOKEN_ACTION_CONVERTER
+
+
 def _to_hwc_uint8(img: torch.Tensor) -> np.ndarray:
     """Convert a single image tensor to HWC uint8 [0, 255]."""
     if not isinstance(img, torch.Tensor):
@@ -122,6 +159,11 @@ class RoboMonkeyVerifier:
         # carries it). None -> legacy single-step (action_chunk_index) scoring.
         score_indices: Optional[list] = None,
         score_agg: str = "mean",
+        # When True (and score_indices is None), the owning search policy fills
+        # score_indices with the EXECUTED action window derived from its own
+        # n_obs_steps / n_action_steps, so the chunk-sum scoring window tracks
+        # n_action_steps automatically instead of a hardcoded index list.
+        score_executed_chunk: bool = False,
         request_timeout: float = 300.0,
         max_workers: Optional[int] = 8,
         keep_jpegs: bool = False,
@@ -141,6 +183,7 @@ class RoboMonkeyVerifier:
         self.score_indices = (list(score_indices)
                               if score_indices is not None else None)
         self.score_agg = str(score_agg)
+        self.score_executed_chunk = bool(score_executed_chunk)
         self.image_save_dir = Path(image_save_dir)
         self.max_workers = max_workers
         self.keep_jpegs = bool(keep_jpegs)
@@ -199,11 +242,44 @@ class RoboMonkeyVerifier:
         if idxs is None:
             idxs = [self.action_chunk_index]
         idxs = [int(i) for i in idxs]
+        # Validate against the action horizon BEFORE the GPU gather below.
+        # action[:, idxs, :] with an out-of-range index triggers a CUDA
+        # device-side assert that poisons the whole process context (every
+        # later kernel then fails). Fail fast with a clear CPU-side error
+        # instead. horizon-1 actions (e.g. from BCSearchWrapper's per-step
+        # scoring) require all idxs in {-1, 0}.
+        _H = int(action.shape[1])
+        if any(i >= _H or i < -_H for i in idxs):
+            raise ValueError(
+                f"score_indices {idxs} out of bounds for action horizon "
+                f"H={_H}. (A horizon-1 action only supports index 0/-1; set "
+                f"verifier.score_indices=None for single-step scoring.)"
+            )
         M = len(idxs)
         # (B, M, action_dim) -> (B*M, action_dim), row order b-major:
         # [b0:i0, b0:i1, ..., b1:i0, ...]. Each (image_b, action_{b,m}) is one
         # scored pair; the image is repeated M times within a batch row.
         action_step = action[:, idxs, :].detach().cpu().numpy().reshape(B * M, action.shape[-1])
+
+        # Tokenize continuous actions EXACTLY like the RoboMonkey server: the
+        # actions arriving here are raw (un-normalized) bridge-space deltas
+        # (predict_action un-normalizes before returning). The server scores
+        # OpenVLA token IDs, so we map each raw action through the reference
+        # TokenActionConverter (bridge_orig norm -> 256-bin -> top-of-vocab IDs)
+        # and pass INT token IDs downstream, which _build_input_ids routes
+        # through its pre-tokenized (int) branch. The legacy float branch
+        # (clip-to-[-1,1] + 512-bin, no normalization, double -1000 offset)
+        # collapses bridge's small deltas into a few center bins, so the
+        # verifier can't rank candidates -> set ROBOMONKEY_VERIFIER_TOKENIZER
+        # =legacy only to reproduce that old behavior.
+        if (os.environ.get("ROBOMONKEY_VERIFIER_TOKENIZER", "reference") == "reference"
+                and np.asarray(action_step).dtype.kind == "f"):
+            _conv = _get_token_action_converter()
+            action_step = np.stack(
+                [np.asarray(_conv.action_to_token(row), dtype=np.int64)
+                 for row in action_step],
+                axis=0,
+            ).astype(np.int64)
 
         if self._client.in_process:
             frames = [_to_hwc_uint8(last_frames[b]) for b in range(B)]

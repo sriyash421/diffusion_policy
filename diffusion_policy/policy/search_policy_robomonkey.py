@@ -18,6 +18,23 @@ from transformers import GPT2Config, GPT2Model
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 
 
+def _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps):
+    """Derive the chunk-sum verifier's scoring window from the policy.
+
+    When the verifier opts into ``score_executed_chunk`` (and no explicit
+    ``score_indices`` was given), set ``score_indices`` to the EXECUTED action
+    window — horizon steps ``[n_obs_steps-1 : n_obs_steps-1+n_action_steps]`` —
+    so the chunk-sum scoring always covers exactly the executed action steps and
+    tracks ``n_action_steps`` instead of a hardcoded index list.
+    """
+    if not getattr(verifier, "score_executed_chunk", False):
+        return
+    if getattr(verifier, "score_indices", None) is not None:
+        return
+    start = int(n_obs_steps) - 1
+    verifier.score_indices = list(range(start, start + int(n_action_steps)))
+
+
 def _run_search(policy, obs_dict, n_actions, **predict_kwargs):
     """Run the policy's autoregressive verifier search.
 
@@ -108,6 +125,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
         self.verifier = verifier
+        _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps)
         self.kwargs = kwargs
         self.mask_obs = mask_obs
         self.concat_obs = concat_obs
@@ -456,6 +474,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         self.horizon = horizon
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
+        _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps)
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.max_actions = max_actions
