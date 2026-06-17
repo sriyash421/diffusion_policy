@@ -835,7 +835,16 @@ class BCSearchWrapper(nn.Module):
         per_step = flat_vals.reshape(N, Ssel)      # (N, S or 1)
 
         # 3) Aggregate per-step scores into one value per candidate chunk.
-        if agg == "sum":
+        if agg in ("discounted_sum", "discounted", "disc_sum"):
+            # sum_t gamma^t * score_t over the executed window (t in exec order).
+            # gamma from the verifier (DQC discount) or BC_VERIFIER_DISCOUNT env.
+            gamma = float(getattr(verifier, "discount",
+                                  _os.environ.get("BC_VERIFIER_DISCOUNT", 0.98)))
+            Sn = per_step.shape[1]
+            w = torch.tensor([gamma ** t for t in range(Sn)],
+                             dtype=per_step.dtype, device=per_step.device)
+            chunk_vals = (per_step * w).sum(dim=1)
+        elif agg == "sum":
             chunk_vals = per_step.sum(dim=1)
         elif agg == "min":
             chunk_vals = per_step.min(dim=1).values

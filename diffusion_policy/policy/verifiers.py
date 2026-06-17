@@ -164,6 +164,11 @@ class RoboMonkeyVerifier:
         # n_obs_steps / n_action_steps, so the chunk-sum scoring window tracks
         # n_action_steps automatically instead of a hardcoded index list.
         score_executed_chunk: bool = False,
+        # Geometric discount on later steps in the chunk: step t (in
+        # score_indices order) is weighted by score_discount**t before the
+        # sum/mean aggregation, so earlier executed actions weigh more.
+        # 1.0 = uniform (no discount).
+        score_discount: float = 1.0,
         request_timeout: float = 300.0,
         max_workers: Optional[int] = 8,
         keep_jpegs: bool = False,
@@ -184,6 +189,7 @@ class RoboMonkeyVerifier:
                               if score_indices is not None else None)
         self.score_agg = str(score_agg)
         self.score_executed_chunk = bool(score_executed_chunk)
+        self.score_discount = float(score_discount)
         self.image_save_dir = Path(image_save_dir)
         self.max_workers = max_workers
         self.keep_jpegs = bool(keep_jpegs)
@@ -326,10 +332,17 @@ class RoboMonkeyVerifier:
         if M == 1:
             return rewards[:, 0]
         agg = getattr(self, "score_agg", "mean")
+        disc = float(getattr(self, "score_discount", 1.0))
+        # Discount later steps in the chunk by disc**t (t in score_indices
+        # order); disc=1.0 -> uniform. Applies to sum/mean (not min).
+        w = (disc ** torch.arange(M, device=rewards.device, dtype=rewards.dtype)
+             if disc != 1.0 else None)
         if agg == "mean":
-            return rewards.mean(dim=1)
+            return ((rewards * w).sum(dim=1) / w.sum()) if w is not None \
+                else rewards.mean(dim=1)
         if agg == "sum":
-            return rewards.sum(dim=1)
+            return (rewards * w).sum(dim=1) if w is not None \
+                else rewards.sum(dim=1)
         if agg == "min":
             return rewards.min(dim=1).values
         raise ValueError(f"unknown score_agg {agg!r} (use mean/sum/min)")
