@@ -1,13 +1,15 @@
 # State + conditional-diffusion Learning-to-Search policy scored by the DQC
-# Q-function verifier (JAX) with a DISCOUNTED chunk sum, instead of the
-# RoboMonkey LLaVA reward model.
+# CHUNK Q-function verifier (JAX), instead of the RoboMonkey LLaVA reward model.
 #
 # Differences vs robomonkey_eggplant_search_tunable_corruption.yaml:
 #   - policy.verifier -> diffusion_policy.policy.dqc_verifier.DQCVerifier
-#   - chunk-sum scoring baked in: score_executed_chunk=true, score_agg=
-#     discounted_sum, discount=0.98 (the DQC checkpoint's own gamma). The
-#     verifier scores each of the n_action_steps EXECUTED steps against the
-#     current frame and aggregates  sum_t 0.98^t * Q(frame, a_t).
+#   - critic_type=chunk: the verifier loads the DQC 8-step chunk_critic
+#     (modules_chunk_critic). The BC policy predicts horizon=16 actions; the
+#     verifier scores the first n_action_steps=8 EXECUTED actions as ONE
+#     flattened chunk in a single forward pass -> one scalar Q(frame, chunk)
+#     per candidate (min over the 2-critic ensemble). No inference-time
+#     discounting: the discount is baked into the chunk critic's training
+#     target (gamma**backup_horizon).
 #   - obs_noise_level defaults to 0.0 (the "no-noise" search policy).
 #
 # Must run in the simpler_env conda env (only env with both JAX + torch).
@@ -28,9 +30,12 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 16
-n_obs_steps: 2
-n_action_steps: ${eval:'${horizon}//2'}  # 8 executed of the 16 predicted
+# Predict an 8-action chunk from the CURRENT frame (n_obs_steps=1), execute the
+# first 4 (receding horizon). The DQC chunk critic scores all 8 (= the chunk
+# a_{t:t+8} starting at the current frame), so horizon must equal backup_horizon=8.
+horizon: 8
+n_obs_steps: 1
+n_action_steps: 4  # rollout 4 of the 8 predicted
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
@@ -75,16 +80,21 @@ policy:
   max_actions: 16
 
   verifier:
+    # REAL BridgeDQCChunkAgent (flax) loaded in-process; run in the `dqc` conda env.
     _target_: diffusion_policy.policy.dqc_verifier.DQCVerifier
-    ckpt_dir: /gscratch/robotics/harine/dqc_checkpoint/sd000s_137913.0.20260605_163017
+    ckpt_dir: /home/harine/RoboMonkey/dqc_checkpoint/sd000s_137913.0.20260605_163017
     instruction: "put the eggplant in the basket"
     image_obs_key: agentview_image
-    text_emb_file: /mmfs1/home/harine/RoboMonkey/scriptsv2/q_fn_eval/task_emb.npy
-    discount: 0.98
-    # Discounted chunk sum over the EXECUTED action window (derived from
-    # n_obs_steps / n_action_steps at instantiation by the search policy).
-    score_executed_chunk: True
-    score_agg: discounted_sum
+    # Precomputed multilingual USE-3 embedding (matches the model's text processor).
+    text_emb_file: /home/harine/RoboMonkey/scriptsv2/q_fn_eval/task_emb_use3.npy
+    # Use the 8-step DQC chunk_critic (one Q over the whole executed chunk).
+    critic_type: chunk
+    q_agg: min
+    # Score the FULL predicted horizon (all 8 actions) as the chunk — the policy
+    # predicts exactly backup_horizon=8 actions from the current frame, so all 8
+    # ARE the chunk a_{t:t+8}. (Not the 4 executed actions.)
+    score_full_horizon: True
+    score_executed_chunk: False
     health_check: True
 
 dataloader:

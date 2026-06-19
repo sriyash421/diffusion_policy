@@ -1,44 +1,43 @@
-"""DQCVerifier — in-process JAX DQC Q-function verifier for the L2S SearchPolicy.
+"""DQCVerifier — in-process REAL DQC verifier for the L2S SearchPolicy.
 
 Drop-in replacement for ``RoboMonkeyVerifier`` (same
 ``get_value(obs_dict, action) -> Tensor`` interface) that scores candidate
-actions with the **DQC chunk Q-function** instead of the RoboMonkey LLaVA
-reward model.
+actions with the **real** ``BridgeDQCChunkAgent`` (flax) loaded from the DQC
+checkpoint — NOT the earlier hand-rolled pure-JAX forward (``eval_q.py``), which
+had several encoder bugs vs the trained model:
 
-The DQC critic (``agent_name: bridge_dqc_chunk``) takes:
-  * image  — the current RGB frame (ResNet-34 + FiLM encoder, 5-channel input
-              with spatial-coord planes), resized to ``img_size``.
-  * action — a single 7-D action, normalized to [-1, 1] via
-              ``action_normalization.json`` (bridge-space EE deltas).
-  * text   — a 512-d MUSE (USE-4) embedding of the instruction.
-and returns a scalar Q (min over the 2-critic ensemble).
+  * image norm  /127.5-1  (not /255)
+  * GroupNorm   groups=4  (not 32)
+  * a stem max-pool        (was missing)
+  * FiLM applied AFTER each ResNet block as ``x*(1+gamma)+beta`` (not inside)
+  * MLP head activation GELU (not SiLU); Dense->act->LayerNorm order
+  * text embedding from multilingual USE-3 (not USE-4)
 
-DISCOUNTED CHUNK SUM
---------------------
-For a candidate action chunk, ``get_value`` scores each step in
-``score_indices`` (the EXECUTED action window, set by the owning search policy
-via ``score_executed_chunk``) against the *current* frame and aggregates them
-into one value per candidate. With ``score_agg="discounted_sum"`` the
-aggregation is the discounted sum  sum_t  gamma^t * Q(frame, a_t)  with
-``gamma = discount`` (default 0.98, the checkpoint's own discount) and ``t`` the
-0-based position within the executed window. ``mean`` / ``sum`` / ``min`` are
-also supported (matching RoboMonkeyVerifier).
+Using the real agent + its real text processor removes all of that guesswork —
+this is the same scorer the offline comparison (``eval_dqc_critics.py``) uses,
+so training and the verifier-vs-verifier eval are numerically identical.
 
-ENCODE CACHE (speed)
---------------------
-Q = head(encode(image, text), action). The ResNet-34 ``encode`` does NOT depend
-on the action, yet the same frame is scored many times per call (M executed
-steps) and across the search policy's autoregressive rounds (the batch frames
-are fixed for a training step). We cache the per-critic 512-d encoding keyed by
-the raw frame bytes (RoboMonkey's image-feature-cache idea) so each unique frame
-runs the ResNet once and every action scoring reuses it via the cheap MLP head.
-On training batches (256 frames re-scored ~120x/step) this is ~100x less ResNet
-work. The split is mathematically identical to the fused forward (verified at
-construction against a non-cached recompute).
+CRITICS
+-------
+The DQC checkpoint holds two heads (same ResNet-34 + FiLM encoder):
+  * ``critic_type="chunk"`` (DEFAULT) -> ``score_chunks``: scores the WHOLE
+      backup_horizon-step chunk in one pass -> one Q(frame, a_{t:t+H}) per
+      candidate. The BC policy predicts ``horizon`` (16) actions; the executed
+      window (first ``n_action_steps``=8, set by the search policy via
+      ``score_executed_chunk``) IS that chunk. NO inference-time discounting —
+      the discount is baked into the chunk critic's training target.
+  * ``critic_type="action"`` -> ``forward_action_critic``: per-step single-action
+      Q over the executed window, aggregated (``score_agg``).
 
-The pure-JAX forward pass is ported from ``scriptsv2/q_fn_eval/eval_q.py``.
-Runs in a conda env with both JAX (GPU) and torch (e.g. dqc_jax). JAX is told
-NOT to preallocate the GPU so torch keeps room for the policy.
+Chunks are assembled exactly as training did: each sub-action normalized to
+[-1,1] via the Bridge action stats (``action_normalization.json``), flattened
+time-major to (H*7,). (No NaN pad here — the BC policy always emits a full
+16-action horizon, so all H executed steps are real.)
+
+Runs in the ``dqc`` conda env (flax 0.12 / jax 0.10 + torch). JAX is told NOT to
+preallocate the GPU so torch (the diffusion policy) keeps room. The MUSE text
+embedding is precomputed (USE-3) and loaded from ``text_emb_file`` so TensorFlow
+is NOT imported into the training process.
 """
 
 from __future__ import annotations
@@ -46,8 +45,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import pickle
-import subprocess
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -60,30 +57,23 @@ import torch
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.35")
 
+_REPO = Path(__file__).resolve().parents[3]  # /home/harine/RoboMonkey
+_DQC_PKG = _REPO / "dqc"
 
-# ── Image / action preprocessing (ported from eval_q.py) ───────────────────────
 
-def _preprocess_image(img_hwc: np.ndarray, size: int = 128) -> np.ndarray:
-    """Resize uint8 (H,W,3) -> (size,size,5) float32 with spatial-coord channels."""
-    from PIL import Image
-    pil = Image.fromarray(img_hwc).resize((size, size), Image.BILINEAR)
-    rgb = np.asarray(pil, dtype=np.float32) / 255.0
-    H, W = rgb.shape[:2]
-    xs = np.linspace(-1.0, 1.0, W, dtype=np.float32)[None, :] * np.ones((H, 1), np.float32)
-    ys = np.linspace(-1.0, 1.0, H, dtype=np.float32)[:, None] * np.ones((1, W), np.float32)
-    return np.concatenate([rgb, xs[..., None], ys[..., None]], axis=-1)  # (H,W,5)
-
+# ── action normalization (Bridge EE deltas) ─────────────────────────────────────
 
 def _normalize_action(action: np.ndarray, norm: Dict) -> np.ndarray:
     low = np.array(norm["low"], dtype=np.float32)
     high = np.array(norm["high"], dtype=np.float32)
-    eps = float(norm["clip_eps"])
-    a = np.clip(action.astype(np.float32), low + eps, high - eps)
-    return 2.0 * (a - low) / (high - low) - 1.0
+    eps = float(norm.get("clip_eps", 1e-5))
+    a = 2.0 * (action.astype(np.float32) - low) / (high - low) - 1.0
+    return np.clip(a, -1.0 + eps, 1.0 - eps)
 
 
 def _to_hwc_uint8(img: torch.Tensor) -> np.ndarray:
-    """Convert a single image tensor (CHW or HWC, float[0,1]/uint8) to HWC uint8."""
+    """Single image (CHW or HWC, float[0,1]/uint8) -> HWC uint8. The DQC encoder
+    normalizes /127.5-1 internally, so we must hand it [0,255] uint8 RGB."""
     if not isinstance(img, torch.Tensor):
         img = torch.as_tensor(img)
     arr = img.detach().cpu()
@@ -103,156 +93,28 @@ def _to_hwc_uint8(img: torch.Tensor) -> np.ndarray:
     return arr.numpy()
 
 
-def _frame_key(im: np.ndarray) -> bytes:
-    return hashlib.blake2b(np.ascontiguousarray(im).tobytes(), digest_size=16).digest()
-
-
-# ── Pure-JAX forward, split into encode (cacheable) + head (per action) ─────────
-# Ported verbatim from scriptsv2/q_fn_eval/eval_q.py — keep in sync if that
-# reference forward changes. _q_one = _mlp(concat(_encode(img,text), act)); we
-# expose _encode and the _mlp head separately so the encode can be cached.
-
-class _DQCScorer:
-    def __init__(self, ckpt_dir: str):
-        import jax
-        import jax.numpy as jnp
-
-        def _num_groups(C, max_g=32):
-            g = max_g
-            while C % g != 0:
-                g -= 1
-            return g
-
-        def _group_norm(x, scale, bias):
-            H, W, C = x.shape
-            G = _num_groups(C)
-            x = x.reshape(H, W, G, C // G)
-            mean = x.mean(axis=(0, 1, 3), keepdims=True)
-            var = x.var(axis=(0, 1, 3), keepdims=True)
-            x = (x - mean) / jnp.sqrt(var + 1e-5)
-            return x.reshape(H, W, C) * scale + bias
-
-        def _layer_norm(x, scale, bias):
-            mean = x.mean(); var = x.var()
-            return (x - mean) / jnp.sqrt(var + 1e-6) * scale + bias
-
-        def _conv2d(x, kernel, stride=1):
-            return jax.lax.conv_general_dilated(
-                x[None], kernel, window_strides=(stride, stride), padding="SAME",
-                dimension_numbers=("NHWC", "HWIO", "NHWC"))[0]
-
-        def _film(x, text, fp):
-            gamma = text @ fp["Dense_0"]["kernel"] + fp["Dense_0"]["bias"]
-            beta = text @ fp["Dense_1"]["kernel"] + fp["Dense_1"]["bias"]
-            return x * gamma + beta
-
-        def _resnet_block(x, text, bp, fp, stride=1):
-            residual = x
-            y = _conv2d(x, bp["Conv_0"]["kernel"], stride=stride)
-            y = _group_norm(y, bp["GroupNorm_0"]["scale"], bp["GroupNorm_0"]["bias"])
-            y = _film(y, text, fp)
-            y = jax.nn.silu(y)
-            y = _conv2d(y, bp["Conv_1"]["kernel"], stride=1)
-            y = _group_norm(y, bp["GroupNorm_1"]["scale"], bp["GroupNorm_1"]["bias"])
-            y = jax.nn.silu(y)
-            if "conv_proj" in bp:
-                residual = _conv2d(residual, bp["conv_proj"]["kernel"], stride=stride)
-                residual = _group_norm(residual, bp["norm_proj"]["scale"], bp["norm_proj"]["bias"])
-            return y + residual
-
-        strides: List[int] = []
-        for n, _c, s0 in [(3, 64, 1), (4, 128, 2), (6, 256, 2), (3, 512, 2)]:
-            strides.extend([s0] + [1] * (n - 1))
-
-        def _encode(img5, text, enc_p):
-            ie = enc_p["image_encoder"]
-            x = _conv2d(img5, ie["conv_init"]["kernel"], stride=2)
-            x = _group_norm(x, ie["norm_init"]["scale"], ie["norm_init"]["bias"])
-            x = jax.nn.silu(x)
-            for i, s in enumerate(strides):
-                x = _resnet_block(x, text, ie[f"ResNetBlock_{i}"], ie[f"FilmConditioning_{i}"], s)
-            return x.mean(axis=(0, 1))  # (512,)
-
-        def _mlp(feat, mlp_p, head_p):
-            x = feat
-            for i in range(5):
-                x = x @ mlp_p[f"Dense_{i}"]["kernel"] + mlp_p[f"Dense_{i}"]["bias"]
-                x = _layer_norm(x, mlp_p[f"LayerNorm_{i}"]["scale"], mlp_p[f"LayerNorm_{i}"]["bias"])
-                x = jax.nn.silu(x)
-            return (x @ head_p["kernel"] + head_p["bias"])[0]
-
-        with open(Path(ckpt_dir) / "params_100000.pkl", "rb") as f:
-            d = pickle.load(f)
-        all_params = d["agent"]["network"]["params"]["modules_action_critic"]
-        self._params = [jax.tree_util.tree_map(lambda x: jnp.array(x[e]), all_params)
-                        for e in range(2)]
-        self._jnp = jnp
-
-        @jax.jit
-        def _encode_batch(imgs5, text, p):
-            return jax.vmap(lambda im: _encode(im, text, p["encoder"]))(imgs5)  # (N,512)
-
-        @jax.jit
-        def _head_batch(encs, acts, p):
-            return jax.vmap(
-                lambda e, a: _mlp(jnp.concatenate([e, a]), p["MLP_0"], p["Dense_0"])
-            )(encs, acts)  # (N,)
-
-        self._encode_batch = _encode_batch
-        self._head_batch = _head_batch
-
-    def encode(self, imgs5_np: np.ndarray, text_np: np.ndarray) -> np.ndarray:
-        """(N,S,S,5) -> (2,N,512) per-critic encodings."""
-        t = self._jnp.asarray(text_np)
-        x = self._jnp.asarray(imgs5_np)
-        return np.stack([np.asarray(self._encode_batch(x, t, p)) for p in self._params])
-
-    def head(self, encs_np: np.ndarray, acts_np: np.ndarray) -> np.ndarray:
-        """encs (2,N,512), acts (N,7) -> (N,) min over the 2 critics."""
-        a = self._jnp.asarray(acts_np)
-        qs = np.stack([np.asarray(self._head_batch(self._jnp.asarray(encs_np[e]), a, self._params[e]))
-                       for e in range(2)])
-        return qs.min(axis=0)
-
-    def score(self, imgs5_np: np.ndarray, acts_np: np.ndarray, text_np: np.ndarray) -> np.ndarray:
-        """Non-cached encode+head (for the regression/health check)."""
-        return self.head(self.encode(imgs5_np, text_np), acts_np)
-
-
-# ── MUSE text embedding ─────────────────────────────────────────────────────────
+# ── text embedding ──────────────────────────────────────────────────────────────
 
 def _resolve_text_emb(instruction: str, text_emb_file: Optional[str]) -> np.ndarray:
+    """Load a precomputed 512-d MUSE (USE-3) embedding; only fall back to the live
+    text processor (imports TensorFlow!) if no valid file is given."""
     candidates = []
     if text_emb_file:
         candidates.append(Path(text_emb_file))
-    here = Path(__file__).resolve()
-    for up in here.parents:
-        cand = up / "scriptsv2" / "q_fn_eval" / "task_emb.npy"
-        if cand.is_file():
-            candidates.append(cand)
-            break
+    candidates.append(_REPO / "scriptsv2" / "q_fn_eval" / "task_emb_use3.npy")
     for c in candidates:
         if c and Path(c).is_file():
             emb = np.load(c).astype(np.float32)
             if emb.shape == (512,):
-                print(f"[DQCVerifier] loaded MUSE embedding from {c}")
+                print(f"[DQCVerifier] loaded MUSE (USE-3) embedding from {c}")
                 return emb
             print(f"[DQCVerifier] {c} has shape {emb.shape}, expected (512,); skipping")
-    gen = None
-    for up in here.parents:
-        cand = up / "scriptsv2" / "q_fn_eval" / "get_muse_emb.py"
-        if cand.is_file():
-            gen = cand
-            break
-    out = Path(text_emb_file) if text_emb_file else (gen.parent / "task_emb.npy" if gen else None)
-    if gen is None or out is None:
-        raise FileNotFoundError(
-            "DQCVerifier: no MUSE text embedding found and get_muse_emb.py not "
-            "locatable. Pass text_emb_file=<path to a 512-d .npy>.")
-    print(f"[DQCVerifier] generating MUSE embedding for {instruction!r} -> {out}")
-    subprocess.run([sys.executable, str(gen), "--instruction", instruction,
-                    "--out", str(out)], check=True)
-    emb = np.load(out).astype(np.float32)
+    print("[DQCVerifier] no precomputed USE-3 embedding found; encoding live "
+          "(this imports TensorFlow into the training process) ...")
+    sys.path.insert(0, str(_DQC_PKG))
+    from utils.text_processing import make_text_processor
+    tp = make_text_processor("muse_embedding")
+    emb = np.asarray(tp.encode([instruction]), np.float32)[0]
     assert emb.shape == (512,), emb.shape
     return emb
 
@@ -260,7 +122,7 @@ def _resolve_text_emb(instruction: str, text_emb_file: Optional[str]) -> np.ndar
 # ── Verifier ────────────────────────────────────────────────────────────────────
 
 class DQCVerifier:
-    """In-process DQC Q-function verifier (JAX). Same interface as RoboMonkeyVerifier."""
+    """In-process REAL DQC verifier. Same interface as RoboMonkeyVerifier."""
 
     def __init__(
         self,
@@ -268,16 +130,21 @@ class DQCVerifier:
         instruction: str,
         image_obs_key: str,
         text_emb_file: Optional[str] = None,
-        img_size: int = 128,
-        discount: float = 0.98,
+        critic_type: str = "chunk",
         score_indices: Optional[list] = None,
         score_agg: str = "discounted_sum",
         score_executed_chunk: bool = False,
+        score_full_horizon: bool = False,
         action_chunk_index: int = -1,
-        enc_batch: int = 64,
-        image_feat_cache_size: int = 1024,
+        chunk_horizon: Optional[int] = None,
+        discount: float = 0.98,
+        q_agg: str = "min",
+        image_hw: tuple = (224, 224),
         health_check: bool = True,
         # Unused; kept for YAML/back-compat parity with RoboMonkeyVerifier.
+        img_size: int = 128,
+        enc_batch: int = 64,
+        image_feat_cache_size: int = 1024,
         server_url: str = "in_process",
         image_save_dir: str = "/tmp/dqc_obs",
         request_timeout: float = 300.0,
@@ -286,61 +153,201 @@ class DQCVerifier:
     ) -> None:
         self.instruction = instruction
         self.image_obs_key = image_obs_key
-        self.img_size = int(img_size)
-        self.discount = float(discount)
-        self.action_chunk_index = int(action_chunk_index)
+        self.critic_type = str(critic_type).lower()
+        if self.critic_type not in ("action", "chunk"):
+            raise ValueError(f"critic_type must be 'action' or 'chunk', got {critic_type!r}")
         self.score_indices = list(score_indices) if score_indices is not None else None
         self.score_agg = str(score_agg)
         self.score_executed_chunk = bool(score_executed_chunk)
-        self.enc_batch = int(enc_batch)
+        # Score the FULL predicted horizon as the chunk (all H actions), rather
+        # than the executed sub-window. Use when the policy predicts exactly
+        # chunk_horizon actions from the current frame (e.g. horizon=8, n_obs=1).
+        self.score_full_horizon = bool(score_full_horizon)
+        self.action_chunk_index = int(action_chunk_index)
+        self.discount = float(discount)
+        self.q_agg = str(q_agg)
+        self.score_batch = int(enc_batch)  # sub-batch B to bound JAX GPU memory
+        self.image_hw = (int(image_hw[0]), int(image_hw[1]))
+        self._chunk_horizon_cfg = int(chunk_horizon) if chunk_horizon is not None else None
         self._cache_size = int(image_feat_cache_size)
-        self._enc_cache: "OrderedDict[bytes, np.ndarray]" = OrderedDict()  # key -> (2,512)
+        self._enc_cache: "OrderedDict[bytes, np.ndarray]" = OrderedDict()  # frame -> (num_qs,512)
 
         ckpt_dir = os.path.expanduser(ckpt_dir)
         with open(Path(ckpt_dir) / "action_normalization.json") as f:
             self._norm = json.load(f)
+        self._action_dim = len(self._norm["low"])
         self._text_emb = _resolve_text_emb(instruction, text_emb_file)
-        print(f"[DQCVerifier] building JAX scorer from {ckpt_dir} ...")
-        self._scorer = _DQCScorer(ckpt_dir)
-        if health_check:
-            # Compile + verify the encode/head split == fused forward (bit-identical).
-            rng = np.random.default_rng(0)
-            im5 = rng.standard_normal((3, self.img_size, self.img_size, 5)).astype(np.float32)
-            act = rng.standard_normal((3, 7)).astype(np.float32)
-            q_fused = self._scorer.score(im5, act, self._text_emb)
-            encs = self._scorer.encode(im5, self._text_emb)
-            q_split = self._scorer.head(encs, act)
-            max_diff = float(np.abs(q_fused - q_split).max())
-            assert max_diff < 1e-3, f"encode/head split mismatch (max diff {max_diff})"
-            print(f"[DQCVerifier] ready (compiled; split==fused max_diff={max_diff:.2e}; "
-                  f"discount={self.discount}, agg={self.score_agg}, "
-                  f"enc_cache={self._cache_size})")
 
-    # --- encode cache ------------------------------------------------------------
+        print(f"[DQCVerifier] building REAL BridgeDQCChunkAgent from {ckpt_dir} "
+              f"(critic_type={self.critic_type}) ...")
+        self._agent, self.chunk_horizon = self._make_agent(ckpt_dir, self.image_hw)
+        if self.critic_type == "chunk" and self._chunk_horizon_cfg is not None \
+                and self._chunk_horizon_cfg != self.chunk_horizon:
+            raise ValueError(
+                f"chunk_horizon={self._chunk_horizon_cfg} but checkpoint chunk "
+                f"critic expects backup_horizon={self.chunk_horizon}")
+
+        # Split the active critic into encode (cacheable per frame) + head (per
+        # action), reusing the REAL flax modules + checkpoint params. Within a
+        # gradient step the search loop scores ~max_actions candidates against the
+        # SAME frames, so we encode each unique frame once and reuse the 512-d
+        # feature for every candidate's cheap MLP head.
+        self._build_split()
+
+        if health_check:
+            # Verify the cached encode+head split == the fused agent forward.
+            H = self.chunk_horizon
+            rng = np.random.default_rng(0)
+            imgs = rng.integers(0, 256, (3, self.image_hw[0], self.image_hw[1], 3), np.uint8)
+            lang = np.repeat(self._text_emb[None], 3, axis=0)
+            encs = self._encode_cached(list(imgs))                 # (num_qs,3,512)
+            if self.critic_type == "chunk":
+                act = rng.uniform(-1, 1, (3, H * self._action_dim)).astype(np.float32)
+                q_fused = np.asarray(self._agent.score_chunks(
+                    {"image": imgs}, {"language": lang}, act, q_agg=self.q_agg))
+            else:
+                act = rng.uniform(-1, 1, (3, self._action_dim)).astype(np.float32)
+                qa = np.asarray(self._agent.forward_action_critic(
+                    {"image": imgs}, {"language": lang}, act, train=False))
+                q_fused = qa.min(0) if self.q_agg == "min" else qa.mean(0)
+            q_split = self._head_min(encs, act)
+            max_diff = float(np.abs(q_fused - q_split).max())
+            # The encode/head split materializes the 512-d feature between two
+            # XLA graphs, so it differs from the fused forward only by float32
+            # reassociation noise (~1e-2 abs on Q~30, corr 1.0). A real logic bug
+            # (e.g. the old hand-port) differed by tens. 0.1 cleanly separates them.
+            assert np.isfinite(q_split).all() and max_diff < 0.1, \
+                f"encode/head split mismatch (max diff {max_diff})"
+            self._enc_cache.clear()
+            print(f"[DQCVerifier] ready (real agent, cached encode; "
+                  f"critic={self.critic_type}, chunk_horizon={self.chunk_horizon}, "
+                  f"q_agg={self.q_agg}, split==fused max_diff={max_diff:.2e}, "
+                  f"image_hw={self.image_hw}, enc_cache={self._cache_size})")
+
+    # --- build the real flax agent (mirrors eval_dqc_critics.make_agent) ----------
+    def _make_agent(self, ckpt_dir: str, image_hw):
+        sys.path.insert(0, str(_DQC_PKG))
+        from ml_collections import ConfigDict
+        from agents.bridge_dqc_chunk import BridgeDQCChunkAgent
+        from utils.flax_utils import restore_agent
+
+        cfg = ConfigDict(json.load(open(Path(ckpt_dir) / "flags.json"))["agent"])
+        H = int(cfg["backup_horizon"]); A = self._action_dim; Hh, Ww = image_hw
+        ex = {
+            "observations": {"image": np.zeros((1, Hh, Ww, 3), np.uint8)},
+            "next_observations": {"image": np.zeros((1, Hh, Ww, 3), np.uint8)},
+            "high_value_next_observations": {"image": np.zeros((1, Hh, Ww, 3), np.uint8)},
+            "goals": {"language": np.zeros((1, 512), np.float32)},
+            "high_value_goals": {"language": np.zeros((1, 512), np.float32)},
+            "actions": np.zeros((1, A), np.float32),
+            "high_value_action_chunks": np.zeros((1, H * A), np.float32),
+            "rewards": np.zeros((1,), np.float32), "masks": np.ones((1,), np.float32),
+            "high_value_rewards": np.zeros((1,), np.float32),
+            "high_value_masks": np.ones((1,), np.float32),
+            "high_value_backup_horizon": np.full((1,), H, np.float32),
+            "valids": np.ones((1, H), np.float32), "mc_returns": np.zeros((1,), np.float32),
+        }
+        agent = BridgeDQCChunkAgent.create(0, ex, cfg)
+        agent = restore_agent(agent, ckpt_dir, 100000)
+        self._cfg = cfg
+        return agent, H
+
+    # --- encode/head split of the real critic (bit-exact, cacheable) -------------
+    def _build_split(self) -> None:
+        import jax
+        import jax.numpy as jnp
+        import flax.linen as nn
+        sys.path.insert(0, str(_DQC_PKG))
+        from agents.bridge_calql_chunk import BridgeFilmResNet34, LanguageImageEncoder
+        from utils.networks import MLP
+
+        cfg = self._cfg
+        module = ("modules_chunk_critic" if self.critic_type == "chunk"
+                  else "modules_action_critic")
+        hidden = tuple(cfg["critic_hidden_dims"] if self.critic_type == "chunk"
+                       else cfg["action_critic_hidden_dims"])
+        params = self._agent.network.params[module]
+        self._num_qs = int(jax.tree_util.tree_leaves(params["Dense_0"])[0].shape[0])
+
+        enc_mod = LanguageImageEncoder(BridgeFilmResNet34(
+            pooling_method=cfg["encoder_kwargs"]["pooling_method"],
+            add_spatial_coordinates=cfg["encoder_kwargs"]["add_spatial_coordinates"]))
+        mlp_mod = MLP(hidden, activate_final=True, layer_norm=cfg["layer_norm"])
+        dense_mod = nn.Dense(1)
+
+        def member(tree, e):
+            return jax.tree_util.tree_map(lambda x: x[e], tree)
+        self._enc_p = [member(params["encoder"], e) for e in range(self._num_qs)]
+        self._mlp_p = [member(params["MLP_0"], e) for e in range(self._num_qs)]
+        self._dns_p = [member(params["Dense_0"], e) for e in range(self._num_qs)]
+        self._jnp = jnp
+
+        @jax.jit
+        def _encode_e(imgs, lang, p):                  # imgs uint8 (N,H,W,3), lang (N,512)
+            return enc_mod.apply({"params": p}, ({"image": imgs}, {"language": lang}),
+                                 train=False)          # (N,512)
+
+        @jax.jit
+        def _head_e(enc, act, pm, pd):                 # enc (N,512), act (N,Adim)
+            x = jnp.concatenate([enc, act], axis=-1)
+            h = mlp_mod.apply({"params": pm}, x)
+            return jnp.squeeze(dense_mod.apply({"params": pd}, h), -1)  # (N,)
+
+        self._encode_e = _encode_e
+        self._head_e = _head_e
+
     def _encode_cached(self, frames_u8: List[np.ndarray]) -> np.ndarray:
-        """Return (2, B, 512) encodings for B frames, encoding only cache misses."""
-        keys = [_frame_key(f) for f in frames_u8]
+        """Return (num_qs, B, 512) encodings for B frames; encode only cache misses
+        (sub-batched to bound GPU memory). Text is fixed, so keying on the frame
+        bytes is sufficient."""
+        keys = [hashlib.blake2b(np.ascontiguousarray(f).tobytes(), digest_size=16).digest()
+                for f in frames_u8]
         miss_keys, miss_imgs, seen = [], [], set()
         for k, f in zip(keys, frames_u8):
             if k not in self._enc_cache and k not in seen:
-                seen.add(k)
-                miss_keys.append(k)
-                miss_imgs.append(_preprocess_image(f, self.img_size))
-        for s in range(0, len(miss_imgs), self.enc_batch):
-            chunk_imgs = np.stack(miss_imgs[s:s + self.enc_batch])
-            chunk_enc = self._scorer.encode(chunk_imgs, self._text_emb)  # (2, n, 512)
-            for i, k in enumerate(miss_keys[s:s + self.enc_batch]):
-                self._enc_cache[k] = chunk_enc[:, i, :]                  # (2, 512)
-        for k in keys:                      # LRU touch
+                seen.add(k); miss_keys.append(k); miss_imgs.append(f)
+        for s in range(0, len(miss_imgs), self.score_batch):
+            batch = np.stack(miss_imgs[s:s + self.score_batch])             # (n,H,W,3)
+            lang = np.repeat(self._text_emb[None], batch.shape[0], axis=0)  # (n,512)
+            encs = np.stack([np.asarray(self._encode_e(self._jnp.asarray(batch),
+                            self._jnp.asarray(lang), self._enc_p[e]))
+                            for e in range(self._num_qs)])                  # (num_qs,n,512)
+            for i, k in enumerate(miss_keys[s:s + self.score_batch]):
+                self._enc_cache[k] = encs[:, i, :]                         # (num_qs,512)
+        for k in keys:
             self._enc_cache.move_to_end(k)
         while len(self._enc_cache) > self._cache_size:
             self._enc_cache.popitem(last=False)
-        return np.stack([self._enc_cache[k] for k in keys], axis=1)      # (2, B, 512)
+        return np.stack([self._enc_cache[k] for k in keys], axis=1)         # (num_qs,B,512)
+
+    def _head_min(self, encs: np.ndarray, act: np.ndarray) -> np.ndarray:
+        """encs (num_qs,B,512), act (B,Adim) -> (B,) aggregated over the ensemble."""
+        a = self._jnp.asarray(act)
+        qs = np.stack([np.asarray(self._head_e(self._jnp.asarray(encs[e]), a,
+                      self._mlp_p[e], self._dns_p[e])) for e in range(self._num_qs)])
+        return qs.min(0) if self.q_agg == "min" else qs.mean(0)
 
     def clear_cache(self) -> None:
         self._enc_cache.clear()
 
-    # --- aggregation -------------------------------------------------------------
+    # --- obs / aggregation helpers -----------------------------------------------
+    def _select_last_frames_uint8(self, obs_dict: Dict[str, Any], B: int) -> np.ndarray:
+        if self.image_obs_key not in obs_dict:
+            raise KeyError(
+                f"DQCVerifier: obs_dict missing image key '{self.image_obs_key}'. "
+                f"Available: {sorted(obs_dict.keys())}")
+        x = obs_dict[self.image_obs_key]
+        if not isinstance(x, torch.Tensor):
+            x = torch.as_tensor(x)
+        if x.dim() != 5:
+            raise ValueError(
+                f"Expected obs '{self.image_obs_key}' (B, To, C, H, W) or "
+                f"(B, To, H, W, C); got {tuple(x.shape)}")
+        last = x[:, -1]  # (B, C, H, W) or (B, H, W, C)
+        if last.shape[0] != B:
+            raise ValueError(f"Batch mismatch: action B={B} but obs B={last.shape[0]}")
+        return np.stack([_to_hwc_uint8(last[b]) for b in range(B)])  # (B,H,W,3) uint8
+
     def _aggregate(self, per_step: torch.Tensor) -> torch.Tensor:
         agg = self.score_agg
         M = per_step.shape[1]
@@ -360,22 +367,7 @@ class DQCVerifier:
             return per_step[:, -1]
         if agg == "first":
             return per_step[:, 0]
-        raise ValueError(f"unknown score_agg {agg!r} "
-                         "(discounted_sum/mean/sum/min/last/first)")
-
-    def _select_last_frame(self, obs_dict: Dict[str, Any]) -> torch.Tensor:
-        if self.image_obs_key not in obs_dict:
-            raise KeyError(
-                f"DQCVerifier: obs_dict missing image key '{self.image_obs_key}'. "
-                f"Available: {sorted(obs_dict.keys())}")
-        x = obs_dict[self.image_obs_key]
-        if not isinstance(x, torch.Tensor):
-            x = torch.as_tensor(x)
-        if x.dim() != 5:
-            raise ValueError(
-                f"Expected obs '{self.image_obs_key}' (B, To, C, H, W) or "
-                f"(B, To, H, W, C); got {tuple(x.shape)}")
-        return x[:, -1]
+        raise ValueError(f"unknown score_agg {agg!r}")
 
     @torch.no_grad()
     def get_value(self, obs_dict: Dict[str, Any], action: torch.Tensor) -> torch.Tensor:
@@ -383,40 +375,58 @@ class DQCVerifier:
         if action.dim() != 3:
             raise ValueError(
                 f"Expected action (B, horizon, action_dim); got {tuple(action.shape)}")
-        last_frames = self._select_last_frame(obs_dict)
-        B = action.shape[0]
-        if last_frames.shape[0] != B:
-            raise ValueError(
-                f"Batch size mismatch: action B={B} but obs B={last_frames.shape[0]}")
+        B, H, A = int(action.shape[0]), int(action.shape[1]), int(action.shape[-1])
+        images = self._select_last_frames_uint8(obs_dict, B)        # (B,Hh,Ww,3) uint8
+        encs = self._encode_cached(list(images))                    # (num_qs,B,512) cached
 
-        idxs = self.score_indices if self.score_indices is not None else [self.action_chunk_index]
+        if self.score_full_horizon:
+            idxs = list(range(H))                       # all predicted actions = the chunk
+        elif self.score_indices is not None:
+            idxs = self.score_indices
+        else:
+            idxs = [self.action_chunk_index]
         idxs = [int(i) for i in idxs]
-        H = int(action.shape[1])
         if any(i >= H or i < -H for i in idxs):
             raise ValueError(f"score_indices {idxs} out of bounds for horizon H={H}.")
         M = len(idxs)
 
-        frames_u8 = [_to_hwc_uint8(last_frames[b]) for b in range(B)]
-        encs = self._encode_cached(frames_u8)                 # (2, B, 512)
-        # Repeat each frame's encoding M times (b-major) to pair with its M steps.
-        encs_pairs = np.repeat(encs, M, axis=1)               # (2, B*M, 512)
-        acts = action[:, idxs, :].detach().cpu().numpy().reshape(B * M, action.shape[-1])
-        acts = np.stack([_normalize_action(a, self._norm) for a in acts])  # (B*M, 7)
-        q = self._scorer.head(encs_pairs, acts)               # (B*M,)
-        per_step = torch.tensor(q, dtype=action.dtype, device=action.device).reshape(B, M)
+        # ── Chunk critic: the executed window IS the chunk -> ONE head call.
+        if self.critic_type == "chunk":
+            if M != self.chunk_horizon:
+                raise ValueError(
+                    f"chunk critic expects {self.chunk_horizon} actions per chunk "
+                    f"(backup_horizon) but the scoring window has {M} indices {idxs}. "
+                    f"Set the executed window (n_action_steps) to {self.chunk_horizon}.")
+            sub = action[:, idxs, :].detach().cpu().numpy().reshape(B * M, A)
+            sub = np.stack([_normalize_action(a, self._norm) for a in sub])
+            chunk = sub.reshape(B, M * A).astype(np.float32)        # time-major (B, H*7)
+            # Match training chunk assembly: zero-fill past-episode pad in
+            # NORMALIZED space (the BC policy emits no NaN, so this is a no-op
+            # there; it only matters when scoring NaN-padded eval chunks).
+            chunk = np.where(np.isnan(chunk), 0.0, chunk).astype(np.float32)
+            q = self._head_min(encs, chunk)                         # (B,)
+            return torch.tensor(np.asarray(q), dtype=action.dtype, device=action.device)
+
+        # ── Action critic: per-step single-action Q over the window, aggregated.
+        per_step_cols = []
+        for i in idxs:
+            a_i = action[:, i, :].detach().cpu().numpy()
+            a_i = np.stack([_normalize_action(a, self._norm) for a in a_i]).astype(np.float32)
+            qa = self._head_min(encs, a_i)                          # (B,)
+            per_step_cols.append(torch.tensor(np.asarray(qa), dtype=action.dtype,
+                                              device=action.device))
+        per_step = torch.stack(per_step_cols, dim=1)                # (B, M)
         if M == 1:
             return per_step[:, 0]
         return self._aggregate(per_step)
 
-    # --- KV-prefix controls: reuse for the encode cache (training speedup) -------
+    # --- KV-prefix controls: no-ops (kept for SearchPolicy parity) ----------------
     @property
     def supports_kv_prefix(self) -> bool:
-        return True
+        return False
 
-    def set_kv_prefix(self, enabled: bool) -> None:  # noqa: D401
-        # The encode cache is always on; this hook just lets the search loop
-        # clear it on a fresh frame (parity with RoboMonkeyVerifier).
+    def set_kv_prefix(self, enabled: bool) -> None:
         pass
 
     def clear_prefix_cache(self) -> None:
-        self.clear_cache()
+        pass

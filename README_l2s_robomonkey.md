@@ -8,7 +8,7 @@ Two policy variants are available:
 
 | Policy class | Action head | Config |
 |---|---|---|
-| `SearchPolicyRoboMonkey` | Gaussian (`Normal` per token) | `robomonkey_eggplant_search_state.yaml` |
+| `SearchPolicyRoboMonkey` | Gaussian (`Normal` per token) | `robomonkey_eggplant_search_state_gaussian.yaml` |
 | `SearchPolicyRoboMonkeyDiffusion` | Conditional diffusion (encoder-decoder transformer, joint K-candidate denoising) | `robomonkey_eggplant_search_state_diffusion.yaml` |
 
 Both classes live in [diffusion_policy/policy/search_policy_robomonkey.py](diffusion_policy/policy/search_policy_robomonkey.py).
@@ -124,7 +124,7 @@ Files involved:
 - Policy: [diffusion_policy/policy/search_policy_robomonkey.py](diffusion_policy/policy/search_policy_robomonkey.py)
 - Verifier clients: [diffusion_policy/policy/verifiers.py](diffusion_policy/policy/verifiers.py)
 - Task config: [diffusion_policy/config/task/robomonkey_eggplant_state.yaml](diffusion_policy/config/task/robomonkey_eggplant_state.yaml)
-- Training config: [diffusion_policy/config/robomonkey_eggplant_search_state.yaml](diffusion_policy/config/robomonkey_eggplant_search_state.yaml)
+- Training config: [diffusion_policy/config/robomonkey_eggplant_search_state_gaussian.yaml](diffusion_policy/config/robomonkey_eggplant_search_state_gaussian.yaml)
 
 `policy.corrupt_obs` toggles DDPM-style obs-feature noising. The flag is
 baked into the run name (`..._corrupt` / `..._clean`), so it propagates to
@@ -153,7 +153,7 @@ export PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-osmesa}
 
 xvfb-run --auto-servernum -s "-screen 0 640x480x24" \
 python diffusion_policy/workspace/train_mlp_image_workspace.py \
-    --config-name=robomonkey_eggplant_search_state \
+    --config-name=robomonkey_eggplant_search_state_gaussian \
     policy.corrupt_obs=True \
     task.dataset.dataset_dir=$HOME/data/eggplant_in_basket/state_only \
     'task.shape_meta.obs={arm_joint_pos:{shape:[6],type:low_dim},end_effector_pose:{shape:[7],type:low_dim},joint_vel:{shape:[6],type:low_dim},last_arm_action:{shape:[6],type:low_dim},last_gripper_action:{shape:[1],type:low_dim},insertive_asset_pose:{shape:[7],type:low_dim},receptive_asset_pose:{shape:[7],type:low_dim}}' \
@@ -176,7 +176,7 @@ the dataset; no SIMPLER render, no `PRISMATIC_DATA_ROOT`, no headless GL,
 no `xvfb-run`.
 
 This is what the checked-in
-[robomonkey_eggplant_search_state.yaml](diffusion_policy/config/robomonkey_eggplant_search_state.yaml)
+[robomonkey_eggplant_search_state_gaussian.yaml](diffusion_policy/config/robomonkey_eggplant_search_state_gaussian.yaml)
 config already does (task points at `~/data/eggplant_in_basket`, verifier
 is `RoboMonkeyVerifier` with `image_obs_key: agentview_image`).
 
@@ -189,18 +189,18 @@ export MONKEY_VERIFIER_SRC=$HOME/RoboMonkey/monkey-verifier/src
 
 # (1) Noised — DDPM obs-feature corruption ON  → name=..._corrupt
 python diffusion_policy/workspace/train_mlp_image_workspace.py \
-    --config-name=robomonkey_eggplant_search_state \
+    --config-name=robomonkey_eggplant_search_state_gaussian \
     policy.corrupt_obs=True
 
 # (2) Un-noised search policy             → name=..._clean
 python diffusion_policy/workspace/train_mlp_image_workspace.py \
-    --config-name=robomonkey_eggplant_search_state \
+    --config-name=robomonkey_eggplant_search_state_gaussian \
     policy.corrupt_obs=False
 
 # (3) Either of the above + in-process verifier (no HTTP, single GPU forward
 #     for the whole batch — fastest path):
 python diffusion_policy/workspace/train_mlp_image_workspace.py \
-    --config-name=robomonkey_eggplant_search_state \
+    --config-name=robomonkey_eggplant_search_state_gaussian \
     policy.corrupt_obs=True \
     policy.verifier.server_url=in_process
 ```
@@ -209,7 +209,7 @@ Smoke test (no wandb, single train step):
 
 ```bash
 python diffusion_policy/workspace/train_mlp_image_workspace.py \
-    --config-name=robomonkey_eggplant_search_state \
+    --config-name=robomonkey_eggplant_search_state_gaussian \
     training.max_train_steps=1 logging.mode=disabled
 ```
 
@@ -331,18 +331,95 @@ python diffusion_policy/workspace/train_mlp_image_workspace.py \
 ## 4. Evaluate in SIMPLER
 
 Use the RoboMonkey eval driver — it loads checkpoints from
-`~/RoboMonkey/diffusion_policy/data/outputs/...`:
+`~/RoboMonkey/diffusion_policy/data/outputs/...`. Works for both
+`SearchPolicyRoboMonkey` and `SearchPolicyRoboMonkeyDiffusion` (in
+`argmax` mode; `refine` mode is Gaussian-only).
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate simpler_env
 cd ~/RoboMonkey
 
+CKPT=~/RoboMonkey/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_*>/checkpoints/latest.ckpt
+
 TASK=widowx_put_eggplant_in_basket \
-bash scriptsv2/run_eval_diffusion_policy.sh \
-    ~/RoboMonkey/diffusion_policy/data/outputs/<YYYY.MM.DD>/<HH.MM.SS_robomonkey_eggplant_search_state_corrupt_*>/checkpoints/latest.ckpt \
-    100
+bash scriptsv2/eval_search_policy/eval_search_policy.sh "$CKPT" 50
 ```
+
+### 4a. Sweep the number of search samples
+
+`N_SAMPLES` overrides the per-replan candidate count (default =
+`policy.max_actions` = 16 in the configs). For `N > max_actions`, the eval
+calls `policy.predict_n_actions`, which slides a fixed `(max_actions - 1)`
+context window over the autoregressive loop — same context length as
+training, but argmax picks the best of N candidates.
+
+Outputs land in `data/eval/<run_name>/argmax/N<n>/`, each containing its
+own `eval_log.json` and `episodes.jsonl`.
+
+```bash
+CKPT=~/RoboMonkey/diffusion_policy/data/outputs/2026.05.22/13.57.58_robomonkey_eggplant_search_state_diffusion_corrupt_robomonkey_eggplant_state/checkpoints/latest.ckpt
+RUN_NAME=$(basename "$(dirname "$(dirname "$CKPT")")")
+
+for N in 16 32 64 128; do
+    OUT="data/eval/${RUN_NAME}/argmax/N${N}"
+    SAVE_VIDEOS=10 VIZ_Q=1 N_SAMPLES=$N \
+    TASK=widowx_put_eggplant_in_basket \
+    bash scriptsv2/eval_search_policy/eval_search_policy.sh "$CKPT" 50 "$OUT"
+done
+
+# Tabular summary across N values
+for N in 16 32 64 128; do
+    OUT="data/eval/${RUN_NAME}/argmax/N${N}"
+    echo -n "N=$N  "
+    python scriptsv2/eval_diffusion/eval_summary.py "$OUT/eval_log.json"
+done
+```
+
+What each run saves under `$OUT/`:
+
+- `eval_log.json` — aggregate success rate + counts (numeric summary).
+- `episodes.jsonl` — per-episode record (seed, success, num_steps, …).
+- `videos/ep<idx>_seed<seed>.mp4` — first `SAVE_VIDEOS` rollouts (`SAVE_VIDEOS=10` above).
+- `search_q/ep<idx>_seed<seed>.npz` — per-replan candidate actions, verifier values, and the scored frame (one entry per replan step). This is the data the action-overlay video renderer reads.
+
+### 4b. Action + Q-value overlay video
+
+`SAVE_VIDEOS=N` only writes the raw SimplerEnv rollout frames — no
+overlay, no Q values. `VIZ_Q=1` separately saves all the data needed for
+an overlay (candidate actions, verifier values, scored frame, per
+replan) to `search_q/ep<idx>_seed<seed>.npz`.
+
+Render those npz files into MP4s with
+[scriptsv2/eval_search_policy/render_search_q.py](../scriptsv2/eval_search_policy/render_search_q.py).
+Each rendered frame shows the scored RGB image on the left and a
+sidebar on the right with K bars — one per candidate, height ∝
+verifier Q-value, argmax outlined in green — next to a mini line plot
+of the candidate's predicted (dx, dy, dz) over the lookahead horizon.
+
+```bash
+cd ~/RoboMonkey
+RUN_DIR=data/eval/13.57.58_robomonkey_eggplant_search_state_diffusion_corrupt_robomonkey_eggplant_state
+
+# Render one N (videos default to <input_dir>/videos/)
+python scriptsv2/eval_search_policy/render_search_q.py "$RUN_DIR/argmax/N64/search_q" --fps 3
+
+# Render a sweep into one pooled folder — filenames encode N
+for N in 16 32 64 128; do
+    python scriptsv2/eval_search_policy/render_search_q.py \
+        "$RUN_DIR/argmax/N${N}/search_q" \
+        --out-dir "$RUN_DIR/argmax/videos" --fps 3
+done
+
+# Or a single episode:
+python scriptsv2/eval_search_policy/render_search_q.py \
+    "$RUN_DIR/argmax/N64/search_q/ep000_seed1000.npz"
+```
+
+Output filename: `ep<idx>_seed<seed>__N<K>.mp4`. Default destination is
+`<input_dir>/videos/`; pass `--out-dir` to pool across N. One frame per
+replan, default 3 fps; bump `--fps` to speed up. `--limit N` renders
+only the first N episodes.
 
 For Best-of-N action verification at eval time, see §4d in
 [~/RoboMonkey/README_L2S.md](file:///home/harine/RoboMonkey/README_L2S.md).

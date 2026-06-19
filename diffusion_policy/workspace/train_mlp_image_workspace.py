@@ -122,14 +122,24 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
 
         # configure lr scheduler
+        # By default the LR decays over the whole run (steps_per_epoch * num_epochs).
+        # Set training.lr_decay_steps to decouple the decay horizon from the run
+        # length: e.g. with the `polynomial` scheduler the LR decays to lr_end over
+        # lr_decay_steps and then HOLDS constant at lr_end for the remaining steps.
+        lr_decay_steps = cfg.training.get('lr_decay_steps', None)
+        if lr_decay_steps is None:
+            lr_decay_steps = (
+                len(train_dataloader) * cfg.training.num_epochs) \
+                    // cfg.training.gradient_accumulate_every
+        lr_scheduler_kwargs = OmegaConf.to_container(
+            cfg.training.get('lr_scheduler_kwargs', {}), resolve=True) or {}
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
-            last_epoch=self.global_step-1
+            num_training_steps=lr_decay_steps,
+            last_epoch=self.global_step-1,
+            **lr_scheduler_kwargs
         )
 
         # configure env
