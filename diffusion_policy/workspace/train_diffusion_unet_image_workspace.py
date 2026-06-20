@@ -30,7 +30,8 @@ from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
-from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.model.common.lr_scheduler import (
+    get_scheduler, get_cosine_then_constant_schedule)
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -103,17 +104,30 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             self.ema_model.set_normalizer(normalizer)
 
         # configure lr scheduler
-        lr_scheduler = get_scheduler(
-            cfg.training.lr_scheduler,
-            optimizer=self.optimizer,
-            num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
-            # pytorch assumes stepping LRScheduler every epoch
-            # however huggingface diffusers steps it every batch
-            last_epoch=self.global_step-1
-        )
+        # last_epoch=global_step-1 resumes the (step-indexed) schedule exactly.
+        if cfg.training.lr_scheduler == 'cosine_then_constant':
+            # Cosine decay to a small floor by lr_decay_steps, then constant.
+            # Decouples LR shape from epoch count, so extending a run (raising
+            # max_gradient_steps) keeps the post-decay LR flat.
+            lr_scheduler = get_cosine_then_constant_schedule(
+                optimizer=self.optimizer,
+                num_warmup_steps=cfg.training.lr_warmup_steps,
+                num_decay_steps=cfg.training.lr_decay_steps,
+                min_lr_ratio=cfg.training.get('lr_min_ratio', 0.1),
+                last_epoch=self.global_step-1
+            )
+        else:
+            lr_scheduler = get_scheduler(
+                cfg.training.lr_scheduler,
+                optimizer=self.optimizer,
+                num_warmup_steps=cfg.training.lr_warmup_steps,
+                num_training_steps=(
+                    len(train_dataloader) * cfg.training.num_epochs) \
+                        // cfg.training.gradient_accumulate_every,
+                # pytorch assumes stepping LRScheduler every epoch
+                # however huggingface diffusers steps it every batch
+                last_epoch=self.global_step-1
+            )
 
         # configure ema
         ema: EMAModel = None
@@ -166,9 +180,17 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             cfg.training.sample_every = 1
 
         # training loop
+        # Optional hard cap on total gradient steps. When set, training stops as
+        # soon as global_step reaches it (otherwise the loop runs num_epochs).
+        # With resume=True + a fixed output dir, raising this and re-running
+        # continues a finished run from latest.ckpt.
+        max_grad_steps = cfg.training.get('max_gradient_steps', None)
+        should_stop = False
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
+                if max_grad_steps is not None and self.global_step >= max_grad_steps:
+                    break
                 step_log = dict()
                 # ========= train for this epoch ==========
                 if cfg.training.freeze_encoder:
@@ -230,6 +252,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
                                 # Update last checkpoint step
                                 self.last_checkpoint_step = self.global_step
+
+                            # Hard stop at the gradient-step cap (if set), after
+                            # this step's checkpoint has been written.
+                            if max_grad_steps is not None \
+                                    and self.global_step >= max_grad_steps:
+                                should_stop = True
+                                break
 
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
@@ -327,6 +356,20 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
+                if should_stop:
+                    break
+
+        # Persist a final latest.ckpt synchronously so a step-capped run is
+        # resumable from its exact end (the periodic cadence may not land on the
+        # final step). Join any in-flight async save first to avoid racing the
+        # same file.
+        if self.accelerator.is_main_process:
+            if self._saving_thread is not None:
+                self._saving_thread.join()
+            model_ddp = self.model
+            self.model = self.accelerator.unwrap_model(self.model)
+            self.save_checkpoint(use_thread=False)
+            self.model = model_ddp
         # end_training() can raise AttributeError('trackers') on some accelerate
         # versions because this workspace logs to wandb manually rather than via
         # accelerate's tracker integration. Training + checkpoints are already
