@@ -127,8 +127,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
+                    cfg.training.max_gradient_steps
+                    if cfg.training.max_gradient_steps is not None
+                    else len(train_dataloader) * cfg.training.num_epochs
+                ) // cfg.training.gradient_accumulate_every,
             last_epoch=self.global_step-1
         )
 
@@ -190,6 +192,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
+                        if cfg.training.get('max_gradient_steps', None) is not None:
+                            if self.global_step >= cfg.training.max_gradient_steps:
+                                break
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
@@ -300,8 +305,20 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
-                self.global_step += 1
+                if cfg.training.get('max_gradient_steps', None) is None or self.global_step < cfg.training.max_gradient_steps:
+                    self.global_step += 1
                 self.epoch += 1
+        if self.accelerator.is_main_process:
+            print(f"Saving final checkpoint at step {self.global_step}")
+            model_ddp = self.model
+            self.model = self.accelerator.unwrap_model(self.model)
+            if cfg.checkpoint.save_last_ckpt:
+                self.save_checkpoint(use_thread=False)
+            step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
+            os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
+            self.save_checkpoint(path=step_ckpt_path, use_thread=False)
+            self.last_checkpoint_step = self.global_step
+            self.model = model_ddp
         self.accelerator.end_training()
 
 @hydra.main(

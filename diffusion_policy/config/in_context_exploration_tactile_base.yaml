@@ -10,7 +10,7 @@ task_name: '${task.name}'
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-horizon: 1024
+horizon: 2048
 n_obs_steps: 1
 n_action_steps: 1
 n_latency_steps: 0
@@ -82,7 +82,7 @@ training:
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 100
+  num_epochs: 100000
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
   use_ema: False
@@ -93,7 +93,7 @@ training:
   sample_every: 1
   max_train_steps: null
   max_val_steps: null
-  max_gradient_steps: 50000
+  max_gradient_steps: 20000
   tqdm_interval_sec: 1.0
 
 logging:
