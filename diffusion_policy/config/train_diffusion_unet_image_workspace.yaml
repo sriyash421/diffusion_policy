@@ -100,16 +100,25 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 8000
+  # With task.dataset.train_ratio=0.2 an epoch is 60 steps, so 84 epochs = 5040
+  # gradient steps. 83 would stop at 4980 and the single 5k eval would never fire.
+  # This also sets the cosine LR horizon (len(train_dataloader) * num_epochs),
+  # so it must match the intended run length or the LR never decays.
+  num_epochs: 84
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
   use_ema: True
   freeze_encoder: False
   # training loop control
+  # rollout_every/rollout_every_steps: null disables the epoch schedule in favour
+  # of the gradient-step schedule below (eval every 5k steps).
+  rollout_every: null
+  rollout_every_steps: 5000
+  # NOTE: checkpoint_every is in GRADIENT STEPS (the step_*.ckpt writer), not
+  # epochs. Each checkpoint is ~4.6GB, so keep this aligned with the eval cadence.
+  checkpoint_every: 5000
   # in epochs
-  rollout_every: 50
-  checkpoint_every: 50
   val_every: 1
   sample_every: 5
   # steps per epoch
@@ -133,6 +142,8 @@ checkpoint:
     mode: max
     k: 5
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  # keep only the rolling latest.ckpt; per-step checkpoints are ~4.6GB each
+  save_step_ckpt: False
   save_last_ckpt: True
   save_last_snapshot: False
 

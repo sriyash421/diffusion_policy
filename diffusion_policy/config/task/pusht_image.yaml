@@ -10,18 +10,26 @@ shape_meta: &shape_meta
     agent_pos:
       shape: [2]
       type: low_dim
+    # goal-vs-achieved T keypoint displacement (feedback_util.FEEDBACK_DIM);
+    # identical whether derived from the dataset's block_pos or the live env body.
+    feedback:
+      shape: [16]
+      type: low_dim
   action:
     shape: [2]
 
 env_runner:
   _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
-  n_train: 6
-  n_train_vis: 2
-  train_start_seed: 0
-  n_test: 50
-  n_test_vis: 4
-  legacy_test: True
-  test_start_seed: 100000
+  # rollouts reset to the initial states of the held-out test episodes.
+  # zarr_path/seed/n_test_episodes must match task.dataset so the split matches.
+  zarr_path: ${task.dataset.zarr_path}
+  seed: ${task.dataset.seed}
+  n_test_episodes: ${task.dataset.n_test_episodes}
+  n_train_episodes: ${task.dataset.n_train_episodes}
+  # first 5 test episodes are tiled into one side-by-side eval video
+  n_vis: 5
+  # must be False to reset exactly onto recorded states (see runner)
+  legacy: False
   max_steps: 300
   n_obs_steps: ${n_obs_steps}
   n_action_steps: ${n_action_steps}
@@ -31,10 +39,17 @@ env_runner:
 
 dataset:
   _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
-  zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
+  zarr_path: ../data/pusht_cchi_v7_replay.zarr
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42
-  val_ratio: 0.02
-  max_train_episodes: 90
+  # Two splits only: 50 held-out test episodes, the remaining 156 are train.
+  # Validation during training runs on the 50 test episodes.
+  n_test_episodes: 50
+  n_train_episodes: null
+  split: train
+  max_train_episodes: null
+  # fraction of the 156 train episodes to actually train on (0.2 -> 31 episodes).
+  # The 50 test episodes are never subsampled.
+  train_ratio: 0.2

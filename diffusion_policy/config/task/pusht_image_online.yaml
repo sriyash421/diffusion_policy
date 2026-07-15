@@ -1,0 +1,50 @@
+name: pusht_image_online
+
+image_shape: &image_shape [3, 96, 96]
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  # NOTE: block_pos is emitted by the dataset (reset-only) but deliberately kept out of
+  # shape_meta so the encoder never sees it; feedback (goal-relative) is the policy input.
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+    agent_pos:
+      shape: [2]
+      type: low_dim
+    feedback:
+      shape: [16]
+      type: low_dim
+  action:
+    shape: [2]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
+  zarr_path: /home/sriyash/Projects/gym-pusht/data/pusht_cchi_v7_replay.zarr
+  seed: 42
+  n_test_episodes: 50
+  n_train_episodes: 150
+  n_vis: 4
+  legacy: False
+  max_steps: 300
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  render_size: 96
+  past_action: ${past_action_visible}
+  n_envs: null
+
+dataset:
+  _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
+  zarr_path: /home/sriyash/Projects/gym-pusht/data/pusht_cchi_v7_replay.zarr
+  # return_sequences yields one full-episode sample per episode; horizon only needs
+  # to satisfy the >=100 guard (the real length is the episode length).
+  horizon: ${dataset_horizon}
+  pad_before: 0
+  pad_after: 0
+  seed: 42
+  n_train_episodes: 150
+  n_test_episodes: 50
+  split: train
+  train_ratio: 0.2
+  return_sequences: True

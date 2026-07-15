@@ -1,0 +1,127 @@
+defaults:
+  - _self_
+  - task: pusht_image_online
+
+name: train_online_search
+_target_: diffusion_policy.workspace.train_online_search_workspace.TrainOnlineSearchWorkspace
+output_dir: null
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+# the policy is single-step (horizon=1); the dataset runs return_sequences over full
+# episodes, so it uses a separate (>=100) horizon just to satisfy the guard.
+horizon: 1
+n_obs_steps: 1
+n_action_steps: 1
+n_latency_steps: 0
+dataset_horizon: 2048
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+
+policy:
+  _target_: diffusion_policy.policy.online_search_policy.OnlineSearchPolicy
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: IMAGENET1K_V1
+    resize_shape: null
+    crop_shape: null
+    random_crop: False
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  hidden_dim: 256
+  hidden_depth: 4
+  n_head: 4
+  # GPT2 positional embeddings must cover context (n_trajs rollouts) + expert length
+  n_positions: ${eval:'${policy.n_trajs} * ${policy.max_rollout_steps} + 512'}
+  # context rollouts: n_trajs=0 => pure BC (no env). Set >0 to condition on on-policy
+  # rollouts (built with n_envs parallel PushT envs, up to max_rollout_steps each).
+  n_trajs: 8
+  n_envs: 32
+  max_rollout_steps: 300
+  use_async_envs: True
+
+dataloader:
+  # full-episode sequences are long (images), so keep the batch small
+  batch_size: 8
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+  drop_last: True
+
+val_dataloader:
+  batch_size: 8
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+  drop_last: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda"
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_outer_steps: 100
+  outer_batch_size: 128
+  inner_batch_size: 8
+  num_inner_steps: 100
+  min_context_trajs: 0
+  max_context_trajs: ${policy.n_trajs}
+  gradient_clip_norm: 1.0
+  freeze_encoder: False
+  rollout_every: 10
+  checkpoint_every: 20
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: pusht_online_search
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: train_action_mse_error
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-train_action_mse_error={train_action_mse_error:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

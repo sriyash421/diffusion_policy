@@ -153,6 +153,9 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # save batch for sampling
         train_sampling_batch = None
 
+        # when set, rollouts are triggered on gradient steps instead of epochs
+        rollout_every_steps = cfg.training.get('rollout_every_steps', None)
+
         if cfg.training.debug:
             cfg.training.num_epochs = 2
             cfg.training.max_train_steps = 3
@@ -219,14 +222,32 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                 if cfg.checkpoint.save_last_snapshot:
                                     self.save_snapshot()
 
-                                # Save checkpoint for this step
-                                step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
-                                os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
-                                self.save_checkpoint(path=step_ckpt_path)
+                                # Save a per-step checkpoint. These are ~4.6GB each, so
+                                # save_step_ckpt=False keeps only the rolling latest.ckpt.
+                                if cfg.checkpoint.get('save_step_ckpt', True):
+                                    step_ckpt_path = os.path.join(self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
+                                    os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
+                                    self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
                                 # Update last checkpoint step
                                 self.last_checkpoint_step = self.global_step
+
+                            # rollout eval on a gradient-step schedule, so evals land
+                            # on exact step multiples rather than epoch boundaries
+                            if (rollout_every_steps is not None) \
+                                and (self.global_step % rollout_every_steps == 0):
+                                eval_policy = self.accelerator.unwrap_model(self.model)
+                                if cfg.training.use_ema:
+                                    eval_policy = self.ema_model
+                                eval_policy.eval()
+                                eval_log = dict(env_runner.run(eval_policy))
+                                if self.accelerator.is_main_process:
+                                    wandb_run.log(eval_log, step=self.global_step)
+                                    json_logger.log({**eval_log,
+                                        'global_step': self.global_step,
+                                        'epoch': self.epoch})
+                                self.model.train()
 
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
@@ -241,8 +262,9 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     policy = self.ema_model
                 policy.eval()
 
-                # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                # run rollout (epoch schedule; null when rollout_every_steps is used)
+                if (cfg.training.rollout_every is not None) \
+                    and (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)
@@ -303,7 +325,10 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
-        self.accelerator.end_training()
+        # trackers only exist if the Accelerator was built with log_with=; this repo
+        # logs to wandb directly, so end_training() would raise on an empty tracker list
+        if getattr(self.accelerator, 'trackers', None):
+            self.accelerator.end_training()
 
 @hydra.main(
     version_base=None,

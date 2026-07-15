@@ -55,6 +55,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
+        # obs keys this policy actually consumes; anything else in the obs dict
+        # (e.g. block_pos, which only rides along to seed env resets) is dropped
+        # before normalize/encode.
+        self.obs_keys = tuple(shape_meta['obs'].keys())
         self.obs_encoder = obs_encoder
         self.model = model
         self.noise_scheduler = noise_scheduler
@@ -119,6 +123,12 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         return trajectory
 
 
+    def _select_obs(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Keep only the obs keys declared in shape_meta."""
+        missing = [k for k in self.obs_keys if k not in obs_dict]
+        assert not missing, f'obs missing shape_meta keys: {missing}'
+        return {k: obs_dict[k] for k in self.obs_keys}
+
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -126,7 +136,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         """
         assert 'past_action' not in obs_dict # not implemented yet
         # normalize input
-        nobs = self.normalizer.normalize(obs_dict)
+        nobs = self.normalizer.normalize(self._select_obs(obs_dict))
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -191,7 +201,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
-        nobs = self.normalizer.normalize(batch['obs'])
+        nobs = self.normalizer.normalize(self._select_obs(batch['obs']))
         nactions = self.normalizer['action'].normalize(batch['action'])
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
