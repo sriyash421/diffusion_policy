@@ -131,8 +131,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             lr_decay_steps = (
                 len(train_dataloader) * cfg.training.num_epochs) \
                     // cfg.training.gradient_accumulate_every
-        lr_scheduler_kwargs = OmegaConf.to_container(
-            cfg.training.get('lr_scheduler_kwargs', {}), resolve=True) or {}
+        _lsk = cfg.training.get('lr_scheduler_kwargs', None)
+        lr_scheduler_kwargs = (OmegaConf.to_container(_lsk, resolve=True)
+                               if _lsk is not None else {})
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
@@ -173,6 +174,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
         # save batch for sampling
         train_sampling_batch = None
+        val_sampling_batch = None
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
@@ -276,6 +278,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
+                                if val_sampling_batch is None:
+                                    val_sampling_batch = batch      # first val batch -> val action-MSE sampling
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                                 loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
                                 val_losses.append(loss)
@@ -304,17 +308,73 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             result = policy.predict_action({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
                             pred_action, values = result
                             pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
+                            # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).
                             mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions
                             min_mse, _ = torch.min(mse, dim=-1) # B
                             avg_mse = mse.mean(dim=-1) # B
+                            # NORMALIZED: per-dim [-1,1] space (the space the loss is computed in).
+                            na = policy.normalizer['action']
+                            mse_n = (na.normalize(pred_action) - na.normalize(gt_action).unsqueeze(1)).pow(2).mean(dim=(-1, -2))
+                            min_n, _ = torch.min(mse_n, dim=-1) # B
+                            avg_n = mse_n.mean(dim=-1) # B
                             step_log['train_action_mse_error_min'] = min_mse.mean().item()
                             step_log['train_action_mse_error_avg'] = avg_mse.mean().item()
+                            step_log['train_action_mse_error_min_unnormalized'] = min_mse.mean().item()
+                            step_log['train_action_mse_error_avg_unnormalized'] = avg_mse.mean().item()
+                            step_log['train_action_mse_error_min_normalized'] = min_n.mean().item()
+                            step_log['train_action_mse_error_avg_normalized'] = avg_n.mean().item()
                             step_log['train_action_value'] = values.mean().item()
                         else:
                             result = policy.predict_action(obs_dict)
                             pred_action = result['action']
                             mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                             step_log['train_action_mse_error'] = mse.item()
+                        del batch
+                        del obs_dict
+                        del gt_action
+                        del result
+                        del pred_action
+                        del mse
+
+                # run sampling on a VALIDATION batch -> val action MSE (mirrors the
+                # train_action_mse_error above, but on held-out data). This is the
+                # action-space error (sampled action vs expert), complementing
+                # val_loss which is only the denoising/epsilon MSE.
+                if (self.epoch % cfg.training.sample_every) == 0 and val_sampling_batch is not None:
+                    with torch.no_grad():
+                        batch = dict_apply(val_sampling_batch, lambda x: x.to(device, non_blocking=True))
+                        obs_dict = batch['obs']
+                        gt_action = batch['action'][
+                            :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
+                        ]
+                        if batch.get('attention_mask', None) is not None:
+                            obs_dict['attention_mask'] = batch['attention_mask']
+
+                        if hasattr(policy, 'verifier'):
+                            result = policy.predict_action({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
+                            pred_action, values = result
+                            pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
+                            # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).
+                            mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions
+                            min_mse, _ = torch.min(mse, dim=-1) # B
+                            avg_mse = mse.mean(dim=-1) # B
+                            # NORMALIZED: per-dim [-1,1] space (the space the loss is computed in).
+                            na = policy.normalizer['action']
+                            mse_n = (na.normalize(pred_action) - na.normalize(gt_action).unsqueeze(1)).pow(2).mean(dim=(-1, -2))
+                            min_n, _ = torch.min(mse_n, dim=-1) # B
+                            avg_n = mse_n.mean(dim=-1) # B
+                            step_log['val_action_mse_error_min'] = min_mse.mean().item()
+                            step_log['val_action_mse_error_avg'] = avg_mse.mean().item()
+                            step_log['val_action_mse_error_min_unnormalized'] = min_mse.mean().item()
+                            step_log['val_action_mse_error_avg_unnormalized'] = avg_mse.mean().item()
+                            step_log['val_action_mse_error_min_normalized'] = min_n.mean().item()
+                            step_log['val_action_mse_error_avg_normalized'] = avg_n.mean().item()
+                            step_log['val_action_value'] = values.mean().item()
+                        else:
+                            result = policy.predict_action(obs_dict)
+                            pred_action = result['action']
+                            mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                            step_log['val_action_mse_error'] = mse.item()
                         del batch
                         del obs_dict
                         del gt_action

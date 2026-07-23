@@ -103,6 +103,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             obs_noise_level: Optional[float] = None,
             mask_obs: bool = False,
             concat_obs: bool = False,
+            pg_lambda: float = 0.0,
             **kwargs):
         super().__init__()
         action_shape = shape_meta['action']['shape']
@@ -125,6 +126,8 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
         self.verifier = verifier
+        # Opt-in REINFORCE/advantage policy-gradient term (0.0 -> pure BC).
+        self._pg_lambda = float(pg_lambda)
         _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps)
         self.kwargs = kwargs
         self.mask_obs = mask_obs
@@ -421,6 +424,29 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         target_actions = target_actions.unsqueeze(1).expand(-1, self.max_actions, -1, -1) # B, max_actions, horizon, action_dim
         log_prob = dist.log_prob(target_actions).sum(dim=(-1, -2)) # B, max_actions
         loss = -log_prob.mean()
+
+        # --- Opt-in advantage policy-gradient term (REINFORCE on policy samples) ---
+        # grad = E[ grad_logpi(a_pi) * (Q(s, a_pi) - Q(s, a*)) ]; a* = expert action
+        # is the baseline, Q is the FROZEN verifier (scalar coefficient, stop-grad —
+        # no backprop through Q). Added to the BC loss as loss = loss_BC + lambda*loss_PG.
+        if self._pg_lambda > 0.0:
+            ma = self.max_actions
+            a_pi_n = dist.sample()                                    # (B, ma, T, Da) normalized, fixed sample
+            a_pi_raw = self.normalizer['action'].unnormalize(a_pi_n)  # raw action space for the verifier
+            img_key = getattr(self.verifier, 'image_obs_key', 'agentview_image')
+            img = batch['obs'][img_key]                              # (B, To, ...)
+            img_rep = img.unsqueeze(1).expand(B, ma, *img.shape[1:]).reshape(B * ma, *img.shape[1:])
+            with torch.no_grad():
+                q_pi = self.verifier.get_value(
+                    {img_key: img_rep}, a_pi_raw.reshape(B * ma, T, Da)
+                ).reshape(B, ma).to(loss.device)
+                q_star = self.verifier.get_value(
+                    {img_key: img}, batch['action']
+                ).reshape(B, 1).to(loss.device)
+            adv = (q_pi - q_star).detach()                           # (B, ma) frozen advantage
+            logp_pi = dist.log_prob(a_pi_n).sum(dim=(-1, -2))        # (B, ma)
+            loss_pg = -(adv * logp_pi).mean()
+            loss = loss + self._pg_lambda * loss_pg
         return loss
 
 
@@ -454,6 +480,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             causal_attn: bool = True,
             corrupt_obs: bool = False,
             obs_noise_level: Optional[float] = None,
+            pg_lambda: float = 0.0,
+            pg_mode: str = 'reinforce',
             **kwargs,
         ):
         super().__init__()
@@ -480,6 +508,12 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         self.max_actions = max_actions
         self.kwargs = kwargs
         self.step_kwargs = kwargs.get('scheduler_step_kwargs', dict())
+        # Opt-in REINFORCE/advantage policy-gradient term (0.0 -> pure BC).
+        # pg_mode selects how the frozen-verifier advantage enters the loss:
+        #   'reinforce' -> REINFORCE on the policy sample a_pi (original behavior)
+        #   'awbc'      -> advantage-weighted imitation of the expert a*
+        self._pg_lambda = float(pg_lambda)
+        self._pg_mode = str(pg_mode)
 
         self.model = SearchTransformerForDiffusion(
             action_dim=action_dim,
@@ -567,15 +601,24 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             values: Optional[torch.Tensor] = None,
             context_lengths: Optional[torch.Tensor] = None,
             generator=None,
+            noise: Optional[torch.Tensor] = None,
             **kwargs,
         ) -> torch.Tensor:
         scheduler = self.noise_scheduler
-        trajectory = torch.randn(
-            size=(obs_cond.shape[0], self.horizon, self.action_dim),
-            dtype=obs_cond.dtype,
-            device=obs_cond.device,
-            generator=generator,
-        )
+        # `noise`, when provided, is the initial trajectory (DDIM is deterministic
+        # from here, so this fully determines the candidate). The search harness
+        # uses it to seed candidate generation PER-ENV in tiled/batched rollouts so
+        # each episode's noise is anchored to its own seed (not its batch position),
+        # matching the single-env path. None -> draw from the (seeded) global RNG.
+        if noise is not None:
+            trajectory = noise.to(dtype=obs_cond.dtype, device=obs_cond.device)
+        else:
+            trajectory = torch.randn(
+                size=(obs_cond.shape[0], self.horizon, self.action_dim),
+                dtype=obs_cond.dtype,
+                device=obs_cond.device,
+                generator=generator,
+            )
 
         scheduler.set_timesteps(self.num_inference_steps)
         for t in scheduler.timesteps:
@@ -601,6 +644,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             obs_dict: Dict[str, torch.Tensor],
             actions: Optional[torch.Tensor] = None,
             values: Optional[torch.Tensor] = None,
+            noise: Optional[torch.Tensor] = None,
         ) -> Dict[str, torch.Tensor]:
         assert 'past_action' not in obs_dict
         obs_cond = self.encode_obs_cond(obs_dict)
@@ -608,6 +652,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             obs_cond=obs_cond,
             actions=actions,
             values=values,
+            noise=noise,
             **self.step_kwargs,
         )
         action_pred = self.normalizer['action'].unnormalize(nsample)
@@ -625,14 +670,18 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             obs_dict: Dict[str, torch.Tensor],
             verifier,
             n_actions,
+            noise_seq: Optional[torch.Tensor] = None,
         ):
+        # noise_seq: optional (n_actions, B, horizon, action_dim) per-candidate init
+        # noise. Candidate i uses noise_seq[i] (else the seeded global RNG).
         actions = None
         values = None
-        for _ in range(n_actions):
+        for _i in range(n_actions):
             new_action = self._predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
+                noise=(noise_seq[_i] if noise_seq is not None else None),
             )['action_pred']
             new_value = verifier.get_value(obs_dict, new_action)
             if actions is None:
@@ -649,21 +698,28 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             obs_dict: Dict[str, torch.Tensor],
             verifier,
             n_actions,
+            noise_seq: Optional[torch.Tensor] = None,
         ):
+        # noise_seq: optional (n_actions, B, horizon, action_dim) per-candidate init
+        # noise (see conditional_sample). Drives per-env-seeded candidate generation
+        # so tiled/batched rollouts are reproducible + decorrelated across episodes.
         if n_actions <= self.max_actions:
-            return self.predict_action(obs_dict, verifier, n_actions)
+            return self.predict_action(obs_dict, verifier, n_actions, noise_seq=noise_seq)
 
-        actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
+        actions, values = self.predict_action(
+            obs_dict, verifier, self.max_actions,
+            noise_seq=(noise_seq[:self.max_actions] if noise_seq is not None else None))
         all_actions = actions.clone()
         all_values = values.clone()
 
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
-        for _ in range(self.max_actions, n_actions):
+        for _j in range(self.max_actions, n_actions):
             new_action = self._predict_action(
                 obs_dict,
                 actions=action_history,
                 values=value_history,
+                noise=(noise_seq[_j] if noise_seq is not None else None),
             )['action_pred']
             new_value = verifier.get_value(obs_dict, new_action)
 
@@ -738,9 +794,56 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
-        loss = F.mse_loss(pred, target, reduction='none')
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        return loss.mean()
+        loss_b = reduce(
+            F.mse_loss(pred, target, reduction='none'), 'b ... -> b', 'mean'
+        )                                                              # (B,) per-sample BC loss
+        loss = loss_b.mean()
+
+        # --- Opt-in advantage policy-gradient term (frozen DQC verifier in the loss) ---
+        # Both modes use the frozen verifier's Q as a stop-grad scalar (no backprop
+        # through Q); a* = expert action, a_pi = the policy's OWN sample:
+        #   'reinforce' (default, original): REINFORCE on a_pi with advantage
+        #       Q(a_pi)-Q(a*), realized as advantage-weighted denoising loss on a_pi
+        #       re-noised at an independent timestep t2. adv>0 -> lower a_pi's
+        #       denoising loss -> raise pi(a_pi).
+        #   'awbc': advantage-weighted imitation of the EXPERT,
+        #       grad = E[ grad_logpi(a*) * (Q(a*)-Q(a_pi)) ], realized as the
+        #       per-sample BC denoising loss on a* weighted by the clamped
+        #       expert-over-policy advantage. The weight -> 0 once the policy matches
+        #       a*'s Q; clamp>=0 so an over-optimistic critic cannot push pi AWAY
+        #       from the expert.
+        if self._pg_lambda > 0.0:
+            img_key = getattr(self.verifier, 'image_obs_key', 'agentview_image')
+            img = batch['obs'][img_key]
+            with torch.no_grad():
+                na_pi = self.conditional_sample(
+                    obs_cond, actions=actions, values=values, **self.step_kwargs
+                )                                                       # (B, T, Da) normalized
+                a_pi_raw = self.normalizer['action'].unnormalize(na_pi)
+                q_pi = self.verifier.get_value({img_key: img}, a_pi_raw)            # (B,)
+                q_star = self.verifier.get_value({img_key: img}, batch['action'])  # (B,)
+            if self._pg_mode == 'awbc':
+                w = (q_star - q_pi).clamp(min=0.0).detach().to(loss.device)  # (B,) >= 0
+                loss_pg = (w * loss_b).mean()
+                loss = loss + self._pg_lambda * loss_pg
+            else:
+                adv = (q_pi - q_star).detach().to(loss.device)          # (B,) frozen advantage
+                na_pi = na_pi.detach()
+                noise2 = torch.randn_like(na_pi)
+                t2 = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps,
+                    (B,), device=na_pi.device,
+                ).long()
+                noisy2 = self.noise_scheduler.add_noise(na_pi, noise2, t2)  # (B, T, Da)
+                pred2 = self.model(
+                    noisy2.unsqueeze(1), t2.unsqueeze(1),
+                    obs_cond=obs_cond, actions=actions, values=values,
+                )                                                           # (B, 1, T, Da)
+                tgt2 = (noise2 if pred_type == 'epsilon' else na_pi).unsqueeze(1)
+                mse2 = reduce(F.mse_loss(pred2, tgt2, reduction='none'), 'b ... -> b', 'mean')
+                loss_pg = (adv * mse2).mean()
+                loss = loss + self._pg_lambda * loss_pg
+        return loss
 
 
 class BCSearchWrapper(nn.Module):
@@ -814,6 +917,39 @@ class BCSearchWrapper(nn.Module):
 
         execs = torch.stack(exec_list, dim=1)      # (B, N, S, 7)
         S = execs.shape[2]
+
+        if score_mode == "chunk_critic":
+            # REAL DQC chunk critic: score each candidate's whole S-step executed
+            # window in ONE verifier forward (the verifier flattens the S steps
+            # into a 56-D action and calls the chunk_critic head). No per-step
+            # aggregation. Needs S == chunk_horizon (8) and the verifier in
+            # score_full_horizon mode (idxs=range(S)).
+            assert B == 1, "BCSearchWrapper chunk scoring assumes rollout B=1"
+            chunk_h = int(getattr(verifier, "chunk_horizon", S))
+            img_key = getattr(verifier, "image_obs_key", None)
+            img = obs_dict[img_key]
+            batched_img = img.expand(N, *img.shape[1:])
+            if _os.environ.get("BC_CHUNK_FROM_PRED", "0") == "1":
+                # Score the first chunk_h PREDICTED actions as the chunk, decoupled
+                # from rollout (mirrors the native search policy's score_full_horizon).
+                # Lets rollout (n_action_steps) < chunk_h -- e.g. the H8 BC: predict 8,
+                # score all 8, execute 4. NOTE: with n_obs_steps>1 (pad_before>0) the
+                # predicted chunk is shifted ~1 step early vs the verifier's a_{t:t+8},
+                # but the shift is identical across candidates so BoN ranking is sound.
+                H = int(actions.shape[2])
+                assert H >= chunk_h, (
+                    f"BC_CHUNK_FROM_PRED needs predicted horizon >= chunk_h={chunk_h}, "
+                    f"got H={H}.")
+                chunk_acts = actions[0][:, :chunk_h, :]              # (N, chunk_h, 7)
+                chunk_vals = verifier.get_value({img_key: batched_img}, chunk_acts)
+            else:
+                # REAL DQC chunk critic on the S-step executed window (S == chunk_h).
+                assert S == chunk_h, (
+                    f"chunk_critic needs S={chunk_h} executed steps, got S={S}; set "
+                    f"N_ACTION_STEPS={chunk_h} or BC_CHUNK_FROM_PRED=1 (score predicted).")
+                chunk_vals = verifier.get_value({img_key: batched_img}, execs[0])  # (N,)
+            return actions, chunk_vals.unsqueeze(0)    # (B=1, N)
+
         if score_mode == "exec":
             sel = execs[:, :, step:step + 1, :]    # (B, N, 1, 7)
             steps_to_score = [step]

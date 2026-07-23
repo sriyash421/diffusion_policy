@@ -137,6 +137,7 @@ class DQCVerifier:
         score_full_horizon: bool = False,
         action_chunk_index: int = -1,
         chunk_horizon: Optional[int] = None,
+        restore_epoch: Optional[int] = None,
         discount: float = 0.98,
         q_agg: str = "min",
         image_hw: tuple = (224, 224),
@@ -169,6 +170,10 @@ class DQCVerifier:
         self.score_batch = int(enc_batch)  # sub-batch B to bound JAX GPU memory
         self.image_hw = (int(image_hw[0]), int(image_hw[1]))
         self._chunk_horizon_cfg = int(chunk_horizon) if chunk_horizon is not None else None
+        # Which params_<epoch>.pkl to restore. Base ckpt is 100000; a finetuned run
+        # restarts step numbering at 0, so allow an override (arg or DQC_RESTORE_EPOCH).
+        self._restore_epoch = int(restore_epoch if restore_epoch is not None
+                                  else os.environ.get("DQC_RESTORE_EPOCH", "100000"))
         self._cache_size = int(image_feat_cache_size)
         self._enc_cache: "OrderedDict[bytes, np.ndarray]" = OrderedDict()  # frame -> (num_qs,512)
 
@@ -248,7 +253,7 @@ class DQCVerifier:
             "valids": np.ones((1, H), np.float32), "mc_returns": np.zeros((1,), np.float32),
         }
         agent = BridgeDQCChunkAgent.create(0, ex, cfg)
-        agent = restore_agent(agent, ckpt_dir, 100000)
+        agent = restore_agent(agent, ckpt_dir, self._restore_epoch)
         self._cfg = cfg
         return agent, H
 

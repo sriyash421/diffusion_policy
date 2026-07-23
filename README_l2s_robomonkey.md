@@ -40,6 +40,11 @@ Conda envs:
 - `simpler_env` — SIMPLER + zarr + diffusion_policy training
 - `sglang-vla` — OpenVLA action server (data collection only)
 - `monkey-verifier` — RoboMonkey verifier (HTTP server or in-process model)
+- `dqc` — REAL DQC **chunk-critic** verifier (flax/jax `BridgeDQCChunkAgent`) +
+  the diffusion_policy trainer (torch) in ONE env. Used by the
+  `robomonkey_eggplant_search_dqc` (conditional-diffusion) and
+  `robomonkey_eggplant_search_dqc_gaussian` configs, via
+  `scriptsv2/train_search/train_dqc_chunk.sbatch`.
 
 ---
 
@@ -47,8 +52,16 @@ Conda envs:
 
 ```bash
 cd ~/RoboMonkey
-bash scripts/setup.sh   # creates simpler_env, sglang-vla, monkey-verifier envs
+bash scripts/setup.sh          # creates simpler_env, sglang-vla, monkey-verifier envs
+bash scriptsv2/setup_dqc_env.sh   # creates the `dqc` env (torch + jax0.4.28/flax0.8.5 + distrax + trainer deps)
 ```
+
+> The `dqc` env is bespoke: the DQC verifier loads the real flax/jax model
+> **in-process** with the torch trainer, so one env needs both stacks. None of the
+> existing envs work (`dqc_jax` has jax 0.6.2 which breaks the repo's flax;
+> `dqc_repo` lacks torch; `simpler_env` has flax 0.8.1). `setup_dqc_env.sh`
+> documents the exact pins (torch cu121 to share jax's cuDNN 8.9; numpy<2 for
+> jax/numba; hydra 1.3.2 for py3.11; skip robomimic/imagecodecs).
 
 ---
 
@@ -317,6 +330,35 @@ python diffusion_policy/workspace/train_mlp_image_workspace.py \
     training.max_train_steps=1 logging.mode=disabled
 ```
 
+### 3e. DQC chunk-critic verifier — gaussian + conditional-diffusion
+
+Train a search policy supervised by the **real DQC 8-step chunk critic**
+(`BridgeDQCChunkAgent`) instead of LLaVA. The policy predicts an 8-action chunk
+from the current frame (`horizon=8`, `n_obs_steps=1`), executes the first 4
+(`n_action_steps=4`), and the chunk critic scores **all 8** predicted actions as
+one chunk (`critic_type=chunk`, `score_full_horizon=True`). Runs in the **`dqc`**
+env (torch + jax0.4.28/flax0.8.5; build with `scriptsv2/setup_dqc_env.sh`, or the
+already-extended `dqc_repo`). No sim needed for training.
+
+```bash
+# conditional-diffusion variant (config robomonkey_eggplant_search_dqc):
+sbatch --account=weirdlab --partition=gpu-l40 --gres=gpu:l40:1 --cpus-per-task=12 \
+    --export=ALL,CONFIG=robomonkey_eggplant_search_dqc \
+    scriptsv2/train_search/train_dqc_chunk.sbatch
+
+# transformer/gaussian variant (config robomonkey_eggplant_search_dqc_gaussian):
+sbatch --account=weirdlab --partition=gpu-l40 --gres=gpu:l40:1 --cpus-per-task=12 \
+    --export=ALL,CONFIG=robomonkey_eggplant_search_dqc_gaussian \
+    scriptsv2/train_search/train_dqc_chunk.sbatch
+```
+
+The launcher overrides `policy.verifier.ckpt_dir` to the real checkpoint on
+gscratch (the config's `/home/...` path doesn't resolve on the cluster) and names
+the wandb run `eggplant_{gaussian,diffusion}_dqc_chunk8_hyak_predhorizon8_rollout4`
+(wandb project `dqc_search_policy`). **CPU sizing:** request ≤ the partition's
+CPU/GPU ratio (a100/a40 = 6.5, l40/l40s = 16) so a 1-GPU job doesn't strand the
+other GPUs — 12 CPU on l40/l40s is well-fed and non-blocking.
+
 ### Output dir per run
 
 ```
@@ -423,3 +465,40 @@ only the first N episodes.
 
 For Best-of-N action verification at eval time, see §4d in
 [~/RoboMonkey/README_L2S.md](file:///home/harine/RoboMonkey/README_L2S.md).
+
+---
+
+### 4c. BC + DQC chunk-critic Best-of-N sweep
+
+Evaluate the **frozen BC diffusion ckpt** with the **real DQC chunk critic** as
+the Best-of-N verifier (the task-4 sweep). The BC policy draws N candidate
+chunks; the DQC chunk critic scores the whole executed 8-step window of each in
+ONE forward (`BC_VERIFIER_SCORE=chunk_critic`); softmax/argmax picks one.
+
+> **Eval env (NOT the training env):** the eval also runs the **SimplerEnv sim**
+> to roll out episodes, which the lean `dqc_repo` training env lacks. Use a
+> **simpler_env-derived env that also has the repo's jax** — built by cloning
+> `simpler_env` (sim + torch + gymnasium 0.29.1 + numpy 1.26.4) and downgrading
+> its jax 0.6.2 → 0.4.28 / flax → 0.8.5 + distrax (the sim doesn't use jax, so the
+> swap is safe). Pass it via `CONDA_ENV=<that env>`.
+
+```bash
+# Full sweep N = 2^0..2^9, 50 ep/cell, softmax, ddpm sampler (diverse candidates).
+# rollout 8 (N_ACTION_STEPS=8) so the chunk critic gets its 8-step chunk.
+sbatch --account=weirdlab --partition=gpu-l40s --gres=gpu:l40s:3 --cpus-per-task=18 \
+    --export=ALL,CONDA_ENV=<simpler_env+jax eval env>,NUM_WORKERS=3 \
+    scriptsv2/eval_search/sweep_bc_dqcchunk.sbatch
+
+# Smoke (1 cell, 2 episodes) to validate wiring first:
+sbatch --account=cse --partition=gpu-a100 --gres=gpu:a100:1 --cpus-per-task=6 \
+    --time=01:00:00 \
+    --export=ALL,CONDA_ENV=<eval env>,N_LIST=4,NUM_EPISODES=2,NUM_WORKERS=1,BC_LABEL=bc_dqcchunk_smoke \
+    scriptsv2/eval_search/sweep_bc_dqcchunk.sbatch
+```
+
+Key env (set in `sweep_bc_dqcchunk.sbatch`): `VERIFIER_TYPE=dqc`,
+`DQC_CRITIC_TYPE=chunk`, `N_ACTION_STEPS=8`, `BC_SAMPLER=ddpm`, `MODE=softmax`,
+`DQC_CKPT_DIR=<gscratch ckpt>`, `DQC_TEXT_EMB=scriptsv2/q_fn_eval/task_emb_use3.npy`.
+Per-cell results land in `data/eval/search_bc_sweep/<BC_LABEL>/.../eval_log.json`;
+the driver prints a success-rate-vs-N table. **CPU sizing:** 3 workers × ~6 CPU
+on l40s (ratio 16) is non-blocking; for a40/a100 (ratio 6.5) keep ≤ ~5 CPU/worker.
