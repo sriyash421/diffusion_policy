@@ -508,7 +508,23 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             ).prev_sample
         return trajectory
 
-    def _predict_action(
+    def _normalize_context_actions(self, actions):
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        scores them there and the env executes them. But the model is trained against a
+        NORMALIZED target, so handing it raw actions puts the two halves of the
+        action+value context on wildly different scales. Normalizing here -- at the model
+        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
+
+        Matches the convention already used for the policy-gradient branch, which keeps a
+        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: Optional[torch.Tensor] = None,
@@ -518,7 +534,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         obs_cond = self.encode_obs_cond(obs_dict)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
             **self.step_kwargs,
         )
@@ -532,7 +548,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             'action_pred': action_pred,
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
@@ -541,7 +557,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         actions = None
         values = None
         for _ in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
@@ -563,16 +579,16 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             n_actions,
         ):
         if n_actions <= self.max_actions:
-            return self.predict_action(obs_dict, verifier, n_actions)
+            return self.search_candidates(obs_dict, verifier, n_actions)
 
-        actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
+        actions, values = self.search_candidates(obs_dict, verifier, self.max_actions)
         all_actions = actions.clone()
         all_values = values.clone()
 
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
         for _ in range(self.max_actions, n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=action_history,
                 values=value_history,
@@ -597,7 +613,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         obs_cond = self.encode_obs_cond(batch['obs'])
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
+            actions, values = self.search_candidates(
                 batch['obs'],
                 verifier=self.verifier,
                 n_actions=self.max_actions - 1,
@@ -637,7 +653,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             noisy_trajectory,
             timesteps,
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
         )
 

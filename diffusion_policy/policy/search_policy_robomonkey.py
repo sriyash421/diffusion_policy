@@ -51,7 +51,7 @@ def _run_search(policy, obs_dict, n_actions, **predict_kwargs):
     enabled = (_os.environ.get("ROBOMONKEY_KV_PREFIX", "0") == "1"
                and getattr(verifier, "supports_kv_prefix", False) and chunk > 0)
     if not enabled:
-        return policy.predict_action(
+        return policy.search_candidates(
             obs_dict, verifier=verifier, n_actions=n_actions, **predict_kwargs)
 
     B = None
@@ -63,7 +63,7 @@ def _run_search(policy, obs_dict, n_actions, **predict_kwargs):
         verifier.set_kv_prefix(True)
         try:
             verifier.clear_prefix_cache()
-            return policy.predict_action(
+            return policy.search_candidates(
                 obs_dict, verifier=verifier, n_actions=n_actions, **predict_kwargs)
         finally:
             verifier.set_kv_prefix(False)
@@ -79,7 +79,7 @@ def _run_search(policy, obs_dict, n_actions, **predict_kwargs):
             sub_kw = {k: (v[s:e] if torch.is_tensor(v) else v)
                       for k, v in predict_kwargs.items()}
             verifier.clear_prefix_cache()
-            a, vv = policy.predict_action(
+            a, vv = policy.search_candidates(
                 sub_obs, verifier=verifier, n_actions=n_actions, **sub_kw)
             acts.append(a)
             vals.append(vv)
@@ -275,7 +275,23 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             std = torch.cat([first_action_std, std], dim=1)
         return Normal(mean, std) # B, T, horizon, action_dim
 
-    def _predict_action(
+    def _normalize_context_actions(self, actions):
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        scores them there and the env executes them. But the model is trained against a
+        NORMALIZED target, so handing it raw actions puts the two halves of the
+        action+value context on wildly different scales. Normalizing here -- at the model
+        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
+
+        Matches the convention already used for the policy-gradient branch, which keeps a
+        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: torch.Tensor = None,
@@ -305,6 +321,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         if actions is None:
             action_value_features = None
         else:
+            actions = self._normalize_context_actions(actions)
             actions = actions.reshape(B, actions.shape[1], -1).to(obs_features.device) # B, max_actions, horizon*action_dim
             values = values.to(obs_features.device) # B, max_actions
             action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1)
@@ -322,7 +339,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             'action_pred': action_pred
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
@@ -331,7 +348,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         actions = None
         values = None
         for _ in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values
@@ -353,15 +370,15 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             verifier,
             n_actions
     ):
-        # return self.predict_action(obs_dict, verifier, n_actions)
+        # return self.search_candidates(obs_dict, verifier, n_actions)
         if n_actions <= self.max_actions:
-            actions, values = self.predict_action(obs_dict, verifier, n_actions)
+            actions, values = self.search_candidates(obs_dict, verifier, n_actions)
             actions = actions
             values = values
             return actions, values
         else:
             # If n_actions exceeds max_actions, we can call predict_action multiple times.
-            actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
+            actions, values = self.search_candidates(obs_dict, verifier, self.max_actions)
 
             all_actions = actions.clone()
             all_values = values.clone()
@@ -369,7 +386,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             action_history = actions[:, 1:]
             value_history = values[:, 1:]
             for i in range(self.max_actions, n_actions):
-                new_action = self._predict_action(
+                new_action = self.predict_action(
                     obs_dict,
                     actions=action_history,
                     values=value_history
@@ -417,6 +434,7 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
                 self, batch['obs'], self.max_actions - 1,
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
+        actions = self._normalize_context_actions(actions)
         actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
         action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1) # B, max_actions, horizon*action_dim + 1
         action_value_features = self.act_projection(action_value_input) # B, max_actions, hidden_dim
@@ -639,7 +657,23 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             ).prev_sample
         return trajectory
 
-    def _predict_action(
+    def _normalize_context_actions(self, actions):
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        scores them there and the env executes them. But the model is trained against a
+        NORMALIZED target, so handing it raw actions puts the two halves of the
+        action+value context on wildly different scales. Normalizing here -- at the model
+        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
+
+        Matches the convention already used for the policy-gradient branch, which keeps a
+        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: Optional[torch.Tensor] = None,
@@ -650,7 +684,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         obs_cond = self.encode_obs_cond(obs_dict)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
             noise=noise,
             **self.step_kwargs,
@@ -665,7 +699,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             'action_pred': action_pred,
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
@@ -677,7 +711,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         actions = None
         values = None
         for _i in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
@@ -704,9 +738,9 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         # noise (see conditional_sample). Drives per-env-seeded candidate generation
         # so tiled/batched rollouts are reproducible + decorrelated across episodes.
         if n_actions <= self.max_actions:
-            return self.predict_action(obs_dict, verifier, n_actions, noise_seq=noise_seq)
+            return self.search_candidates(obs_dict, verifier, n_actions, noise_seq=noise_seq)
 
-        actions, values = self.predict_action(
+        actions, values = self.search_candidates(
             obs_dict, verifier, self.max_actions,
             noise_seq=(noise_seq[:self.max_actions] if noise_seq is not None else None))
         all_actions = actions.clone()
@@ -715,7 +749,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
         for _j in range(self.max_actions, n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=action_history,
                 values=value_history,
@@ -782,7 +816,7 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             noisy_trajectory,
             timesteps,
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
         )
 
@@ -817,7 +851,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             img = batch['obs'][img_key]
             with torch.no_grad():
                 na_pi = self.conditional_sample(
-                    obs_cond, actions=actions, values=values, **self.step_kwargs
+                    obs_cond, actions=self._normalize_context_actions(actions),
+                    values=values, **self.step_kwargs
                 )                                                       # (B, T, Da) normalized
                 a_pi_raw = self.normalizer['action'].unnormalize(na_pi)
                 q_pi = self.verifier.get_value({img_key: img}, a_pi_raw)            # (B,)
@@ -837,7 +872,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
                 noisy2 = self.noise_scheduler.add_noise(na_pi, noise2, t2)  # (B, T, Da)
                 pred2 = self.model(
                     noisy2.unsqueeze(1), t2.unsqueeze(1),
-                    obs_cond=obs_cond, actions=actions, values=values,
+                    obs_cond=obs_cond, actions=self._normalize_context_actions(actions),
+                    values=values,
                 )                                                           # (B, 1, T, Da)
                 tgt2 = (noise2 if pred_type == 'epsilon' else na_pi).unsqueeze(1)
                 mse2 = reduce(F.mse_loss(pred2, tgt2, reduction='none'), 'b ... -> b', 'mean')
@@ -1112,7 +1148,23 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
 
     # --- threading tcont through the prediction stack ---
 
-    def _predict_action(
+    def _normalize_context_actions(self, actions):
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        scores them there and the env executes them. But the model is trained against a
+        NORMALIZED target, so handing it raw actions puts the two halves of the
+        action+value context on wildly different scales. Normalizing here -- at the model
+        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
+
+        Matches the convention already used for the policy-gradient branch, which keeps a
+        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: Optional[torch.Tensor] = None,
@@ -1123,7 +1175,7 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
         obs_cond = self.encode_obs_cond(obs_dict, tcont_context=tcont_context)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
             **self.step_kwargs,
         )
@@ -1135,7 +1187,7 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             'action_pred': action_pred,
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
@@ -1145,7 +1197,7 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
         actions = None
         values = None
         for _ in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
@@ -1169,11 +1221,11 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             tcont_context: Optional[torch.Tensor] = None,
         ):
         if n_actions <= self.max_actions:
-            return self.predict_action(
+            return self.search_candidates(
                 obs_dict, verifier, n_actions, tcont_context=tcont_context,
             )
 
-        actions, values = self.predict_action(
+        actions, values = self.search_candidates(
             obs_dict, verifier, self.max_actions, tcont_context=tcont_context,
         )
         all_actions = actions.clone()
@@ -1181,7 +1233,7 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
         for _ in range(self.max_actions, n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=action_history,
                 values=value_history,
@@ -1241,7 +1293,7 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             noisy_trajectory,
             timesteps,
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
         )
 

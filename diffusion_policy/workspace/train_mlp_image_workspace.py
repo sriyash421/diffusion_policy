@@ -305,7 +305,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         
                         if hasattr(policy, 'verifier'):
                             # Include the expert action so ground-truth verifiers (e.g. MSEVerifier) can read it.
-                            result = policy.predict_action({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
+                            result = policy.search_candidates({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
                             pred_action, values = result
                             pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
                             # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).
@@ -351,7 +351,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             obs_dict['attention_mask'] = batch['attention_mask']
 
                         if hasattr(policy, 'verifier'):
-                            result = policy.predict_action({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
+                            result = policy.search_candidates({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
                             pred_action, values = result
                             pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
                             # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).

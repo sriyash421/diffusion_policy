@@ -177,7 +177,23 @@ class SearchPolicy(BaseImagePolicy):
             std = torch.cat([first_action_std, std], dim=1)
         return Normal(mean, std) # B, T, horizon, action_dim
 
-    def _predict_action(
+    def _normalize_context_actions(self, actions):
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        scores them there and the env executes them. But the model is trained against a
+        NORMALIZED target, so handing it raw actions puts the two halves of the
+        action+value context on wildly different scales. Normalizing here -- at the model
+        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
+
+        Matches the convention already used for the policy-gradient branch, which keeps a
+        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: torch.Tensor = None,
@@ -206,6 +222,7 @@ class SearchPolicy(BaseImagePolicy):
         if actions is None:
             action_value_features = None
         else:
+            actions = self._normalize_context_actions(actions)
             actions = actions.reshape(B, actions.shape[1], -1).to(obs_features.device) # B, max_actions, horizon*action_dim
             values = values.to(obs_features.device) # B, max_actions
             action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1)
@@ -223,7 +240,7 @@ class SearchPolicy(BaseImagePolicy):
             'action_pred': action_pred
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
@@ -232,7 +249,7 @@ class SearchPolicy(BaseImagePolicy):
         actions = None
         values = None
         for _ in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values
@@ -254,15 +271,15 @@ class SearchPolicy(BaseImagePolicy):
             verifier,
             n_actions
     ):
-        # return self.predict_action(obs_dict, verifier, n_actions)
+        # return self.search_candidates(obs_dict, verifier, n_actions)
         if n_actions <= self.max_actions:
-            actions, values = self.predict_action(obs_dict, verifier, n_actions)
+            actions, values = self.search_candidates(obs_dict, verifier, n_actions)
             actions = actions
             values = values
             return actions, values
         else:
             # If n_actions exceeds max_actions, we can call predict_action multiple times.
-            actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
+            actions, values = self.search_candidates(obs_dict, verifier, self.max_actions)
 
             all_actions = actions.clone()
             all_values = values.clone()
@@ -270,7 +287,7 @@ class SearchPolicy(BaseImagePolicy):
             action_history = actions[:, 1:]
             value_history = values[:, 1:]
             for i in range(self.max_actions, n_actions):
-                new_action = self._predict_action(
+                new_action = self.predict_action(
                     obs_dict,
                     actions=action_history,
                     values=value_history
@@ -314,12 +331,13 @@ class SearchPolicy(BaseImagePolicy):
         obs_features = self.obs_projection(obs_features) # B, hidden_dim
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
+            actions, values = self.search_candidates(
                 batch['obs'],
                 verifier=self.verifier,
                 n_actions=self.max_actions-1
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
+        actions = self._normalize_context_actions(actions)
         actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
         action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1) # B, max_actions, horizon*action_dim + 1
         action_value_features = self.act_projection(action_value_input) # B, max_actions, hidden_dim
