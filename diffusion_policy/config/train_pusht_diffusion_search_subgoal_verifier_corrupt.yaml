@@ -1,0 +1,24 @@
+# Corruption ablation, GOAL+VERIFIER arm (search_context: subgoal_value, corrupt_obs: True).
+#
+# Row 2 of the 3x2 matrix. Inherits train_pusht_diffusion_search_subgoal_verifier and flips
+# exactly one key, so this and its clean sibling differ only in `corrupt_obs`.
+#
+# Context per candidate: the encoded subgoal observation PLUS the verifier scalar. The
+# scalar is rescaled onto the fitted feedback scale before it enters the context
+# (PushTDiffusionSearchPolicy._normalize_value) so it cannot dominate the embedding it is
+# concatenated with; candidate *ranking* still uses the raw scalar, so rollout/eval stays
+# comparable with every other arm.
+#
+# See train_pusht_diffusion_search_corrupt.yaml for why the corrupt row is the informative
+# one: on a fully-observed task the clean row's context is provably redundant.
+defaults:
+  - train_pusht_diffusion_search_subgoal_verifier
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_verifier_corrupt
+
+policy:
+  corrupt_obs: True
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_verifier_env", "corrupt_obs"]

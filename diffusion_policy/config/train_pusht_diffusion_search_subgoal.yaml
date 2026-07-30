@@ -1,0 +1,32 @@
+# Search-context ablation (1/2): SUBGOAL OBSERVATION ONLY.
+#
+# Identical to train_pusht_diffusion_search except for what each already-generated
+# candidate feeds back into the context the next candidate is conditioned on:
+#   baseline : the verifier scalar (-mean keypoint distance to the goal T)
+#   this run : the *observation the candidate's action chunk actually reaches* when
+#              rolled out in the PushT sim -- the rendered frame plus agent_pos/feedback,
+#              pushed through this policy's own obs encoder, so it lands in the same
+#              feature space as the obs tokens. No scalar verdict at all; the model must
+#              read the outcome off the subgoal itself.
+# Candidate *ranking* (which candidate is executed) still uses the verifier scalar, so
+# rollout/eval is directly comparable with the baseline.
+#
+# 100k gradient steps, checkpointing every 10k (consumed by eval_search_pusht.py --watch),
+# same rollout / nrmse evaluation cadence as the baseline.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal
+
+policy:
+  search_context: subgoal
+
+training:
+  # hard stop at 100k gradient steps; num_epochs is just an upper bound so the epoch
+  # loop never runs out first (the check is at the epoch boundary).
+  max_gradient_steps: 100000
+  num_epochs: 100000
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env"]

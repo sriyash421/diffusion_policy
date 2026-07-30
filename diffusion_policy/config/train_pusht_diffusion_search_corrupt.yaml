@@ -1,0 +1,29 @@
+# Corruption ablation, VERIFIER-ONLY arm (corrupt_obs: True).
+#
+# Row 2 of the 3x2 matrix {verifier-only, goal-only, goal+verifier} x {clean, corrupt}.
+# Identical to train_pusht_diffusion_search in every respect except `corrupt_obs`, so the
+# pair isolates exactly one variable.
+#
+# WHY THE CORRUPT ROW EXISTS. PushT is fully observed -- image + agent_pos + feedback
+# determine the state, and the expert action is a function of state -- so with a clean
+# obs the search context is a deterministic function of what the policy already sees:
+#   p(a* | obs, context) = p(a* | obs)
+# and the optimal model ignores the context entirely. The clean row is therefore expected
+# to show nrmse_first ~= nrmse_min in every arm; that is the null result, not a bug.
+#
+# `corrupt_obs` noises the OBSERVATION conditioning (offline semantics -- note the online
+# policy corrupts the *context* instead, same method name, inverted target). That is the
+# mechanism that makes the observation partially informative, so the search context has
+# something to add and a real (first - min) gap can appear. Comparing the two rows is what
+# turns "search should help" into something measurable.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_corrupt
+
+policy:
+  corrupt_obs: True
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "corrupt_obs"]

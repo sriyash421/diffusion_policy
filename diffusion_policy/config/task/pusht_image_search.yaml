@@ -1,0 +1,60 @@
+name: pusht_image_search
+
+image_shape: &image_shape [3, 96, 96]
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  # block_pos is emitted by the dataset (reset-only) but deliberately kept out of
+  # shape_meta so the encoder never sees it; feedback (goal-relative) is the policy input.
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+    agent_pos:
+      shape: [2]
+      type: low_dim
+    feedback:
+      shape: [16]
+      type: low_dim
+  action:
+    shape: [2]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.pusht_search_image_runner.PushTSearchImageRunner
+  # rollouts reset to the initial states of the held-out val + test episodes.
+  # zarr_path/seed/n_test_episodes/n_val_episodes must match task.dataset so the split matches.
+  zarr_path: ${task.dataset.zarr_path}
+  seed: ${task.dataset.seed}
+  n_test_episodes: ${task.dataset.n_test_episodes}
+  n_val_episodes: ${task.dataset.n_val_episodes}
+  n_train_episodes: ${task.dataset.n_train_episodes}
+  # first 5 episodes per split are tiled into a side-by-side eval video
+  n_vis: 5
+  # candidates generated per decision at eval time (best-value one is executed). Kept
+  # modest so periodic in-training rollout stays affordable (verifier is physics-simulated).
+  n_search_actions: 8
+  # must be False to reset exactly onto recorded states (see runner)
+  legacy: False
+  max_steps: 300
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  past_action: ${past_action_visible}
+  n_envs: null
+
+dataset:
+  _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
+  zarr_path: data/pusht_cchi_v7_replay.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  # seeded, recreatable 3-way split: 50 test, 10 val, remainder (~146) is the train pool.
+  # test is byte-identical to the legacy 2-way split for this seed.
+  n_test_episodes: 50
+  n_val_episodes: 10
+  n_train_episodes: null
+  split: train
+  max_train_episodes: null
+  # fraction of the ~146 train episodes actually used (~29, matching online search's
+  # data budget). val/test are never subsampled.
+  train_ratio: 0.2

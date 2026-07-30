@@ -1,0 +1,23 @@
+# Corruption ablation, GOAL-ONLY arm (search_context: subgoal, corrupt_obs: True).
+#
+# Row 2 of the 3x2 matrix. Inherits train_pusht_diffusion_search_subgoal and flips exactly
+# one key, so this and its clean sibling differ only in `corrupt_obs`.
+#
+# Context per candidate: the observation its action chunk actually reaches in the PushT
+# sim, pushed through this policy's own normalizer + obs encoder (the same normalize ->
+# _encode_obs path the observation conditioning uses, and the same structure the online
+# search policy uses for its context tokens). No scalar verdict.
+#
+# See train_pusht_diffusion_search_corrupt.yaml for why the corrupt row is the informative
+# one: on a fully-observed task the clean row's context is provably redundant.
+defaults:
+  - train_pusht_diffusion_search_subgoal
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_corrupt
+
+policy:
+  corrupt_obs: True
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "corrupt_obs"]
