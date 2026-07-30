@@ -382,6 +382,12 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         del pred_action
                         del mse
 
+                # ========= eval end for this epoch ==========
+                # policy.eval() above disables dropout for the rollout/val/sample blocks;
+                # without this the model would train in eval mode for every epoch after
+                # the first (i.e. with p_drop_attn silently zeroed).
+                policy.train()
+
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
