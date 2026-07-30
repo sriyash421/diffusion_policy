@@ -55,9 +55,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
-        # obs keys this policy actually consumes; anything else in the obs dict
-        # (e.g. block_pos, which only rides along to seed env resets) is dropped
-        # before normalize/encode.
+        # obs keys this policy actually consumes; anything else a runner happens to put
+        # in the obs dict is dropped before normalize/encode (the normalizer is fit on
+        # exactly these keys, so an extra one would KeyError).
         self.obs_keys = tuple(shape_meta['obs'].keys())
         self.obs_encoder = obs_encoder
         self.model = model

@@ -62,3 +62,44 @@ def compute_feedback_from_pose(block_pose3, goal_pose=GOAL_POSE):
     achieved_kp = keypoints_at_pose(block_pose3)    # (..., N, 2)
     disp = goal_kp - achieved_kp                    # (..., N, 2)
     return disp.reshape(*block_pose3.shape[:-1], FEEDBACK_DIM).astype(np.float32)
+
+
+def block_pose_from_feedback(feedback):
+    """Recover block pose [x, y, theta] from the feedback signal.
+
+    feedback = goal_kp - achieved_kp, so achieved_kp = goal_kp - feedback; the block pose
+    is then the rigid transform mapping the canonical T keypoints (T_VERTS) onto
+    achieved_kp, recovered per-sample with a 2D Kabsch fit. Exact inverse of
+    ``compute_feedback_from_pose``. This is how anything needing the block pose (the
+    verifier's sim resets, the online policy's context init states) gets it from the
+    declared ``feedback`` obs key, so no privileged reset state has to ride in the obs.
+
+    Args:
+        feedback: (..., 16) goal-vs-achieved keypoint displacement.
+    Returns:
+        (..., 3) block pose [x, y, theta].
+    """
+    feedback = np.asarray(feedback, dtype=np.float64)
+    lead = feedback.shape[:-1]
+    goal_kp = keypoints_at_pose(GOAL_POSE).astype(np.float64)          # (N, 2)
+    achieved = goal_kp - feedback.reshape(*lead, N_KEYPOINTS, 2)       # (..., N, 2)
+
+    P = T_VERTS.astype(np.float64)
+    Pc = P - P.mean(axis=0)                                            # (N, 2)
+    ach_mean = achieved.mean(axis=-2, keepdims=True)                   # (..., 1, 2)
+    Qc = achieved - ach_mean                                           # (..., N, 2)
+
+    # H = Pc^T Qc  (..., 2, 2); Q_i ~= R P_i
+    H = np.einsum('ki,...kj->...ij', Pc, Qc)
+    U, _, Vt = np.linalg.svd(H)
+    V = np.swapaxes(Vt, -1, -2)
+    Ut = np.swapaxes(U, -1, -2)
+    d = np.sign(np.linalg.det(np.matmul(V, Ut)))
+    D = np.zeros(H.shape, dtype=np.float64)
+    D[..., 0, 0] = 1.0
+    D[..., 1, 1] = d
+    R = np.matmul(np.matmul(V, D), Ut)                                 # (..., 2, 2)
+
+    theta = np.arctan2(R[..., 1, 0], R[..., 0, 0])                     # (...)
+    pos = ach_mean[..., 0, :] - np.einsum('...ij,j->...i', R, P.mean(axis=0))
+    return np.concatenate([pos, theta[..., None]], axis=-1)           # (..., 3)

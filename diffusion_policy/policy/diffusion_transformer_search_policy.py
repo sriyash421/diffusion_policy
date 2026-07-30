@@ -11,7 +11,25 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from l2s.verifier import MazeVerifier
+# NOTE: `l2s.verifier.MazeVerifier` is an external, maze-only dependency that is not
+# installed in every environment (e.g. the PushT setup). It is imported lazily inside
+# __init__ (only when actually building the maze verifier) so that importing this module
+# -- and subclassing it for other tasks -- never crashes when `l2s` is absent.
+
+
+def _stack_subgoals(per_candidate):
+    """[{k: (B, ...)}] (one dict per candidate) -> {k: (B, n, ...)}; None if empty."""
+    if not per_candidate:
+        return None
+    return {k: torch.stack([d[k] for d in per_candidate], dim=1)
+            for k in per_candidate[0]}
+
+
+def _cat_subgoals(per_block):
+    """[{k: (B, n_i, ...)}] -> {k: (B, sum n_i, ...)}; None if empty."""
+    if not per_block:
+        return None
+    return {k: torch.cat([d[k] for d in per_block], dim=1) for k in per_block[0]}
 
 
 class SearchTransformerForDiffusion(nn.Module):
@@ -31,6 +49,7 @@ class SearchTransformerForDiffusion(nn.Module):
             p_drop_emb: float = 0.0,
             p_drop_attn: float = 0.3,
             causal_attn: bool = True,
+            context_dim: int = 1,
         ) -> None:
         super().__init__()
         self.action_dim = action_dim
@@ -41,10 +60,14 @@ class SearchTransformerForDiffusion(nn.Module):
         self.max_candidates = max_context_actions + 1
         self.n_head = n_head
         self.n_cond_layers = n_cond_layers
+        # width of the per-candidate feedback appended to each context action token.
+        # 1 == the verifier scalar (default); wider when the feedback is a rollout state
+        # (see PushTDiffusionSearchPolicy's `search_context` modes).
+        self.context_dim = context_dim
 
         self.input_emb = nn.Linear(action_dim, n_emb)
         self.obs_emb = nn.Linear(obs_feature_dim, n_emb)
-        self.action_value_emb = nn.Linear(horizon * action_dim + 1, n_emb)
+        self.action_value_emb = nn.Linear(horizon * action_dim + context_dim, n_emb)
         self.time_emb = SinusoidalPosEmb(n_emb)
 
         self.pos_emb = nn.Parameter(torch.zeros(1, horizon, n_emb))
@@ -272,7 +295,8 @@ class SearchTransformerForDiffusion(nn.Module):
         sample: (B, horizon, action_dim), noisy action trajectory to denoise.
         obs_cond: (B, n_obs_steps, obs_feature_dim), encoded observation context.
         actions: optional (B, K, horizon, action_dim), previous generated candidates.
-        values: optional (B, K), verifier values for previous candidates.
+        values: optional (B, K) or (B, K, context_dim), the feedback for the previous
+            candidates -- the verifier scalar, and/or the state their rollout reached.
         context_lengths: optional (B,), number of previous candidates visible per row.
         """
         squeeze_candidate_dim = False
@@ -307,9 +331,15 @@ class SearchTransformerForDiffusion(nn.Module):
             assert K_context <= self.max_context_actions, \
                 f"Got {K_context} context actions, max is {self.max_context_actions}"
             assert values is not None
+            values = values.to(device=device, dtype=sample.dtype)
+            if values.ndim == 2:
+                # (B, K) scalar feedback -> (B, K, 1)
+                values = values.unsqueeze(-1)
+            assert values.shape[-1] == self.context_dim, \
+                f"Got context feedback dim {values.shape[-1]}, expected {self.context_dim}"
             action_value_input = torch.cat([
                 actions.reshape(B, K_context, -1).to(device=device, dtype=sample.dtype),
-                values.to(device=device, dtype=sample.dtype).unsqueeze(-1),
+                values,
             ], dim=-1)
             action_value_tokens = self.action_value_emb(action_value_input)
             if K_context < self.max_context_actions:
@@ -363,6 +393,16 @@ class SearchTransformerForDiffusion(nn.Module):
 
 
 class DiffusionTransformerSearchPolicy(BaseImagePolicy):
+    """Search policy: the standard `predict_action` contract plus a best-of-n readout.
+
+    Public interface, in order of increasing specialization:
+      * `predict_action(obs_dict)`   -- BaseImagePolicy contract, one action chunk.
+      * `predict_action_best(obs_dict, n_actions)` -- same output format, but the
+        argmax-verifier-value candidate out of n. This is what the env runners call.
+      * `search_candidates(...)` / `predict_n_actions(...)` -- the raw candidate
+        generators, returning (actions, values[, scores][, subgoals]).
+    """
+
     def __init__(
             self,
             shape_meta: dict[str, Any],
@@ -392,11 +432,9 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         self.obs_encoder = obs_encoder
         self.noise_scheduler = noise_scheduler
         self.normalizer = LinearNormalizer()
-        self.verifier = MazeVerifier(
-            maze_path=kwargs.get('maze_path', None),
-            device=kwargs.get('device', 'cpu'),
-            noise=kwargs.get('verifier_noise', 0.0),
-        )
+        # subclasses (e.g. PushTDiffusionSearchPolicy) override _build_verifier to swap
+        # in a task-specific verifier without pulling in the maze-only `l2s` package.
+        self.verifier = self._build_verifier(**kwargs)
         self.horizon = horizon
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
@@ -419,6 +457,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             p_drop_emb=p_drop_emb,
             p_drop_attn=p_drop_attn,
             causal_attn=causal_attn,
+            context_dim=self._context_dim(obs_feature_dim, **kwargs),
         )
 
         if num_inference_steps is None:
@@ -435,24 +474,107 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
 
+    def _build_verifier(self, **kwargs):
+        """Build the maze verifier. Imported lazily so `l2s` is only required here.
+
+        Subclasses override this to inject a different verifier (see
+        PushTDiffusionSearchPolicy) without importing the maze-only package.
+        """
+        from l2s.verifier import MazeVerifier
+        return MazeVerifier(
+            maze_path=kwargs.get('maze_path', None),
+            device=kwargs.get('device', 'cpu'),
+            noise=kwargs.get('verifier_noise', 0.0),
+        )
+
+    def _context_dim(self, obs_feature_dim: int, **kwargs) -> int:
+        """Width of the per-candidate feedback in the search context.
+
+        1 == the verifier scalar. Subclasses override to feed a richer signal (see
+        PushTDiffusionSearchPolicy, which can feed the rollout state or the *encoded*
+        subgoal observation instead of / along with the scalar -- hence obs_feature_dim).
+        Called from __init__ to size the transformer's context embedding, so it must
+        depend only on the config kwargs and the encoder width.
+        """
+        return 1
+
+    def _score_candidates(self, verifier, obs_dict, action, want_subgoals: bool = False):
+        """Evaluate one batch of candidates.
+
+        Returns ``(context, score, subgoal)``:
+          * ``context`` (B,) or (B, context_dim) -- the feedback fed back into the search
+            context so the next candidate is conditioned on it.
+          * ``score`` (B,) -- the scalar used to *rank* candidates (argmax at eval time).
+          * ``subgoal`` -- dict of per-candidate debug tensors for logging, or None. Only
+            populated when ``want_subgoals``; verifiers without a renderable outcome
+            (e.g. the maze one) always return None.
+        By default context and score are both the verifier value. Subclasses override to
+        widen the context while keeping the scalar ranking signal.
+        """
+        value = verifier.get_value(obs_dict, action)
+        return value, value, None
+
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _normalize_context_actions(
+            self, actions: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        """Put context actions into the space the model works in.
+
+        The search loop carries candidates in RAW action units because the verifier
+        simulates them (``_verifier_inputs`` resets a sim from pixel coords), and the env
+        runner executes them. But the model denoises a NORMALIZED trajectory against a
+        normalized target, so feeding it raw actions puts the two halves of
+        ``action_value_emb``'s input on scales orders of magnitude apart.
+
+        Normalizing here -- at the model boundary, not in the search loop -- keeps one
+        tensor from having to serve both boundaries. This mirrors the invariant
+        OnlineSearchPolicy maintains: actions exist only in normalized space anywhere the
+        model touches them, and are unnormalized strictly at the env/verifier boundary.
+        """
+        if actions is None:
+            return None
+        return self.normalizer['action'].normalize(actions)
+
+    def _encode_obs(self, nobs) -> torch.Tensor:
+        """Encode an ALREADY-NORMALIZED obs dict (B, T, ...) -> (B, T, obs_feature_dim).
+
+        Same contract as ``OnlineSearchPolicy._encode_obs`` so both search paths share one
+        encode structure: normalize at the caller, encode here. That lets the observation
+        conditioning and the subgoal context (see PushTDiffusionSearchPolicy) go through
+        the same path instead of each re-implementing normalize+encode.
+
+        Online's trailing ``obs_projection`` (obs_feature_dim -> hidden) has its offline
+        counterpart inside the transformer as ``SearchTransformerForDiffusion.obs_emb``,
+        so there is deliberately no projection here.
+        """
+        if isinstance(nobs, dict):
+            value = next(iter(nobs.values()))
+            B, T = value.shape[:2]
+            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
+        else:
+            B, T = nobs.shape[:2]
+            this_nobs = nobs.reshape(-1, *nobs.shape[2:])
+        return self.obs_encoder(this_nobs).reshape(B, T, -1)
+
+    def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim).
+
+        The expensive, *deterministic* half of encode_obs_cond (for image obs this is the
+        ResNet forward). Split out so the search loop can encode once and reuse across
+        candidates -- they all condition on the same observation, so re-encoding per
+        candidate ran the encoder max_actions times per step for identical inputs.
+        """
         nobs = self.normalizer.normalize(obs_dict)
-        obs_value = next(iter(nobs.values()))
-        B = obs_value.shape[0]
         To = self.n_obs_steps
         if isinstance(nobs, dict):
-            this_nobs = dict_apply(
-                nobs,
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]),
-            )
+            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
         else:
-            this_nobs = nobs[:, :To, ...].reshape(-1, *nobs.shape[2:])
-        nobs_features = self.obs_encoder(this_nobs)
-        nobs_features = nobs_features.reshape(B, To, -1)
-        return self.corrupt_obs_features(nobs_features)
+            nobs = nobs[:, :To, ...]
+        return self._encode_obs(nobs)
+
+    def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        return self.corrupt_obs_features(self._encode_obs_features(obs_dict))
 
     def corrupt_obs_features(self, obs_features):
         if not self.corrupt_obs:
@@ -508,17 +630,36 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             ).prev_sample
         return trajectory
 
-    def _predict_action(
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: Optional[torch.Tensor] = None,
             values: Optional[torch.Tensor] = None,
+            obs_features: Optional[torch.Tensor] = None,
         ) -> Dict[str, torch.Tensor]:
+        """Standard ``BaseImagePolicy`` readout: a single (non-searched) action chunk.
+
+        Returns ``{'action': (B, n_action_steps, Da), 'action_pred': (B, horizon, Da)}``,
+        so every generic consumer (eval.py, the plain env runners, the workspace's
+        sampling block) works against this policy exactly as against any other. The
+        best-of-n search readout is ``predict_action_best``; the raw candidate generator
+        is ``search_candidates``.
+
+        ``actions``/``values`` optionally supply the search context this chunk is
+        conditioned on (used by the search loop; ``None`` for a plain BC readout).
+        ``actions`` arrive in RAW action units -- the search loop keeps them raw because the
+        verifier simulates them -- and are normalized here, see _normalize_context_actions.
+        ``obs_features``: optional pre-computed _encode_obs_features output, reused across
+        the candidates of one search loop. Corruption is still drawn per call -- caching
+        the corrupted features instead would make every candidate share one noise sample.
+        """
         assert 'past_action' not in obs_dict
-        obs_cond = self.encode_obs_cond(obs_dict)
+        if obs_features is None:
+            obs_features = self._encode_obs_features(obs_dict)
+        obs_cond = self.corrupt_obs_features(obs_features)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
-            actions=actions,
+            actions=self._normalize_context_actions(actions),
             values=values,
             **self.step_kwargs,
         )
@@ -532,28 +673,63 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             'action_pred': action_pred,
         }
 
-    def predict_action(
+    def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
             n_actions,
+            return_scores: bool = False,
+            obs_features: Optional[torch.Tensor] = None,
+            return_subgoals: bool = False,
         ):
+        """Generate n_actions candidates, each conditioned on the previous ones.
+
+        Returns ``(actions, values)``, with ``scores`` appended when ``return_scores``
+        and ``subgoals`` appended last when ``return_subgoals`` -- i.e. the tuple grows
+        left-to-right: ``(actions, values[, scores][, subgoals])``.
+
+        ``values`` is the search *context* feedback -- (B, n) for the scalar verifier
+        value, (B, n, context_dim) for a wider context -- while ``scores`` is always the
+        (B, n) scalar used to rank candidates. ``subgoals`` is a dict of stacked
+        (B, n, ...) debug tensors (or None if the verifier has none); it is for logging
+        only and is never fed back into the search.
+
+        ``obs_features`` optionally supplies an already-encoded obs (see
+        _encode_obs_features); otherwise it is encoded once here and shared by every
+        candidate, since they all condition on the same observation.
+        """
+        if obs_features is None:
+            obs_features = self._encode_obs_features(obs_dict)
         actions = None
         values = None
+        scores = None
+        subgoals = list()
         for _ in range(n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
+                obs_features=obs_features,
             )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
+            new_value, new_score, new_subgoal = self._score_candidates(
+                verifier, obs_dict, new_action, want_subgoals=return_subgoals)
             if actions is None:
                 actions = new_action.unsqueeze(1)
                 values = new_value.unsqueeze(1)
+                scores = new_score.unsqueeze(1)
             else:
                 actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                 values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        return actions, values
+                scores = torch.cat([scores, new_score.unsqueeze(1)], dim=1)
+            if new_subgoal is not None:
+                subgoals.append(new_subgoal)
+
+        out = (actions, values)
+        if return_scores:
+            out = out + (scores,)
+        if return_subgoals:
+            out = out + (_stack_subgoals(subgoals),)
+        return out
 
     @torch.inference_mode()
     def predict_n_actions(
@@ -561,30 +737,90 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             obs_dict: Dict[str, torch.Tensor],
             verifier,
             n_actions,
+            return_scores: bool = False,
+            return_subgoals: bool = False,
         ):
+        """Search with a rolling context window; see search_candidates for the return shape."""
+        # encode once for the whole search, however many candidates it runs
+        obs_features = self._encode_obs_features(obs_dict)
         if n_actions <= self.max_actions:
-            return self.predict_action(obs_dict, verifier, n_actions)
+            return self.search_candidates(
+                obs_dict, verifier, n_actions, return_scores=return_scores,
+                obs_features=obs_features, return_subgoals=return_subgoals)
 
-        actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
+        # scores are always needed internally (the caller may only want values), but
+        # subgoals are only rendered when actually asked for.
+        head = self.search_candidates(
+            obs_dict, verifier, self.max_actions, return_scores=True,
+            obs_features=obs_features, return_subgoals=return_subgoals)
+        actions, values, scores = head[0], head[1], head[2]
+        subgoals = head[3] if return_subgoals else None
         all_actions = actions.clone()
         all_values = values.clone()
+        all_scores = scores.clone()
+        all_subgoals = [subgoals] if subgoals is not None else []
 
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
         for _ in range(self.max_actions, n_actions):
-            new_action = self._predict_action(
+            new_action = self.predict_action(
                 obs_dict,
                 actions=action_history,
                 values=value_history,
+                obs_features=obs_features,
             )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
+            new_value, new_score, new_subgoal = self._score_candidates(
+                verifier, obs_dict, new_action, want_subgoals=return_subgoals)
 
             all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
             all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
+            all_scores = torch.cat([all_scores, new_score.unsqueeze(1)], dim=1)
             action_history = torch.cat([action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
             value_history = torch.cat([value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
+            if new_subgoal is not None:
+                # already (B, 1, ...) from the inner stack vs (B, ...) from the loop
+                all_subgoals.append({k: v.unsqueeze(1) for k, v in new_subgoal.items()})
 
-        return all_actions, all_values
+        out = (all_actions, all_values)
+        if return_scores:
+            out = out + (all_scores,)
+        if return_subgoals:
+            out = out + (_cat_subgoals(all_subgoals),)
+        return out
+
+    @torch.inference_mode()
+    def predict_action_best(
+            self,
+            obs_dict: Dict[str, torch.Tensor],
+            n_actions: Optional[int] = None,
+        ) -> Dict[str, torch.Tensor]:
+        """Best-of-n search readout, in the standard ``predict_action`` output format.
+
+        Generates ``n_actions`` candidates via the sliding-window search
+        (``predict_n_actions``), scores each with this policy's verifier, and returns the
+        argmax-value candidate as ``{'action': (B, n_action_steps, Da), 'action_pred':
+        (B, horizon, Da), 'scores': (B, n)}`` -- the shape the env runners and
+        MultiStepWrapper expect.
+        """
+        n = n_actions if n_actions is not None else self.max_actions
+        # `scores` is the scalar verifier value in every search_context mode; `values` may
+        # be a wider context (e.g. a subgoal state), which is not rankable.
+        actions, _, scores = self.predict_n_actions(
+            obs_dict, verifier=self.verifier, n_actions=n,
+            return_scores=True)                             # (B, n, H, Da), _, (B, n)
+
+        B = actions.shape[0]
+        best_idx = scores.argmax(dim=1)                     # (B,)
+        arange = torch.arange(B, device=actions.device)
+        best_action_pred = actions[arange, best_idx]        # (B, H, Da)
+
+        start = self.n_obs_steps - 1
+        end = start + self.n_action_steps
+        return {
+            'action': best_action_pred[:, start:end],       # (B, n_action_steps, Da)
+            'action_pred': best_action_pred,
+            'scores': scores,
+        }
 
     def compute_loss(self, batch):
         target_actions = self.normalizer['action'].normalize(batch['action'])
@@ -594,13 +830,18 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         assert Da == self.action_dim, \
             f"Expected action dim {self.action_dim}, got {Da}"
 
-        obs_cond = self.encode_obs_cond(batch['obs'])
+        # encode the obs ONCE: the same features back the grad-tracked training forward
+        # and every candidate of the context search below (which only reads them, under
+        # inference_mode, so no graph is built for the search).
+        obs_features = self._encode_obs_features(batch['obs'])
+        obs_cond = self.corrupt_obs_features(obs_features)
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
+            actions, values = self.search_candidates(
                 batch['obs'],
                 verifier=self.verifier,
                 n_actions=self.max_actions - 1,
+                obs_features=obs_features,
             )
 
         trajectory = target_actions.unsqueeze(1).expand(
@@ -637,7 +878,9 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             noisy_trajectory,
             timesteps,
             obs_cond=obs_cond,
-            actions=actions,
+            # search_candidates returns raw-unit actions (the verifier simulates them);
+            # the model works in normalized space, same as noisy_trajectory/target.
+            actions=self._normalize_context_actions(actions),
             values=values,
         )
 

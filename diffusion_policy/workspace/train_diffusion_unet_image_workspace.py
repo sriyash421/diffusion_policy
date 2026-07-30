@@ -320,6 +320,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         metric_dict[new_key] = value
                     
                     self.model = model_ddp
+
+                # Restore train mode on the ONLINE model. With use_ema=False `policy` is
+                # the online model, so the eval() above would otherwise leave the whole
+                # run with dropout/BN disabled from epoch 1 onward. The EMA copy is
+                # deliberately left in eval().
+                self.accelerator.unwrap_model(self.model).train()
+
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
@@ -327,6 +334,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 self.epoch += 1
         # trackers only exist if the Accelerator was built with log_with=; this repo
         # logs to wandb directly, so end_training() would raise on an empty tracker list
+        self.join_saving_thread()
         if getattr(self.accelerator, 'trackers', None):
             self.accelerator.end_training()
 

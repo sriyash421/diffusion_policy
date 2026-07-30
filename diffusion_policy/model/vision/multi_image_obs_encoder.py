@@ -150,7 +150,10 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                             pos_enc=False
                         )
                     else:
-                        this_normalizer = torchvision.transforms.CenterCrop(
+                        # must be the randomizer slot, not the normalizer slot: the
+                        # normalizer is unconditionally reassigned below, which silently
+                        # dropped the center crop.
+                        this_randomizer = torchvision.transforms.CenterCrop(
                             size=(h,w)
                         )
                 # configure extra randomizations

@@ -1,7 +1,35 @@
+import math
+
+import torch
 from diffusers.optimization import (
     Union, SchedulerType, Optional,
     Optimizer, TYPE_TO_SCHEDULER_FUNCTION
 )
+
+
+def get_decay_then_constant_schedule(
+        optimizer: Optimizer,
+        num_warmup_steps: int,
+        decay_steps: int,
+        min_lr_ratio: float = 0.1,
+        last_epoch: int = -1,
+    ):
+    """Optional linear warmup, cosine-decay to ``min_lr_ratio`` over ``decay_steps``,
+    then hold constant at ``min_lr_ratio`` thereafter.
+
+    Used for the offline PushT diffusion-search runs: "decay lr in the first ~10k steps
+    then hold constant" (``decay_steps=10000``). Factors multiply the optimizer base lr.
+    """
+    def lr_lambda(step: int) -> float:
+        if num_warmup_steps > 0 and step < num_warmup_steps:
+            return float(step) / float(max(1, num_warmup_steps))
+        progress = (step - num_warmup_steps) / float(max(1, decay_steps))
+        if progress >= 1.0:
+            return min_lr_ratio
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0 over the window
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=last_epoch)
+
 
 def get_scheduler(
     name: Union[str, SchedulerType],
@@ -27,6 +55,16 @@ def get_scheduler(
             The number of training steps to do. This is not required by all schedulers (hence the argument being
             optional), the function will raise an error if it's unset and the scheduler type requires it.
     """
+    # custom (non-diffusers) schedules, intercepted before SchedulerType() validation
+    if name == 'decay_then_constant':
+        return get_decay_then_constant_schedule(
+            optimizer,
+            num_warmup_steps=num_warmup_steps or 0,
+            decay_steps=kwargs.pop('decay_steps', 10000),
+            min_lr_ratio=kwargs.pop('min_lr_ratio', 0.1),
+            last_epoch=kwargs.pop('last_epoch', -1),
+        )
+
     name = SchedulerType(name)
     schedule_func = TYPE_TO_SCHEDULER_FUNCTION[name]
     if name == SchedulerType.CONSTANT:

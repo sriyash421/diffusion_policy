@@ -45,7 +45,7 @@ class BaseWorkspace:
         if include_keys is None:
             include_keys = tuple(self.include_keys) + ('_output_dir',)
 
-        path.parent.mkdir(parents=False, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             'cfg': self.cfg,
             'state_dicts': dict(),
@@ -63,13 +63,29 @@ class BaseWorkspace:
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
         if use_thread:
+            # A previous save may still be writing (possibly to this same path, e.g. two
+            # `latest.ckpt` saves within one epoch). Joining first serializes the writes so
+            # they cannot interleave and truncate each other.
+            self.join_saving_thread()
             self._saving_thread = threading.Thread(
                 target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
             self._saving_thread.start()
         else:
             torch.save(payload, path.open('wb'), pickle_module=dill)
         return str(path.absolute())
-    
+
+    def join_saving_thread(self):
+        """Block until any in-flight threaded checkpoint save has finished.
+
+        Must be called before the process exits, otherwise the last checkpoint can be
+        left truncated on disk.
+        """
+        thread = getattr(self, '_saving_thread', None)
+        if thread is not None:
+            thread.join()
+            self._saving_thread = None
+
+
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
 
@@ -122,7 +138,7 @@ class BaseWorkspace:
         Use save_checkpoint for long-term storage.
         """
         path = pathlib.Path(self.output_dir).joinpath('snapshots', f'{tag}.pkl')
-        path.parent.mkdir(parents=False, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self, path.open('wb'), pickle_module=dill)
         return str(path.absolute())
     

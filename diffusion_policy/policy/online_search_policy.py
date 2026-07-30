@@ -22,6 +22,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.env.pusht.feedback_util import block_pose_from_feedback
 from torch.distributions import Normal
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -138,6 +139,19 @@ class OnlineSearchPolicy(BaseImagePolicy):
                 legacy=True)
         return self._vec_env
 
+    def close(self):
+        """Shut down the lazily-built context-rollout worker pool.
+
+        The pool is a set of subprocesses, so it does not go away on garbage collection;
+        the training workspace calls this during teardown (see
+        TrainMLPImageWorkspace._close_worker_pools). Not done via __del__ --
+        interpreter-shutdown ordering makes that unreliable for subprocess pools.
+        """
+        vec_env = self._vec_env
+        self._vec_env = None
+        if vec_env is not None:
+            vec_env.close()
+
     # ------------------------------------------------------------------ core
     def forward(
             self,
@@ -185,13 +199,11 @@ class OnlineSearchPolicy(BaseImagePolicy):
         ) -> Dict[str, torch.Tensor]:
         """Context-free BC readout at the last valid obs step.
 
-        Runner-compatible: accepts an optional ``attention_mask`` inside obs_dict and
-        ignores a ``block_pos`` carrier if present. This is the same policy used to roll
-        out context in ``generate_context``.
+        Runner-compatible: accepts an optional ``attention_mask`` inside obs_dict. This is
+        the same policy used to roll out context in ``generate_context``.
         """
         obs = dict(obs_dict)
         attention_mask = obs.pop('attention_mask', None)
-        obs.pop('block_pos', None)  # reset-only, never encoded
         nobs = self.normalizer.normalize(obs)
         value = next(iter(nobs.values()))
         B, T = value.shape[:2]
@@ -307,17 +319,21 @@ class OnlineSearchPolicy(BaseImagePolicy):
 
     def compute_loss(self, batch, context_features=None, context_mask=None):
         obs = batch['obs']
-        enc_obs = {k: v for k, v in obs.items() if k != 'block_pos'}
         target = self.normalizer['action'].normalize(batch['action'])  # (B, E, action_dim)
         attention_mask = batch['attention_mask']            # (B, E)
         expert_mask = batch.get('expert_mask', None)        # (B, E, 1) or None
 
         if context_features is None:
-            init_states = torch.cat(
-                [obs['agent_pos'][:, 0], obs['block_pos'][:, 0]], dim=-1)  # (B, 5)
+            # (B, 5) env reset state. The block pose is reconstructed from feedback, which
+            # is exact and is a declared obs key -- the dataset carries no block_pos.
+            block_pose = torch.as_tensor(
+                block_pose_from_feedback(
+                    obs['feedback'][:, 0].detach().cpu().numpy()),
+                dtype=obs['agent_pos'].dtype, device=obs['agent_pos'].device)
+            init_states = torch.cat([obs['agent_pos'][:, 0], block_pose], dim=-1)  # (B, 5)
             context_features, context_mask = self.generate_context(init_states, self.n_trajs)
 
-        nobs = self.normalizer.normalize(enc_obs)           # image, agent_pos, feedback
+        nobs = self.normalizer.normalize(obs)               # image, agent_pos, feedback
         expert_tokens = self._encode_obs(nobs)              # (B, E, hidden)
 
         dist = self.forward(

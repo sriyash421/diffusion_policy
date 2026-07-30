@@ -7,6 +7,7 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+from typing import Optional
 import os
 import hydra
 import torch
@@ -39,8 +40,8 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 class TrainBETLowdimWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
-    def __init__(self, cfg: OmegaConf):
-        super().__init__(cfg)
+    def __init__(self, cfg: OmegaConf, output_dir: Optional[str]=None):
+        super().__init__(cfg, output_dir=output_dir)
 
         # set seed
         seed = cfg.training.seed
@@ -49,11 +50,11 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.policy: BETLowdimPolicy
-        self.policy = hydra.utils.instantiate(cfg.policy)
+        self.model: BETLowdimPolicy
+        self.model = hydra.utils.instantiate(cfg.policy)
 
         # configure training state
-        self.optimizer = self.policy.get_optimizer(**cfg.optimizer)
+        self.optimizer = self.model.get_optimizer(**cfg.optimizer)
 
         self.global_step = 0
         self.epoch = 0
@@ -89,10 +90,10 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
             normalizer['action'] = SingleFieldLinearNormalizer.create_identity()
             normalizer['obs'] = SingleFieldLinearNormalizer.create_identity()
 
-        self.policy.set_normalizer(normalizer)
+        self.model.set_normalizer(normalizer)
 
         # fit action_ae (K-Means)
-        self.policy.fit_action_ae(
+        self.model.fit_action_ae(
                 normalizer['action'].normalize(
                     dataset.get_all_actions()))
 
@@ -123,7 +124,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
 
         # device transfer
         device = torch.device(cfg.training.device)
-        self.policy.to(device)
+        self.model.to(device)
         optimizer_to(self.optimizer, device)
         
         # save batch for sampling
@@ -154,13 +155,13 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss, loss_components = self.policy.compute_loss(batch)
+                        raw_loss, loss_components = self.model.compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
                         # clip grad norm
                         torch.nn.utils.clip_grad_norm_(
-                            self.policy.state_prior.parameters(), cfg.training.grad_norm_clip
+                            self.model.state_prior.parameters(), cfg.training.grad_norm_clip
                         )
 
                         # step optimizer
@@ -197,11 +198,11 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                 step_log['train_loss'] = train_loss
 
                 # ========= eval for this epoch ==========
-                self.policy.eval()
+                self.model.eval()
 
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0:
-                    runner_log = env_runner.run(self.policy)
+                    runner_log = env_runner.run(self.model)
                     # log all
                     step_log.update(runner_log)
                 
@@ -213,7 +214,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                raw_loss, loss_components = self.policy.compute_loss(batch)
+                                raw_loss, loss_components = self.model.compute_loss(batch)
                                 val_losses.append(raw_loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -231,7 +232,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                         obs_dict = {'obs': batch['obs']}
                         gt_action = batch['action']
                         
-                        result = self.policy.predict_action(obs_dict)
+                        result = self.model.predict_action(obs_dict)
                         if cfg.pred_action_steps_only:
                             pred_action = result['action']
                             start = cfg.n_obs_steps - 1
@@ -272,7 +273,7 @@ class TrainBETLowdimWorkspace(BaseWorkspace):
                     if topk_ckpt_path is not None:
                         self.save_checkpoint(path=topk_ckpt_path)
                 # ========= eval end for this epoch ==========
-                self.policy.train()
+                self.model.train()
 
                 # end of epoch
                 # log of last step is combined with validation and rollout

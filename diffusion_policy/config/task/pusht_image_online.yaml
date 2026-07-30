@@ -20,7 +20,7 @@ shape_meta: &shape_meta
 
 env_runner:
   _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
-  zarr_path: /home/sriyash/Projects/gym-pusht/data/pusht_cchi_v7_replay.zarr
+  zarr_path: ${task.dataset.zarr_path}
   seed: 42
   n_test_episodes: 50
   n_train_episodes: 150
@@ -36,7 +36,7 @@ env_runner:
 
 dataset:
   _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
-  zarr_path: /home/sriyash/Projects/gym-pusht/data/pusht_cchi_v7_replay.zarr
+  zarr_path: data/pusht_cchi_v7_replay.zarr
   # return_sequences yields one full-episode sample per episode; horizon only needs
   # to satisfy the >=100 guard (the real length is the episode length).
   horizon: ${dataset_horizon}

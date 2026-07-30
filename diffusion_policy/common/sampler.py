@@ -11,7 +11,7 @@ def create_indices(
     episode_mask: np.ndarray,
     pad_before: int=0, pad_after: int=0,
     debug:bool=True, return_sequences: bool = False) -> np.ndarray:
-    episode_mask.shape == episode_ends.shape        
+    assert episode_mask.shape == episode_ends.shape
     pad_before = min(max(pad_before, 0), sequence_length-1)
     pad_after = min(max(pad_after, 0), sequence_length-1)
 
@@ -189,10 +189,7 @@ class SequenceSampler:
                 # the non-loaded region should never be used
                 sample = np.full((n_data,) + input_arr.shape[1:], 
                     fill_value=np.nan, dtype=input_arr.dtype)
-                try:
-                    sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-                except Exception as e:
-                    import pdb; pdb.set_trace()
+                sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
             data = sample
             if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
                 data = np.zeros(
