@@ -90,10 +90,14 @@ python train.py \
 
 - Task adds a 16-dim `feedback` obs; splits into 50 held-out **test** episodes and 156
   train, of which `task.dataset.train_ratio=0.2` → 31 episodes are actually trained on
-  (test is never subsampled). Override `train_ratio` to change the data budget.
+  (test is never subsampled). Override `train_ratio` to change the data budget. Note this
+  2-way `pusht_image` task still derives its split from the seed; only the search task
+  (`pusht_image_search`) uses the pinned manifest described below.
 - Rollouts run every `training.rollout_every_steps=5000` steps; success logged as
   `test/mean_score`. Checkpoints keep top-5 by `test_mean_score` plus `latest.ckpt`.
-- Output: `data/outputs/<date>/<time>_train_diffusion_unet_image_pusht_image/`.
+- Output: `data/outputs/<date>/<time>_train_diffusion_unet_image_pusht_image/` — note this
+  baseline uses the shared upstream config and so still writes to **home**, unlike the
+  PushT search configs (section 7). Pass `hydra.run.dir=$DP_OUTPUT_ROOT/...` for a long run.
 - W&B project defaults to `diffusion_policy_debug` (override `logging.project=...`).
 
 ---
@@ -114,12 +118,244 @@ python train.py --config-name=train_online_search training.device=cuda:0
 
 ---
 
-## 5. Evaluation
+## 5. Training loop structures (read this before comparing runs)
+
+The two search families on this branch train in structurally different ways, which is easy
+to miss because both are called "search".
+
+**Offline conditional-diffusion search** — `train_pusht_diffusion_search` and the two
+`_subgoal*` ablations, via
+[`TrainMLPImageWorkspace`](diffusion_policy/workspace/train_mlp_image_workspace.py):
+
+```bash
+read A P < <(bash scripts/slurm/pick_gpu.sh)
+sbatch --account=$A --partition=$P scripts/slurm/train_pusht_search.sbatch
+```
+
+A plain offline epoch loop — one dataset batch, one `compute_loss`, one optimizer step.
+The search is *inside* the loss
+([`compute_loss`](diffusion_policy/policy/diffusion_transformer_search_policy.py#L825)):
+each step generates `max_actions - 1` = 15 candidates per batch element from the **current**
+weights, each an 8-step DDIM sample plus a physics-simulated `PushTVerifier` rollout, then
+trains the denoiser to predict the GT expert action conditioned on prefixes of them. All of
+it is discarded after the update. In outer/inner terms this is the maximally on-policy
+extreme: outer loop = one batch, inner loop = one update.
+
+Real hyperparameters: 206 episodes → **50 test / 30 val / 100 train** (26 unused), i.e.
+**12,899 frames → 12,199 training windows, 382 batches/epoch at batch 32, ~52 epochs over a
+20k-step run**.
+The split is not derived at runtime — it is pinned by
+[`diffusion_policy/config/splits/pusht_seed42.json`](diffusion_policy/config/splits/pusht_seed42.json),
+which names the exact episode indices; see "Splits" below. Horizon 16, `n_obs_steps` 2,
+`n_action_steps` 8, `max_actions` 16, ResNet18 encoder, 4-layer transformer at `n_emb` 256,
+AdamW 1e-4, EMA 0.995. Cost per update: 32 × 15 = **480 candidate samples + 480 verifier
+rollouts**, which is why the batch size is pinned at 32 — it is verifier-bound, not
+memory-bound, so the training budget above costs nothing extra per step.
+
+### Splits are pinned, not derived
+
+`task.dataset.split_file` names a committed manifest holding the exact train/val/test
+episode indices, plus a checksum of the zarr's `episode_ends`. The dataset, the env runner
+and `eval_search_pusht.py` all read it, and the `n_*_episodes` config keys are *validated*
+against it rather than generating anything — a disagreement raises.
+
+This exists because the splits used to be derived independently in those three places from
+`(seed, n_test_episodes, n_val_episodes, n_train_episodes, train_ratio)`, with nothing
+recording which episodes a checkpoint had trained on. Raising `n_val_episodes` from 10 to 30
+therefore shrank the pool that `train_ratio: 0.2` was a fraction *of*, silently cutting the
+training budget from 29 episodes to 25.
+
+```bash
+python scripts/dump_pusht_splits.py              # regenerate (shows up as a diff)
+python scripts/dump_pusht_splits.py --verify     # stored file still matches the derivation
+python scripts/dump_pusht_splits.py --check-zarr # zarr's episodes still match the manifest
+```
+
+Each training run also writes `<run_dir>/splits.json` recording the partition it resolved,
+and refuses to resume if that partition has since changed.
+
+**Online search (MLP)** — `train_online_search`, via
+[`TrainOnlineSearchWorkspace`](diffusion_policy/workspace/train_online_search_workspace.py).
+This one *does* have a genuine outer/inner loop: `num_outer_steps=100`, `outer_batch_size=128`
+episodes rolled out per outer step, then `num_inner_steps=100` updates at `inner_batch_size=8`
+that resample which of the `n_trajs=8` rollouts form the context.
+
+**Neither is PPO-like.** The online-search loss is masked negative log-likelihood of the
+*expert* action ([online_search_policy.py:346-350](diffusion_policy/policy/online_search_policy.py#L346-L350))
+— no reward, advantage, ratio, clipping, or KL term anywhere, and no frozen old-policy
+snapshot. The on-policy rollouts exist only to build the in-context conditioning. Note the
+irony: that policy has a tractable Gaussian logprob and so *could* report a real
+`KL(π_old‖π_θ)` cheaply, but does not.
+
+Also note `training.use_ema` was **inert** in `TrainMLPImageWorkspace` — the workspace has
+no EMA code — so no offline search run before section 6 has ever used EMA.
+
+---
+
+## 6. Outer/inner search trainer
+
+`train_pusht_search_outer_inner`, via
+[`TrainSearchOuterInnerWorkspace`](diffusion_policy/workspace/train_search_outer_inner_workspace.py).
+Same policy, same data, same loss as the offline baseline — only the loop differs.
+
+```bash
+read A P < <(bash scripts/slurm/pick_gpu.sh)
+CONFIG_NAME=train_pusht_search_outer_inner \
+  sbatch --account=$A --partition=$P --export=ALL,CONFIG_NAME \
+         scripts/slurm/train_pusht_search.sbatch
+```
+
+The search context is generated **once per outer step** for a pool of `outer_batch_size`
+windows and reused for `inner_epochs` passes:
+
+| | |
+| --- | --- |
+| `max_gradient_steps` | 100000 — **the only run-length knob** |
+| `outer_batch_size` / `inner_batch_size` | 256 / 32 → 8 batches per pass |
+| `inner_epochs` | 4 → **32 updates per outer step** |
+| `drift_every` | 4 inner steps |
+| `ema_decay` | 0.995, constant |
+
+**The speedup is exactly `inner_epochs`, not the pool size.** 256 × 15 = 3,840 sims
+amortized over 32 updates = 120 sims/update, against the baseline's 480 — 4×. Over 100k
+steps that is 12.0M candidate sims instead of 48.0M. A larger pool does not change the
+ratio; only `inner_epochs` does.
+
+### Reading the drift metric
+
+The price of amortizing is staleness: the buffered context comes from weights up to 32
+updates old. So a frozen snapshot of the collector policy is kept for the whole inner loop
+and compared against the live one at matched inputs.
+
+A diffusion policy has no tractable `log π(a|s)` — sampling is an 8-step DDIM chain — so
+PPO's stored-logprob/ratio machinery does not apply. But for a fixed
+`(noisy_trajectory, timestep, obs, context)` the two snapshots' reverse transition kernels
+are Gaussians sharing the scheduler's model-independent variance, differing only in a mean
+that is affine in the predicted noise. Hence, exactly:
+
+```
+KL( p_old(a_{t-1}|·) ‖ p_θ(a_{t-1}|·) )  =  c(t) · ‖ε_θ − ε_old‖²
+```
+
+So **`train_drift_mse_eps` is a per-denoising-step KL**, at the cost of two extra forward
+passes and no sampling. Log keys:
+
+- `train_drift_mse_eps` — the primary signal. Plot it against `train_drift_inner_step`
+  (position within the inner loop). Flat ⇒ the buffered context is still effectively
+  on-policy and `inner_epochs` could go higher. Rising sharply by step 32 ⇒ the model is
+  training on context from a policy it no longer resembles; lower `inner_epochs` or the lr.
+- `train_drift_action_mse` — the same drift sampled in action space under a shared noise
+  seed (PushT pixel units, interpretable). Logged only on the sampling cadence, since it
+  costs two full sampling chains.
+
+Both run the live policy in `eval()` — with `p_drop_attn: 0.2` active the difference would
+otherwise be dominated by independent dropout draws rather than by real drift.
+
+Because the regression target is always the GT expert action, there is no importance weight
+to correct and no ratio to clip. "PPO-style" here means the monitoring and trust-region
+half of PPO, not its surrogate objective. To turn the diagnostic into a soft trust region,
+add `λ · train_drift_mse_eps` to the loss.
+
+### EMA
+
+EMA keeps a second copy of the weights updated after every optimizer step,
+
+```
+θ_ema ← d·θ_ema + (1−d)·θ
+```
+
+and **that copy is what gets evaluated and checkpointed** — rollouts, nRMSE, and every
+`step_*.ckpt` the `--watch` eval scores. It never receives gradients. The effective
+averaging window is `1/(1−d)`, so `ema_decay: 0.995` averages ~200 steps.
+
+Why it matters here specifically: each training sample draws one random timestep out of 100
+and one random noise vector, so consecutive gradients estimate different parts of the
+denoising problem (t≈90 is coarse structure, t≈5 is fine detail) and the live iterate
+rattles. That jitter is zero-mean and averaging cancels it. It also makes checkpoint
+selection more honest — `eval_search_pusht --watch` picks a winner from per-checkpoint
+scores, and noisy weights mean partly picking lucky noise.
+
+**The decay here is constant, unlike the rest of the repo.** `EMAModel`'s default is a
+warmup curve, `decay(step) = 1 − (1+step)^−0.75` capped at `max_value`
+([get_decay](diffusion_policy/model/diffusion/ema_model.py#L43)) — 0.405 at step 1, 0.99 at
+~460, 0.995 at ~1168, 0.999 at 10k; the upstream cap of 0.9999 needs 215k steps and is
+never reached. Two reasons not to use it: the averaging window becomes a function of where
+you are in the run, and the counter driving it **is not checkpointed**, so a resumed run
+re-enters the curve at step 0. Setting `min_value == max_value` clamps the curve flat, which
+is step-independent and identical across restarts. Override with
+`training.ema_decay=0.999` for a 1000-step window.
+
+### Changing the run length
+
+`training.max_gradient_steps` is the only knob. The outer loop is
+`while global_step < max_gradient_steps`; `num_inner = inner_epochs × ceil(outer_batch_size
+/ inner_batch_size)` and there is no outer-step constant at all. Cadences
+(`rollout_every_steps`, `val_every_steps`, `sample_every_steps`, `checkpoint_every`) are in
+gradient steps, and both the LR and EMA schedules are defined independently of the total.
+
+---
+
+## 7. Run output, resume, and disk
+
+**All run output goes to `/gscratch`, never home.** Home is a **10 GB hard quota** and one
+100k-step run writes 50 `step_*.ckpt` plus `latest.ckpt`, each holding the policy, AdamW's
+two moment buffers and the EMA copy — more than the entire quota on its own. The run
+*directory* lives there, not just a symlinked `checkpoints/`, so wandb files,
+`logs.json.txt` and the watcher's `bon_search/` all follow:
+
+```yaml
+output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
+```
+
+Set `DP_OUTPUT_ROOT` to relocate. SLURM logs go to
+`/gscratch/robotics/harine/slurm_logs`. [`scripts/slurm/monitor_pusht_search.sh`](scripts/slurm/monitor_pusht_search.sh)
+warns if anything training-related starts accumulating in `data/outputs` on home.
+
+**Resuming requires naming the old run directory.** `training.resume: True` looks for
+`latest.ckpt` under the *current* Hydra output dir, and `hydra.run.dir` embeds
+`${now:...}` — a new timestamped directory on every launch. A plain re-submit therefore
+finds nothing and starts from scratch. The new workspace prints a loud warning when this
+happens; to actually continue:
+
+```bash
+sbatch --account=$A --partition=$P scripts/slurm/train_pusht_search.sbatch \
+  hydra.run.dir=$DP_OUTPUT_ROOT/<date>/<time>_<name>_<task>
+```
+
+What is and is not restored:
+
+- **Restored:** model and EMA weights, optimizer state, `global_step`, `epoch`, and the
+  `last_*_step` eval cadence counters. The normalizer is kept from the checkpoint rather
+  than recomputed, so resumed weights keep the scaling they were trained under.
+- **Rebuilt, but exactly:** the LR schedule. It is not checkpointed; it is reconstructed at
+  `last_epoch=global_step-1`, which is exact because
+  [`get_decay_then_constant_schedule`](diffusion_policy/model/common/lr_scheduler.py#L10-L31)
+  is a `LambdaLR` whose lambda is a closed-form function of the step index alone. This holds
+  provided the optimizer is restored *before* the scheduler is built (it supplies the
+  `initial_lr` that `LambdaLR` requires at `last_epoch != -1`) and `lr`, `lr_warmup_steps`,
+  `decay_steps` and `min_lr_ratio` are unchanged. `decay_then_constant` also ignores
+  `num_training_steps`, so the curve is independent of `max_gradient_steps` — that stops
+  being true if you switch to `cosine`/`linear`.
+- **Not restored:** RNG state. Diffusion noise and timestep draws repeat their opening
+  sequence, which is harmless (they are i.i.d. and carry no information). *Data selection*
+  repeating would not be, so the outer/inner workspace derives its pool and shuffle RNG
+  from **position** (`default_rng([seed, outer_idx])`) rather than from call count — a
+  resumed run draws the pool that outer step would have drawn anyway, instead of replaying
+  the pools of outer steps 0, 1, 2… `TrainOnlineSearchWorkspace` does *not* do this.
+- **Not restored:** the context buffer. A resume begins a fresh outer step, discarding at
+  most the tail of the interrupted inner loop.
+- `use_ema` cannot be flipped on resume — `load_payload` assigns into `self.__dict__` for
+  every saved `state_dict`, so a `use_ema: True` checkpoint needs a workspace that built an
+  `ema_model`.
+
+---
+
+## 8. Evaluation
 
 **Single rollout eval** (upstream script) — one rollout per held-out test reset:
 
 ```bash
-python eval.py -c data/outputs/<run>/checkpoints/latest.ckpt \
+python eval.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
   -o data/pusht_eval_output -d cuda:0
 # -> eval_log.json (test/mean_score + rollout videos)
 ```
@@ -128,8 +364,8 @@ python eval.py -c data/outputs/<run>/checkpoints/latest.ckpt \
 ([`eval_bon.py`](eval_bon.py)):
 
 ```bash
-python eval_bon.py -c data/outputs/<run>/checkpoints/latest.ckpt \
-  -o data/outputs/<run>/bon --n-samples 64 --n-envs 50
+python eval_bon.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
+  -o $DP_OUTPUT_ROOT/<run>/bon --n-samples 64 --n-envs 50
 # -> bon_summary.json, bon_rewards.npz, bon_curves.png
 ```
 
@@ -140,14 +376,14 @@ test resets), `--max-steps 300`, `--seed`.
 green-bordered on success ([`bon_video.py`](bon_video.py)):
 
 ```bash
-python bon_video.py -c data/outputs/<run>/checkpoints/latest.ckpt \
-  -o data/outputs/<run>/bon --n-resets 5 --n-samples 8
+python bon_video.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
+  -o $DP_OUTPUT_ROOT/<run>/bon --n-resets 5 --n-samples 8
 # -> bon_grid_5x8.mp4  (--reset-idxs 47,12,2,22,6 to pick specific resets)
 ```
 
 ---
 
-## 6. SLURM
+## 9. SLURM
 
 [`job.sh`](job.sh) has a usable preamble (`module load conda; conda activate robodiff2`)
 but its body targets an unrelated `peg_insertion` experiment on another account/path —
