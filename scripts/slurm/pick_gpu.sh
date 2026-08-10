@@ -3,8 +3,8 @@
 # (per `hyakalloc`), preferring robotics, then the partition with the most free GPUs.
 # Used to target training at whatever is actually available instead of hardcoding.
 #
-#   read A P < <(bash scripts/pick_gpu.sh)
-#   sbatch --account=$A --partition=$P scripts/train_pusht_search.sbatch
+#   read A P < <(bash scripts/slurm/pick_gpu.sh)
+#   sbatch --account=$A --partition=$P scripts/slurm/train_pusht_search.sbatch
 set -euo pipefail
 
 line=$(hyakalloc | sed 's/│/|/g' | awk -F'|' '

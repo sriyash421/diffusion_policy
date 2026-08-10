@@ -3,7 +3,9 @@
 # Pinned to this session's job IDs; edit JOBS if a run is requeued with a new ID.
 set -uo pipefail
 
-LOGDIR=/mmfs1/home/harine/slurm_logs
+LOGDIR=/gscratch/robotics/harine/slurm_logs
+# run dirs live on /gscratch too (see README_pusht.md); override with DP_OUTPUT_ROOT.
+OUTROOT=${DP_OUTPUT_ROOT:-/gscratch/robotics/harine/diffusion_policy_outputs}
 # id:label  (label has no spaces)
 JOBS=(
   "37862498:verifier"
@@ -12,17 +14,17 @@ JOBS=(
 )
 
 echo "===== pusht search monitor @ $(date '+%Y-%m-%d %H:%M:%S') ====="
-# home is a 10G hard quota; checkpoints are symlinked to /gscratch (du won't follow
-# them), so summing data/outputs = our real on-home footprint (wandb + eval jsons).
+# Run dirs now live entirely on /gscratch, so nothing training-related should be growing
+# on home (10G hard quota). This checks the invariant rather than the old footprint: if
+# data/outputs is non-empty, some run escaped $DP_OUTPUT_ROOT and will eat the quota.
 # Bounded by timeout so a slow GPFS scan never hangs the monitor.
-out_m=$(timeout 20 du -sm data/outputs 2>/dev/null | cut -f1)
-if [ -n "$out_m" ]; then
-  msg="-- data/outputs on home: ${out_m}MB (10240MB user quota; checkpoints are on /gscratch)"
-  [ "$out_m" -ge 8000 ] && msg="$msg  *** WARNING: approaching quota ***"
-  echo "$msg"
-else
-  echo "-- data/outputs usage: (scan skipped/timed out)"
+home_m=$(timeout 20 du -sm data/outputs 2>/dev/null | cut -f1)
+if [ -n "$home_m" ] && [ "$home_m" -ge 50 ]; then
+  echo "-- *** WARNING: ${home_m}MB in data/outputs on HOME (10240MB quota) --" \
+       "a run is not using \$DP_OUTPUT_ROOT=$OUTROOT ***"
 fi
+out_m=$(timeout 20 du -sm "$OUTROOT" 2>/dev/null | cut -f1)
+echo "-- run output on /gscratch: ${out_m:-?}MB  ($OUTROOT)"
 echo "-- queue --"
 squeue -u harine -o "%.10i %.22j %.9P %.9T %.11M %.11L %R" \
   | grep -E "JOBID|pusht_search" || echo "  (no pusht_search jobs in queue)"
@@ -46,12 +48,28 @@ for entry in "${JOBS[@]}"; do
 done
 
 # --- eval watchers: keep one alive per run (ckpt jobs TIMEOUT at ~9h; resubmit) -------
+# Run dirs are DISCOVERED, not hand-listed. eval_watchers.tsv used to be edited by hand and
+# went stale: it pointed at three home-relative data/outputs/... dirs that no longer exist,
+# and this loop then resubmitted a 13-day watcher against each dead path -- a GPU held
+# indefinitely producing nothing. The run dir is now identity-keyed
+# ($OUTROOT/<exp>/<task>/<trainer>/ctx-*_corrupt-*_seed-*), so a glob is authoritative and
+# the TSV is only a job-id cache.
 STATE="$(dirname "$0")/eval_watchers.tsv"
+echo "-- eval watchers --"
+declare -A KNOWN_JID=()
 if [ -f "$STATE" ]; then
-  echo "-- eval watchers --"
-  tmp=$(mktemp)
-  while IFS=$'\t' read -r label run_dir jid; do
-    [ -z "$label" ] && continue
+  while IFS=$'\t' read -r l d j; do [ -n "$d" ] && KNOWN_JID["$d"]="$j"; done < "$STATE"
+fi
+tmp=$(mktemp)
+shopt -s nullglob
+run_dirs=("$OUTROOT"/*/*/*/ctx-*_corrupt-*_seed-*)
+if [ ${#run_dirs[@]} -eq 0 ]; then
+  echo "  (no identity-keyed run dirs under $OUTROOT)"
+fi
+for run_dir in "${run_dirs[@]}"; do
+    [ -d "$run_dir/checkpoints" ] || continue   # nothing to evaluate yet
+    label=$(basename "$run_dir")
+    jid=${KNOWN_JID["$run_dir"]:-0}
     st=$(squeue -h -j "${jid:-0}" -o "%T" 2>/dev/null)
     if [ "$st" != "RUNNING" ] && [ "$st" != "PENDING" ]; then
       new=$(sbatch --parsable --time=13-00:00:00 \
@@ -75,6 +93,5 @@ print('step=%s peak_success=%.3f @n<=%s' % (d.get('step'), peak, nmax))
 " 2>/dev/null )
     echo "  [$label] job $jid $st  ${best:+best: $best}"
     printf '%s\t%s\t%s\n' "$label" "$run_dir" "$jid" >> "$tmp"
-  done < "$STATE"
-  mv "$tmp" "$STATE"
-fi
+done
+mv "$tmp" "$STATE"
