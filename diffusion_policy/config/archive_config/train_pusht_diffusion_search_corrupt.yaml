@@ -22,8 +22,12 @@ defaults:
 
 name: train_pusht_diffusion_search_corrupt
 
-policy:
-  corrupt_obs: True
+# Ablation identity. These drive BOTH the policy and the output directory
+# (hydra.run.dir in the base config), so the arm is readable off the path.
+search_context: value
+corrupt_obs: True
+arm: value
+
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "corrupt_obs"]

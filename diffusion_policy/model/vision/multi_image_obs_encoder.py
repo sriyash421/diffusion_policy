@@ -1,4 +1,5 @@
 from typing import Union
+import contextlib
 import copy
 import torch
 import torch.nn as nn
@@ -202,7 +203,36 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         self.feature_dim = feature_dim
         self.projector = None
 
-    def forward(self, obs_dict):
+    @contextlib.contextmanager
+    def _forced_crop_offsets(self, offsets):
+        """Temporarily pin every RGB key's CropRandomizer to caller-supplied offsets.
+
+        A CropRandomizer draws one offset per IMAGE, which cannot express "these images
+        belong to the same sample and must share a crop" -- the case a search policy needs
+        when it encodes an observation and the subgoal images predicted from it. The
+        randomizers live inside nn.Sequential transforms, which cannot forward extra
+        arguments, so the offsets are pinned as state for the duration of one forward and
+        cleared afterwards (including on exception, so a failure cannot leave a stale
+        offset pinned for the next batch).
+        """
+        randomizers = [m for t in self.key_transform_map.values()
+                       for m in t.modules() if isinstance(m, CropRandomizer)]
+        if offsets is None or not randomizers:
+            yield
+            return
+        for r in randomizers:
+            r._forced_offsets = offsets
+        try:
+            yield
+        finally:
+            for r in randomizers:
+                r._forced_offsets = None
+
+    def forward(self, obs_dict, crop_offsets=None):
+        with self._forced_crop_offsets(crop_offsets):
+            return self._forward(obs_dict)
+
+    def _forward(self, obs_dict):
         batch_size = None
         features = list()
         # process rgb input

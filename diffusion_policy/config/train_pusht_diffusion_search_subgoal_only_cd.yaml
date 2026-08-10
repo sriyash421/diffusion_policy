@@ -1,0 +1,50 @@
+# SUBGOAL ONLY, with a CONTEXT RECENCY decay instead of the slot loss weighting.
+#
+# Shared base for the K sweep (see the _k4 / _k8 siblings). On its own this is the K=16 arm,
+# which is the control that isolates the weighting change at fixed search width.
+#
+# WHAT CHANGED, AND WHY.
+#
+# train_pusht_diffusion_search_subgoal_only.yaml weights the LOSS per candidate slot,
+# `w_k ∝ 0.9^(K-1-k)`. That keys the weight to the ABSOLUTE slot index, but predict_action_best
+# deploys slot `min(n, max_actions-1)` -- so which conditional gets executed, and therefore how
+# well it was trained, depends on the eval n:
+#
+#     eval n     1     2     4     8    >=16
+#     slot       1     2     4     8      15
+#     weight  0.45  0.50  0.62  0.94    1.96
+#
+# i.e. across most of the eval sweep that weighting actively PENALIZES the conditional being
+# deployed, hardest at small n -- by 55% at n=1. It was designed as if deployment were always
+# at full context, which it is not.
+#
+# The replacement weights the CONTEXT ENTRIES by recency instead. For a candidate generated
+# against m entries, the latest counts at weight 1, the previous at 0.9, the one before at
+# 0.81 -- entry j gets 0.9^(m-1-j). That depends only on distance-from-latest, never on
+# absolute index, on K, or on n, so it is identical in every loop at every search width.
+# Implemented as an additive attention bias, because the staircase mask means "the latest"
+# differs per slot and a per-token scale cannot express a (slot, entry) weight -- see
+# SearchTransformerForDiffusion._build_memory_masks.
+#
+# The slot loss weighting is turned OFF here (uniform loss) so exactly one mechanism is in
+# play and the comparison against subgoal-chosen4value isolates it.
+defaults:
+  - train_pusht_diffusion_search_subgoal_only
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_only_cd
+
+search_context: subgoal
+selection: final_pass
+corrupt_obs: False
+arm: subgoal-only
+
+slot_weight_decay: 1.0      # OFF -- superseded by context_decay
+context_decay: 0.9
+
+# K and the decay are both part of the run identity: they change the objective, and
+# `training.resume` locates latest.ckpt by this path, so two settings must never share a dir.
+run_name: ${arm}_k${n_candidates}_cd${context_decay}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass", "context_decay"]

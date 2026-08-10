@@ -27,6 +27,9 @@ env_runner:
   n_test_episodes: ${task.dataset.n_test_episodes}
   n_val_episodes: ${task.dataset.n_val_episodes}
   n_train_episodes: ${task.dataset.n_train_episodes}
+  # the SAME manifest the dataset reads, so the rollout splits cannot drift from the
+  # training splits (both used to re-derive from the seed independently)
+  split_file: ${task.dataset.split_file}
   # first 5 episodes per split are tiled into a side-by-side eval video
   n_vis: 5
   # candidates generated per decision at eval time (best-value one is executed). Kept
@@ -48,13 +51,40 @@ dataset:
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42
-  # seeded, recreatable 3-way split: 50 test, 10 val, remainder (~146) is the train pool.
-  # test is byte-identical to the legacy 2-way split for this seed.
+  # ---------------------------------------------------------------------------
+  # THE SPLIT MANIFEST IS THE SOURCE OF TRUTH. It names the exact episode indices;
+  # the four count keys below are VALIDATED against it and generate nothing. A config
+  # that disagrees with the manifest raises rather than silently repartitioning.
+  #
+  # This exists because the splits used to be derived at runtime, independently, in the
+  # dataset, the env runner and the eval script, from (seed, n_test, n_val, n_train,
+  # train_ratio). Nothing recorded which episodes a checkpoint had been trained on -- so
+  # when n_val_episodes went 10 -> 30 to fix the checkpoint selector, train_ratio: 0.2 of
+  # a shrinking pool silently cut the training budget from 29 episodes to 25, and every
+  # result collected in between was on a different dataset than the one before it.
+  #
+  # Regenerate with:  python scripts/dump_pusht_splits.py
+  # Check it still matches the derivation / the zarr:  --verify / --check-zarr
+  # ---------------------------------------------------------------------------
+  # selected by the top-level n_demos, so the budget, the manifest and the run directory
+  # can never disagree (see train_pusht_diffusion_search.yaml)
+  split_file: diffusion_policy/config/splits/pusht_seed42_train${n_demos}.json
+  # 206 episodes: 50 test / 30 val / 100 train (26 unused). test = perm[:50] is
+  # byte-identical to the legacy 2-way split for this seed, so previously-collected test
+  # numbers stay measured on the same episodes.
   n_test_episodes: 50
-  n_val_episodes: 10
-  n_train_episodes: null
+  # the val split is the CHECKPOINT SELECTOR (best.json picks on val success); at 10
+  # episodes its SE was ~9.5pp at p=0.9, which made three arms tie at 9/10 while their
+  # test numbers were 84 / 70 / 32%. 30 halves that to ~5.5pp.
+  n_val_episodes: 30
+  # ABSOLUTE episode budget, from the top-level n_demos. Absolute rather than a fraction,
+  # so it no longer moves when the test or val split sizes change -- which is exactly how
+  # the budget silently fell 29 -> 25 when n_val_episodes went 10 -> 30. In the manifest's
+  # derivation this truncates the permuted train pool, so budgets are nested: the
+  # 25-episode set is a strict subset of the 100-episode one (verified in bc_prep.sbatch).
+  n_train_episodes: ${n_demos}
   split: train
+  # both must stay null with a split_file: they would re-subsample what the manifest
+  # already pinned, and the dataset raises rather than apply one on top of the other.
   max_train_episodes: null
-  # fraction of the ~146 train episodes actually used (~29, matching online search's
-  # data budget). val/test are never subsampled.
-  train_ratio: 0.2
+  train_ratio: null

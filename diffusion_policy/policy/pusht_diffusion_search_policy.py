@@ -26,8 +26,17 @@ three things differ, so the maze path is left untouched:
 
    All of them come out of the *same* simulated rollout, so the wider contexts cost no
    extra sim steps (the two subgoal modes add one render + one encoder pass per
-   candidate). Candidate *ranking* (which candidate gets executed) always uses the scalar
-   verifier value, in every mode.
+   candidate). Candidate *ranking* uses the scalar verifier value in every mode -- but
+   ranking is only what ``selection: argmax`` does with it. Under ``selection:
+   final_pass`` the executed action is a further sample conditioned on all n scored
+   candidates and no ranking happens at all, so the scalar reaches the model only through
+   the context above. `selection` is defined on the base class; the two are orthogonal,
+   and the arm labels name the pair:
+
+     (value, argmax)         -> value
+     (subgoal, argmax)       -> subgoal-chosen4value
+     (subgoal_value, argmax) -> subgoal-value
+     (subgoal, final_pass)   -> subgoal-only     <- the only arm with no oracle selection
 
 The obs encoder is not changed here: the base class takes it as an injected arg, and the
 PushT config injects ``MultiImageObsEncoder`` (ResNet18) instead of ``FlattenObsEncoder``.

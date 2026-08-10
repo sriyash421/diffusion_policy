@@ -8,7 +8,111 @@ output_dir: null
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: "default"
+
+# ---------------------------------------------------------------------------
+# Run identity. These four keys, and nothing else, determine the output directory (see
+# hydra.run.dir at the bottom) -- so relaunching the same config RESUMES it instead of
+# minting a fresh timestamped dir that `training.resume: True` can never find, and the
+# ablation arm is readable straight off the path. A second seed is a new directory rather
+# than a silent collision.
+#
+# The ablation configs override `search_context` / `corrupt_obs` at THIS level; the policy
+# block interpolates from here so the two can never disagree.
+# ---------------------------------------------------------------------------
+exp_name: pusht_search
+
+# ---------------------------------------------------------------------------
+# DEFAULT TRAINER -- STAGED FLIP TO outer_inner, NOT YET APPLIED.
+#
+# The intent is for outer/inner to become the default way to train offline search. It is
+# deliberately not the default yet: SIX r8 trainers are running against
+# train_pusht_diffusion_search_29, which inherits this file, and they carry Requeue=1.
+# `trainer` is a path component of hydra.run.dir
+#   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+# so flipping it while they are live means any preempted job resolves to
+# .../outer_inner/<run>/, finds no latest.ckpt there, and SILENTLY RESTARTS FROM SCRATCH
+# in a new directory -- abandoning six runs. This is the failure AUDIT.md 9.9 documents.
+#
+# PRECONDITION for the flip, same trigger rule as the 9.9 rename:
+#   squeue -u $USER | grep -E 'tr_'      must be empty
+#
+# THE FLIP, mechanically:
+#   1. here:            trainer: offline  ->  trainer: outer_inner
+#   2. line 6:          _target_ -> ...train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
+#   3. training block:  add outer_batch_size 256 / inner_batch_size 32 / inner_epochs 4 /
+#                       drift_every 4, copied from train_pusht_search_outer_inner.yaml
+#   4. verify:          bash scripts/slurm/check_configs.sbatch  -- every run_name still distinct,
+#                       and train_pusht_bc* still resolve to trainer=offline
+#
+# Already immune to the flip: train_pusht_bc / _25 / _29 inherit
+# train_pusht_diffusion_search_single, which pins the single-step loop explicitly. Anything
+# else that must stay on-policy should inherit that file too.
+#
+# What actually changes: `offline` regenerates the search context from the CURRENT weights
+# every gradient step; `outer_inner` generates it once per pool of 256 windows and reuses
+# it for 4 inner epochs -- ~4x cheaper per update, at the cost of a context drawn from
+# weights up to num_inner updates stale. Runs trained the two ways are not comparable, and
+# all 26 runs currently on disk are `offline`.
+# ---------------------------------------------------------------------------
+trainer: offline                 # {offline, outer_inner} -- see the staged flip above
+search_context: value            # {value, state, state_value, subgoal, subgoal_value}
+corrupt_obs: False
+# How the executed action is picked. ORTHOGONAL to search_context, which only says what
+# each candidate reports back:
+#   argmax     -- the verifier scalar ranks the candidates, best one executed (best-of-n
+#                 over a ground-truth simulator). Every arm before subgoal-only.
+#   final_pass -- after the n candidates are scored, one MORE sample is drawn conditioned
+#                 on all of them and executed as-is, unsimulated. The verifier scalar then
+#                 takes no part in selection at all.
+selection: argmax                # {argmax, softmax, final_pass}
+# Geometric decay of the per-candidate-slot LOSS weight, counting BACK from the last slot:
+# w_k ∝ decay^(K-1-k), renormalized to mean 1. 1.0 == uniform == the objective every run
+# before this key used, bit-identical. See DiffusionTransformerSearchPolicy._slot_weights.
+#
+# CAVEAT, which is why new arms leave this at 1.0: it keys the weight to the ABSOLUTE slot
+# index, but `final_pass` deploys slot min(n, max_actions-1), so the deployed conditional's
+# weight depends on the eval n -- at max_actions=16 the slot used at n=1 is trained at 0.45
+# and the one at n>=16 at 1.96. Prefer `context_decay` below, which has no n dependence.
+slot_weight_decay: 1.0
+
+# Recency discount on the SEARCH CONTEXT, applied inside the transformer as an additive
+# attention bias. For a candidate generated against m context entries, the latest entry
+# counts at weight 1, the previous at context_decay, the one before that at context_decay^2
+# -- entry j gets context_decay^(m-1-j). 1.0 == off.
+#
+# Unlike slot_weight_decay this depends only on distance-from-latest, never on absolute
+# index, on max_actions, or on the search width, so the profile is identical in every loop
+# at every n. See SearchTransformerForDiffusion._build_memory_masks.
+context_decay: 1.0
+# The ablation label for (search_context, selection). Asserted in the workspace against
+# _ARM_LABELS so a config cannot file its results under the wrong arm; it is what the run
+# directory will be named once the pending rename lands (see AUDIT.md 9.9).
+arm: value                       # {value, subgoal-chosen4value, subgoal-value, subgoal-only}
+# Training-set size in DEMONSTRATIONS. Selects the split manifest
+# (splits/pusht_seed42_train${n_demos}.json) AND appears in the run name, so two budgets
+# can never land in the same output directory -- which is how the earlier 29-episode runs
+# would otherwise have been silently resumed by a 100-episode relaunch. The budgets nest:
+# the 25-episode train set is a strict subset of the 100-episode one, and val/test are
+# identical across manifests, so the two are directly comparable.
+n_demos: 100
+# Search width: how many candidates the loop generates (policy.max_actions interpolates from
+# here). Top-level because it is part of the run identity -- the loop length changes both the
+# training cost (K-1 candidates are generated per gradient step) and the widest context the
+# model is ever trained at, so two K values must not share an output directory.
+n_candidates: 16
+# RENAME LANDED 2026-08-05 (AUDIT.md 9.9). Keyed on `arm`, not `search_context`, because
+# `selection` is a second axis: `subgoal` under argmax is `subgoal-chosen4value`, under
+# final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
+# The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
+# by running jobs still resolve; drop those symlinks once nothing reads through them.
+run_name: ${arm}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+
+# Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
+# run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
+# own. Putting the whole run dir there -- not just a symlinked checkpoints/ -- means wandb
+# files, logs.json.txt and the eval watcher's bon_search/ follow automatically.
+# Override per-user with the DP_OUTPUT_ROOT env var.
+output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
 
 horizon: 16
 n_obs_steps: 2
@@ -22,19 +126,37 @@ policy:
   _target_: diffusion_policy.policy.pusht_diffusion_search_policy.PushTDiffusionSearchPolicy
   shape_meta: ${shape_meta}
   # PushT images (96x96) need a real vision backbone, not FlattenObsEncoder.
+  #
+  # These five keys are the upstream PushT-image BC recipe and must stay mutually
+  # consistent -- an earlier configuration had all three of {pretrained weights, group norm,
+  # imagenet_norm} on at once, which do not compose, and no augmentation at all. That run
+  # overfit by ~3k steps (val_loss min 0.089 -> 0.29 by 99k) and its success rate decayed to
+  # zero. See AUDIT.md "ROUND 4 -- ROOT CAUSE".
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
     shape_meta: ${shape_meta}
     rgb_model:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
       name: resnet18
-      weights: IMAGENET1K_V1
+      # random init, NOT IMAGENET1K_V1: use_group_norm below replaces every BatchNorm2d
+      # with a freshly-initialized GroupNorm, which discards exactly the normalization
+      # statistics pretrained weights depend on. Pick one or the other; upstream PushT BC
+      # pairs random init with group norm, and that is the configuration that works here.
+      weights: null
     resize_shape: null
-    crop_shape: null
-    random_crop: False
+    # The CropRandomizer still lives here (so the encoder's declared input shape stays
+    # 96x96 and its shape assertion keeps working), but the POLICY chooses the offsets and
+    # passes them in -- see crop_shape / random_crop in the policy block below. Left to
+    # itself CropRandomizer samples one offset per IMAGE, which cannot express "the
+    # observation and the subgoals predicted from it must share a crop".
+    crop_shape: [76, 76]
+    random_crop: True
     use_group_norm: True
     share_rgb_model: False
-    imagenet_norm: True
+    # MUST be False: the LinearNormalizer already maps images to [-1,1]
+    # (normalize_util.get_image_range_normalizer), and ImageNet stats assume [0,1]. With
+    # both on, the encoder saw roughly [-6.5, +2.25].
+    imagenet_norm: False
 
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
@@ -59,10 +181,31 @@ policy:
   p_drop_emb: 0.0
   p_drop_attn: 0.2
   causal_attn: False
-  corrupt_obs: False
+  # interpolated from the top-level identity keys so the run dir and the policy can never
+  # disagree about which ablation arm this is
+  corrupt_obs: ${corrupt_obs}
+  search_context: ${search_context}
+  selection: ${selection}
+  slot_weight_decay: ${slot_weight_decay}
+  context_decay: ${context_decay}
+
+  # Image crop, owned by the POLICY rather than the obs encoder. Random crop is the
+  # primary regularizer for PushT image BC (76x76 out of 96x96, matching
+  # train_diffusion_unet_hybrid_workspace.yaml) and removing it is what let an earlier run
+  # memorize the train set in ~3k steps -- so it stays.
+  #
+  # What changed is WHERE the offset comes from. One offset is drawn per SAMPLE and reused
+  # for that sample's whole obs window AND every subgoal image the search generates from
+  # it, so obs and subgoal stay spatially registered at train time exactly as they are at
+  # eval time (where both are center-cropped). The offset is a pure function of
+  # (training.seed, global_step), so it is identical across restarts and machines and is no
+  # longer drawn from the global RNG interleaved with the diffusion noise.
+  crop_shape: [76, 76]
+  random_crop: True
 
   # search width (candidates conditioned on the previous ones), same as the maze config.
-  max_actions: 16
+  # Interpolated from the top-level identity key so the run dir and the policy agree.
+  max_actions: ${n_candidates}
   # feedback-based PushT verifier (simulates candidates in a deterministic PushT sim,
   # value = -mean per-keypoint distance to the goal T). No maze_path / MazeVerifier.
   # The pool of verifier_n_envs sims steps in parallel (AsyncVectorEnv) to keep step
@@ -109,18 +252,49 @@ training:
     decay_steps: 10000
     min_lr_ratio: 0.1
   num_epochs: 1000
+  # Hard stop well before the old 100k. With augmentation on, val_loss should keep
+  # improving much longer than the ~3k it managed without -- but the previous run trained
+  # ~32x past its val optimum and every evaluated checkpoint was deep in the overfit
+  # regime. Raise this only after checking where val_loss actually bottoms.
+  max_gradient_steps: 20000
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
-  use_ema: False
+  # EMA weights are what gets rolled out, validated, sampled and shipped in the checkpoint;
+  # the live weights are only the optimization target.
+  use_ema: True
+  # Constant, NOT the repo's warmup curve. EMAModel's default decay is a function of the
+  # step index (1 - (1+step)^-0.75, capped at max_value), which makes the averaging window
+  # depend on where you are in the run -- and its step counter is not checkpointed, so a
+  # resumed run re-enters the curve at 0. A flat decay is the same at every step and
+  # identical across restarts. 1/(1-0.995) = a 200-step averaging window throughout.
+  # Override to 0.999 for a 1000-step window if this smooths too little.
+  ema_decay: 0.995
   freeze_encoder: False
+  # Rollout on GRADIENT STEPS and on a multiple of checkpoint_every, so every rollout
+  # number belongs to weights that were saved and can be re-verified against an eval curve.
+  # rollout_every (epochs) is kept only as the fallback for configs that predate this.
+  # ALL eval cadences are in GRADIENT STEPS. An epoch is not a stable unit here: its length
+  # depends on the dataset size and the train budget, so the old `val_every: 10` fired every
+  # ~960 steps at a 25-episode budget and would fire every ~4030 at 100 episodes -- the same
+  # config value silently meaning 4x less validation. rollout_every_steps is additionally a
+  # multiple of checkpoint_every, so every in-training success number belongs to weights that
+  # were saved and can be re-verified against an eval curve.
+  # The *_every (epoch) keys below are retained only as the fallback for configs predating
+  # this; the workspace prefers the *_every_steps ones whenever they are set.
+  rollout_every_steps: 2000
+  val_every_steps: 1000
+  sample_every_steps: 1000
   rollout_every: 50
-  # persist a checkpoint every 2k gradient steps (consumed by eval_search_pusht --watch).
-  # At ~108 steps/epoch, 10k would be ~92 epochs between checkpoints -- the watcher, and
-  # so best.json, would have almost nothing to select from for most of a run.
-  checkpoint_every: 2000
+  # persist a checkpoint every 1k gradient steps (consumed by eval_search_pusht --watch).
+  # Halved from 2k now that the run is 20k rather than 100k, so best.json still has ~20
+  # checkpoints to select from.
+  checkpoint_every: 1000
   val_every: 10
   sample_every: 10
-  # bound the (verifier-driven) normalized-RMSE eval to a few batches per split
+  # Bound the (verifier-driven) normalized-RMSE eval. These batches are now drawn as a
+  # FIXED SEEDED SUBSET spanning the whole split (see _make_nrmse_loader): with the plain
+  # shuffle:False loader all 128 windows came from the split's first episode, so every
+  # val_*/test_* number was a single-episode statistic.
   nrmse_max_batches: 4
   max_train_steps: null
   max_val_steps: null
@@ -137,23 +311,34 @@ logging:
   group: null
 
 checkpoint:
-  # No topk/best checkpoint: TrainMLPImageWorkspace does not instantiate a
-  # TopKCheckpointManager, and val loss / val_nrmse do not identify the best task policy
-  # anyway. Selection is done from real eval -- eval_search_pusht.py --watch evaluates
+  # Keep the k best-by-val_loss checkpoints. This is a SAFETY NET, not the final selector:
+  # the previous run's val_loss bottomed at step ~3k and then rose 3x while training
+  # continued to 100k, and because nothing tracked it the good model was overwritten and
+  # every evaluated checkpoint came from the overfit regime.
+  #
+  # Final selection is still done from real eval -- eval_search_pusht.py --watch evaluates
   # each checkpoints/step_*.ckpt and maintains bon_search/success_curves.jsonl plus
-  # bon_search/best.json, which names the current winner.
+  # bon_search/best.json. topk just guarantees the low-val_loss weights still exist by the
+  # time that runs.
+  topk:
+    monitor_key: val_loss
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.4f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
-multi_run:
-  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
-  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
-
 hydra:
-  job:
-    override_dirname: ${name}
+  # Run dir is a pure function of the run IDENTITY, not of the wall clock. Consequences:
+  #   * relaunching the same config resumes it (training.resume finds latest.ckpt) --
+  #     with a timestamped dir it silently restarted from scratch every time;
+  #   * the ablation arm and seed are readable from the path, so reporting is a glob
+  #     instead of three hand-maintained arm->path tables that drift apart;
+  #   * a different seed is a different directory instead of overwriting the first run.
+  # Do NOT pass hydra.run.dir= on the command line; that was the workaround for the
+  # timestamped template and it reintroduces silent collisions between arms.
   run:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
   sweep:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/_sweep_${now:%Y.%m.%d-%H.%M.%S}
     subdir: ${hydra.job.num}

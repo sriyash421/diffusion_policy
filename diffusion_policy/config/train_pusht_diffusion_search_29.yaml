@@ -1,0 +1,72 @@
+# Round 8: the 29-demo generation, rebuilt at PARITY with the 100-demo arms.
+#
+# The legacy 29-demo runs are still on disk and still reported (SUCCESS_RATES.md section 2),
+# but they are not a smaller-data version of the 100-demo arms -- they differ on two axes
+# that have nothing to do with the demo count:
+#
+#   use_ema: False          their published numbers come from the LIVE weights, while every
+#                           100-demo number comes from the EMA average. Different weights.
+#   no policy-level crop    cropping happened only inside the encoder's CropRandomizer, so
+#                           an observation and the subgoal images derived from it got
+#                           INDEPENDENT crop offsets at train time -- they were translated
+#                           relative to each other. The 100-demo arms set crop_shape on the
+#                           policy, which puts one offset in scope for the whole search, so
+#                           obs and subgoal stay registered. That is a correctness fix for
+#                           the subgoal modes specifically, not a tuning choice.
+#
+# This config keeps the SAME 29 TRAINING EPISODES as those runs -- verified byte-identical,
+# see scripts/make_29demo_parity_split.py -- so old vs new isolates exactly those two
+# changes plus the longer budget. Everything else is inherited from
+# train_pusht_diffusion_search, which is what makes 29-vs-100 a clean data-budget contrast.
+#
+#   CONFIG_NAME=train_pusht_diffusion_search_29 \
+#     sbatch --account=$A --partition=$P --export=ALL,CONFIG_NAME \
+#     scripts/slurm/train_pusht_search.sbatch search_context=subgoal arm=subgoal-chosen4value
+# `_self_` LAST. Hydra applies defaults in order and later entries win, so `_self_` first
+# would let the base config overwrite every value below it -- which it silently did on the
+# first draft here: n_demos came out 100 and the budget 20000, with no error.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_29
+
+n_demos: 29
+
+# MUST differ from the legacy runs' name. The inherited template resolves to
+# `value_corrupt-False_demos-29_seed-42`, which is the LEGACY run directory -- and since
+# hydra.run.dir is derived from run_name and training.resume is True, launching with that
+# name would find the legacy latest.ckpt and CONTINUE it: 20k no-EMA steps silently
+# becoming the initial condition of a run reported as a fresh EMA one, with the legacy
+# checkpoints overwritten in place. `-r8` keeps the two generations in separate directories.
+# It also keeps the ~24 queued selection-sweep jobs valid; they hold absolute paths into
+# the legacy directories.
+run_name: ${arm}_corrupt-${corrupt_obs}_demos-29-r8_seed-${training.seed}
+
+task:
+  dataset:
+    # train = the legacy 29, test = the standard 50 (identical in every manifest, so test
+    # numbers stay comparable across every section of the doc), val = 30 rather than the
+    # legacy 10. val is never reported -- it only picks a checkpoint -- and at 10 episodes
+    # SE is ~9.5pp at p=0.9: three legacy arms tied at 9/10 while their test numbers were
+    # 84 / 70 / 32%. Widening it changes no published number, it just stops selection
+    # being a coin flip.
+    split_file: diffusion_policy/config/splits/pusht_seed42_train29_val30.json
+    n_train_episodes: 29
+    n_val_episodes: 30
+    n_test_episodes: 50
+    # must be null: train_ratio is what the legacy runs used to GET 29 episodes, and
+    # leaving it set would downsample the manifest's 29 again.
+    train_ratio: null
+
+training:
+  # 100k, matching the subgoal-only arms rather than the legacy 20k. The 100-demo argmax
+  # arms peaked at 1k-8k and declined, but that was at 385 steps/epoch; at 29 episodes an
+  # epoch is ~110 steps, so the same number of gradient steps is ~3.5x more passes over the
+  # data and the peak lands somewhere else. Reaching 100k is what makes the two budgets
+  # comparable at equal OPTIMIZATION rather than at equal epochs.
+  max_gradient_steps: 100000
+  # every 2000, as in the subgoal-only runs: 50 checkpoints over the run rather than the
+  # legacy 20, and a cadence that puts 50000/100000 exactly on a boundary
+  checkpoint_every: 2000
+  rollout_every_steps: 4000

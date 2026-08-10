@@ -35,7 +35,8 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.pusht_image_dataset import (
-    get_split_masks, get_split_masks_3way, get_episode_init_states)
+    get_split_masks, get_split_masks_3way, get_episode_init_states,
+    load_split_manifest, masks_from_manifest)
 from diffusion_policy.env_runner.pusht_image_runner import PushTImageRunner
 
 
@@ -65,6 +66,7 @@ class PushTSearchImageRunner(PushTImageRunner):
             past_action=False,
             tqdm_interval_sec=5.0,
             n_envs=None,
+            split_file=None,
         ):
         # NOTE: intentionally does NOT call PushTImageRunner.__init__ (that one builds a
         # test-only set); we reimplement init to cover val+test. BaseImageRunner.__init__
@@ -77,7 +79,21 @@ class PushTSearchImageRunner(PushTImageRunner):
 
         replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path, keys=['agent_pos', 'block_pos'])
-        if n_val_episodes > 0:
+        if split_file is not None:
+            # Same manifest the dataset reads, so the rollout splits cannot drift from the
+            # training splits. Previously both re-derived from the seed independently, which
+            # only agreed by convention.
+            manifest = load_split_manifest(
+                split_file,
+                episode_ends=replay_buffer.episode_ends[:],
+                expected_counts={
+                    'test': n_test_episodes,
+                    'val': n_val_episodes if n_val_episodes else None,
+                    'train': n_train_episodes,
+                })
+            _, val_mask, test_mask = masks_from_manifest(
+                manifest, replay_buffer.n_episodes)
+        elif n_val_episodes > 0:
             _, val_mask, test_mask = get_split_masks_3way(
                 n_episodes=replay_buffer.n_episodes,
                 n_test_episodes=n_test_episodes,
@@ -208,8 +224,22 @@ class PushTSearchImageRunner(PushTImageRunner):
                 obs_dict = dict_apply(dict(obs),
                     lambda x: torch.from_numpy(x).to(device=device))
                 with torch.no_grad():
-                    action_dict = policy.predict_action_best(
-                        obs_dict, n_actions=self.n_search_actions)
+                    if (self.n_search_actions == 1
+                            and getattr(policy, 'selection', 'argmax') == 'argmax'):
+                        # BC rollout: one sample, executed. Going through
+                        # predict_action_best would argmax over a single candidate -- the
+                        # same action -- but would still physics-simulate it in the
+                        # verifier, so the BC baseline would pay a search cost it does not
+                        # use and would spawn a worker pool it never needs.
+                        #
+                        # Only under 'argmax'. Under 'final_pass' n=1 is NOT the same
+                        # action: it is one scored candidate plus the extra conditioned
+                        # sample that actually gets executed, so shortcutting it here would
+                        # silently evaluate BC and label it as the search arm.
+                        action_dict = policy.predict_action(obs_dict)
+                    else:
+                        action_dict = policy.predict_action_best(
+                            obs_dict, n_actions=self.n_search_actions)
                 action = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())['action']
                 obs, reward, done, info = env.step(action)

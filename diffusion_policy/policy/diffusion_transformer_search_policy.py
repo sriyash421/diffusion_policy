@@ -1,4 +1,6 @@
 from typing import Any, Dict, Optional, Union
+import contextlib
+import math
 
 import torch
 import torch.nn as nn
@@ -15,6 +17,11 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 # installed in every environment (e.g. the PushT setup). It is imported lazily inside
 # __init__ (only when actually building the maze verifier) so that importing this module
 # -- and subclassing it for other tasks -- never crashes when `l2s` is absent.
+
+
+# How predict_action_best picks the action it returns. See
+# DiffusionTransformerSearchPolicy.__init__ for what each one means.
+SELECTION_MODES = ('argmax', 'softmax', 'final_pass')
 
 
 def _stack_subgoals(per_candidate):
@@ -50,6 +57,7 @@ class SearchTransformerForDiffusion(nn.Module):
             p_drop_attn: float = 0.3,
             causal_attn: bool = True,
             context_dim: int = 1,
+            context_decay: float = 1.0,
         ) -> None:
         super().__init__()
         self.action_dim = action_dim
@@ -64,6 +72,19 @@ class SearchTransformerForDiffusion(nn.Module):
         # 1 == the verifier scalar (default); wider when the feedback is a rollout state
         # (see PushTDiffusionSearchPolicy's `search_context` modes).
         self.context_dim = context_dim
+        # Recency discount on the search context. For a candidate generated against m context
+        # entries, the LATEST entry counts at weight 1, the one before it at `context_decay`,
+        # the one before that at context_decay^2 -- entry j gets context_decay^(m-1-j).
+        # 1.0 == off.
+        #
+        # It depends only on distance-from-latest, never on the entry's absolute index, on
+        # max_context_actions, or on how many candidates the search was asked for. That is the
+        # point: the profile is identical in every loop at every search width, unlike a weight
+        # keyed to absolute slot index (see DiffusionTransformerSearchPolicy._slot_weights,
+        # whose deployed-slot weight varies with n).
+        assert 0.0 < context_decay <= 1.0, \
+            f'context_decay must be in (0, 1], got {context_decay}'
+        self.context_decay = context_decay
 
         self.input_emb = nn.Linear(action_dim, n_emb)
         self.obs_emb = nn.Linear(obs_feature_dim, n_emb)
@@ -268,7 +289,31 @@ class SearchTransformerForDiffusion(nn.Module):
         valid_actions = action_positions[None, None, :] < context_lengths[:, :, None]
         invalid[:, :, action_offset:] = ~valid_actions
 
-        memory_mask = invalid.repeat_interleave(self.horizon, dim=1)
+        if self.context_decay >= 1.0:
+            memory_mask = invalid
+        else:
+            # Recency discount, applied as an ADDITIVE ATTENTION BIAS rather than by scaling
+            # the context tokens. It has to be: candidate c sees context_lengths[b,c] entries,
+            # so "the latest entry" differs per candidate, making the weight a function of the
+            # (candidate, entry) PAIR. The memory tensor (B, S, n_emb) is shared by all
+            # n_candidates*horizon decoder queries, so a per-token scale cannot express that
+            # without materializing n_candidates copies of the memory. This mask is already
+            # indexed by exactly that pair.
+            #
+            # Adding (m-1-j)*log(decay) to a logit multiplies the post-softmax attention
+            # weight on entry j by decay^(m-1-j) -- the same arithmetic as scaling the entry,
+            # applied where the entry is actually consumed.
+            dtype = self.cond_pos_emb.dtype
+            dist = (context_lengths[:, :, None] - 1 - action_positions[None, None, :])
+            bias = torch.zeros(batch_size, n_candidates, S, dtype=dtype, device=device)
+            bias[:, :, action_offset:] = dist.clamp(min=0).to(dtype) * math.log(
+                self.context_decay)
+            # finfo.min rather than -inf: a fully-masked row would produce NaN under some
+            # attention kernels. No row is fully masked here (obs stay visible), so this is
+            # defensive, but it costs nothing.
+            memory_mask = bias.masked_fill(invalid, torch.finfo(dtype).min)
+
+        memory_mask = memory_mask.repeat_interleave(self.horizon, dim=1)
         memory_mask = memory_mask.unsqueeze(1).expand(
             batch_size,
             self.n_head,
@@ -317,7 +362,14 @@ class SearchTransformerForDiffusion(nn.Module):
         device = sample.device
         timesteps = self._normalize_timesteps(timestep, B, K_decode, device)
 
-        if actions is None:
+        # `actions is None` is "no context supplied"; an EMPTY context tensor is the same
+        # thing and must take the same branch. It is not a corner case -- the BC baseline
+        # runs at max_actions=1, so max_context_actions is 0 and search_candidates hands
+        # back a (B, 0, T, Da) tensor on every call after the first. Falling through to the
+        # else branch reshapes 0 elements into (B, 0, -1), where -1 is ambiguous, and
+        # raises. Before this guard, BC could be trained and rolled out at n=1 but could
+        # not be evaluated at n>1 at all.
+        if actions is None or actions.shape[1] == 0 or self.max_context_actions == 0:
             K_context = 0
             action_value_tokens = torch.zeros(
                 B,
@@ -420,9 +472,12 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             p_drop_attn: float = 0.3,
             causal_attn: bool = True,
             corrupt_obs: bool = False,
+            crop_shape=None,
+            random_crop: bool = True,
             **kwargs,
         ):
         super().__init__()
+        self._validate_kwargs(kwargs)
         action_shape = shape_meta['action']['shape']
         assert len(action_shape) == 1
         action_dim = action_shape[0]
@@ -444,6 +499,45 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         self.kwargs = kwargs
         self.step_kwargs = kwargs.get('scheduler_step_kwargs', dict())
 
+        # How the candidate that actually gets EXECUTED is picked. Orthogonal to
+        # search_context, which only says what each candidate reports back.
+        #   'argmax'     -- the verifier scalar ranks the candidates and the best one is
+        #                   executed. Every arm before this one.
+        #   'final_pass' -- after the n candidates are generated and scored, ONE MORE
+        #                   sample is drawn conditioned on all of them, and that sample is
+        #                   executed as-is. It is never simulated, and no argmax is taken,
+        #                   so the verifier scalar takes no part in selection at all -- it
+        #                   only ever reaches the model through the search context. This is
+        #                   the only mode in which the deployed action is the model's own
+        #                   synthesis rather than an oracle pick.
+        #   'softmax'    -- the same verifier scalar ranks the candidates, but the executed
+        #                   one is SAMPLED from softmax(z / T) rather than taken greedily,
+        #                   where z is the score standardized across the n candidates. So
+        #                   the verifier still selects, just stochastically: it is the same
+        #                   information used with less commitment, which is the axis
+        #                   'final_pass' cannot isolate (that one also changes WHO
+        #                   synthesizes the action).
+        self.selection = kwargs.get('selection', 'argmax') or 'argmax'
+        assert self.selection in SELECTION_MODES, \
+            f"selection must be one of {SELECTION_MODES}, got {self.selection!r}"
+        # Softmax temperature, on the STANDARDIZED score. Standardizing first is what makes
+        # one temperature mean the same thing everywhere: the raw score is -mean keypoint
+        # distance in pixels, whose spread differs by arm, by checkpoint and with n, so a
+        # fixed T on raw scores would be near-greedy for one arm and near-uniform for
+        # another. After z-scoring, T is in units of "standard deviations of candidate
+        # quality" and the two limits are exact: T->0 reproduces 'argmax' candidate for
+        # candidate, T->inf is a uniform pick among the n.
+        self.selection_temperature = float(
+            kwargs.get('selection_temperature', 1.0) or 1.0)
+        assert self.selection_temperature > 0, 'selection_temperature must be > 0'
+        # Geometric decay of the per-candidate-slot loss weight, counting BACK from the
+        # last slot: w_k ∝ decay^(K-1-k), so the full-context slot carries the most weight
+        # and each earlier slot a factor `decay` less (see _slot_weights / _compute_loss).
+        # 1.0 == uniform == the unweighted objective, bit-identical.
+        self.slot_weight_decay = float(kwargs.get('slot_weight_decay', 1.0) or 1.0)
+        assert 0.0 < self.slot_weight_decay <= 1.0, \
+            f'slot_weight_decay must be in (0, 1], got {self.slot_weight_decay}'
+
         self.model = SearchTransformerForDiffusion(
             action_dim=action_dim,
             obs_feature_dim=obs_feature_dim,
@@ -458,6 +552,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             p_drop_attn=p_drop_attn,
             causal_attn=causal_attn,
             context_dim=self._context_dim(obs_feature_dim, **kwargs),
+            context_decay=float(kwargs.get('context_decay', 1.0) or 1.0),
         )
 
         if num_inference_steps is None:
@@ -473,6 +568,145 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         )
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
+
+        # Image crop. Owned by the policy rather than by the obs encoder's CropRandomizer,
+        # because only the policy knows WHICH IMAGES BELONG TO THE SAME SAMPLE: the offset
+        # drawn for the observation must also be applied to every subgoal image that sample
+        # generates, or the model is asked to compare two views of the same scene that are
+        # translated relative to each other at train time and aligned at eval time.
+        # CropRandomizer cannot be handed an offset -- it draws internally and sits inside
+        # an nn.Sequential, which cannot forward extra arguments.
+        self.crop_shape = None if crop_shape is None else tuple(crop_shape)
+        self.random_crop = random_crop
+        # uncropped image size, from shape_meta -- the offsets must be drawn against the
+        # size the encoder actually receives
+        self._crop_input_hw = (96, 96)
+        for attr in shape_meta['obs'].values():
+            if attr.get('type', 'low_dim') == 'rgb':
+                self._crop_input_hw = tuple(attr['shape'][1:])
+                break
+        # Offsets come from a dedicated generator seeded from (seed, global_step), so the
+        # crop is a pure function of those two: identical across restarts and machines, with
+        # no RNG state to checkpoint, and no longer interleaved with the diffusion-noise
+        # stream on the global RNG (which is what made it irreproducible after a resume).
+        self._crop_generator = torch.Generator(device='cpu')
+        self._crop_seed = 0
+        self._crop_step = 0
+        self._crop_offsets = None
+        # `_crop_scope` is reentrant; only the outermost entry resets the offsets, so a
+        # search entry point can guarantee a shared offset without disturbing a caller
+        # that already opened one. See its docstring.
+        self._crop_depth = 0
+
+    # ---------------------------------------------------------------- config validation
+
+    # Every key this class (or a subclass) legitimately reads out of **kwargs. Anything
+    # else is a typo, and a typo'd config key used to be silently ignored -- which is how an
+    # ablation arm ends up secretly identical to its sibling.
+    _KNOWN_KWARGS = frozenset({
+        'max_actions', 'search_context', 'selection', 'slot_weight_decay', 'context_decay',
+        'scheduler_step_kwargs',
+        # PushT verifier
+        'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
+        'render_size',
+        # maze verifier
+        'maze_path', 'device', 'verifier_noise',
+    })
+
+    @classmethod
+    def _validate_kwargs(cls, kwargs):
+        unknown = sorted(set(kwargs) - cls._KNOWN_KWARGS)
+        if unknown:
+            raise TypeError(
+                f'{cls.__name__} got unknown config key(s) {unknown}. These are transported '
+                f'through **kwargs and would otherwise be silently ignored, leaving the '
+                f'policy on its defaults. Known keys: {sorted(cls._KNOWN_KWARGS)}')
+
+    # ------------------------------------------------------------------------- cropping
+
+    def set_crop_step(self, seed: int, step: int):
+        """Fix the (seed, step) the next training crop offsets are derived from.
+
+        Called once per optimizer step by the workspace. Eval never needs it: outside
+        train mode the crop is deterministic (center), so no offsets are drawn.
+        """
+        self._crop_seed = int(seed)
+        self._crop_step = int(step)
+
+    def _draw_crop_offsets(self, batch_size: int, height: int, width: int):
+        """(B, 2) top-left crop offsets, one per SAMPLE.
+
+        Valid range is [0, H-CH-1] x [0, W-CW-1], matching crop_image_from_indices'
+        assertions and sample_random_image_crops' own bound.
+        """
+        ch, cw = self.crop_shape
+        if not (self.training and self.random_crop):
+            # center crop -- exactly CropRandomizer.forward_in's eval behaviour
+            centre = torch.tensor([(height - ch) // 2, (width - cw) // 2],
+                                  dtype=torch.long)
+            return centre.unsqueeze(0).expand(batch_size, 2).clone()
+        # Deterministic in (seed, step): two calls at the same optimizer step produce the
+        # SAME crop, which is what lets the observation's offset be reused for the subgoals
+        # generated from it, and what makes a resumed run reproduce an uninterrupted one.
+        self._crop_generator.manual_seed(
+            (self._crop_seed * 1_000_003 + self._crop_step) % (2 ** 31 - 1))
+        dy = torch.randint(0, height - ch, (batch_size,), generator=self._crop_generator)
+        dx = torch.randint(0, width - cw, (batch_size,), generator=self._crop_generator)
+        return torch.stack([dy, dx], dim=-1)
+
+    def _crop_offsets_for(self, batch_size: int, repeat: int = 1):
+        """Per-image crop offsets for a flattened (B*repeat, C, H, W) batch, or None.
+
+        One offset is drawn per SAMPLE and cached for the whole forward pass, then repeated
+        across that sample's `repeat` images (the obs window's timesteps). Every later call
+        inside the same `_crop_scope` -- notably each candidate's subgoal -- reuses the very
+        same per-sample offsets, which is the point: the observation and the subgoals
+        predicted from it stay spatially registered, exactly as they are at eval where both
+        are center-cropped.
+        """
+        if self.crop_shape is None:
+            return None
+        offsets = self._crop_offsets
+        if offsets is None or offsets.shape[0] != batch_size:
+            offsets = self._draw_crop_offsets(batch_size, *self._crop_input_hw)
+            self._crop_offsets = offsets
+        if repeat > 1:
+            offsets = offsets.repeat_interleave(repeat, dim=0)
+        return offsets
+
+    @contextlib.contextmanager
+    def _crop_scope(self):
+        """Hold one set of crop offsets for the duration of one forward pass.
+
+        The obs encode and every subgoal encode inside the scope reuse the same per-sample
+        offsets; the outermost exit clears them so they never leak into the next batch,
+        whose batch size may differ.
+
+        REENTRANT, and that is what makes the guarantee hold for every caller. The scope
+        used to be opened only by `compute_loss` and `predict_action_best`, so the fix was
+        a property of those two paths rather than of the search itself -- and
+        `generate_search_context` / `search_candidates` are also called DIRECTLY, by
+        TrainSearchOuterInnerWorkspace (which regenerates the context every outer pass) and
+        by the diagnostic scripts. Those calls encoded the observation and each candidate's
+        subgoal under independent per-image crops, i.e. exactly the split-crop defect the
+        policy-level offset was introduced to remove (AUDIT.md P1-1), for any mode whose
+        context contains a subgoal image.
+
+        Every search entry point now opens a scope of its own. Nesting is a no-op: only
+        depth 0 resets, so `compute_loss` -> `generate_search_context` -> `search_candidates`
+        still shares the single offset set drawn at the top, and the offline trainer's
+        behaviour is bit-for-bit unchanged.
+        """
+        outermost = self._crop_depth == 0
+        if outermost:
+            self._crop_offsets = None
+        self._crop_depth += 1
+        try:
+            yield
+        finally:
+            self._crop_depth -= 1
+            if self._crop_depth == 0:
+                self._crop_offsets = None
 
     def _build_verifier(self, **kwargs):
         """Build the maze verifier. Imported lazily so `l2s` is only required here.
@@ -547,6 +781,12 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         Online's trailing ``obs_projection`` (obs_feature_dim -> hidden) has its offline
         counterpart inside the transformer as ``SearchTransformerForDiffusion.obs_emb``,
         so there is deliberately no projection here.
+
+        The crop offsets are chosen HERE and handed to the encoder, rather than left to
+        CropRandomizer's own per-image sampling: one offset per sample covers the whole obs
+        window and, via the surrounding `_crop_scope`, every subgoal image predicted from
+        it. Per-image sampling gave each of those its own offset at train time while eval
+        center-cropped them all -- the registration mismatch this path exists to avoid.
         """
         if isinstance(nobs, dict):
             value = next(iter(nobs.values()))
@@ -555,7 +795,10 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         else:
             B, T = nobs.shape[:2]
             this_nobs = nobs.reshape(-1, *nobs.shape[2:])
-        return self.obs_encoder(this_nobs).reshape(B, T, -1)
+        offsets = self._crop_offsets_for(B, repeat=T)
+        if offsets is None:
+            return self.obs_encoder(this_nobs).reshape(B, T, -1)
+        return self.obs_encoder(this_nobs, crop_offsets=offsets).reshape(B, T, -1)
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim).
@@ -697,32 +940,38 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         ``obs_features`` optionally supplies an already-encoded obs (see
         _encode_obs_features); otherwise it is encoded once here and shared by every
         candidate, since they all condition on the same observation.
+
+        The crop scope is opened HERE rather than only in the callers, so the observation
+        and every candidate's subgoal share one crop offset no matter who called -- this is
+        the entry point TrainSearchOuterInnerWorkspace and the diagnostic scripts reach
+        directly. It is reentrant, so the offline trainer's nested call is a no-op.
         """
-        if obs_features is None:
-            obs_features = self._encode_obs_features(obs_dict)
-        actions = None
-        values = None
-        scores = None
-        subgoals = list()
-        for _ in range(n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=actions,
-                values=values,
-                obs_features=obs_features,
-            )['action_pred']
-            new_value, new_score, new_subgoal = self._score_candidates(
-                verifier, obs_dict, new_action, want_subgoals=return_subgoals)
-            if actions is None:
-                actions = new_action.unsqueeze(1)
-                values = new_value.unsqueeze(1)
-                scores = new_score.unsqueeze(1)
-            else:
-                actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
-                values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-                scores = torch.cat([scores, new_score.unsqueeze(1)], dim=1)
-            if new_subgoal is not None:
-                subgoals.append(new_subgoal)
+        with self._crop_scope():
+            if obs_features is None:
+                obs_features = self._encode_obs_features(obs_dict)
+            actions = None
+            values = None
+            scores = None
+            subgoals = list()
+            for _ in range(n_actions):
+                new_action = self.predict_action(
+                    obs_dict,
+                    actions=actions,
+                    values=values,
+                    obs_features=obs_features,
+                )['action_pred']
+                new_value, new_score, new_subgoal = self._score_candidates(
+                    verifier, obs_dict, new_action, want_subgoals=return_subgoals)
+                if actions is None:
+                    actions = new_action.unsqueeze(1)
+                    values = new_value.unsqueeze(1)
+                    scores = new_score.unsqueeze(1)
+                else:
+                    actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
+                    values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
+                    scores = torch.cat([scores, new_score.unsqueeze(1)], dim=1)
+                if new_subgoal is not None:
+                    subgoals.append(new_subgoal)
 
         out = (actions, values)
         if return_scores:
@@ -739,47 +988,62 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             n_actions,
             return_scores: bool = False,
             return_subgoals: bool = False,
+            obs_features: Optional[torch.Tensor] = None,
         ):
-        """Search with a rolling context window; see search_candidates for the return shape."""
-        # encode once for the whole search, however many candidates it runs
-        obs_features = self._encode_obs_features(obs_dict)
-        if n_actions <= self.max_actions:
-            return self.search_candidates(
-                obs_dict, verifier, n_actions, return_scores=return_scores,
+        """Search with a rolling context window; see search_candidates for the return shape.
+
+        ``obs_features`` optionally supplies an already-encoded obs so a caller that needs
+        the features for something else too (``predict_action_best`` in 'final_pass' mode
+        draws one extra sample from them) pays for a single encoder pass rather than two.
+
+        Opens its own (reentrant) crop scope. The rolling-window branch below encodes
+        subgoals in a loop of its own rather than inside `search_candidates`, so wrapping
+        only that method would leave every candidate past `max_actions` on an independent
+        crop -- the exact split-crop defect, reappearing only at n > K.
+        """
+        with self._crop_scope():
+            # encode once for the whole search, however many candidates it runs
+            if obs_features is None:
+                obs_features = self._encode_obs_features(obs_dict)
+            if n_actions <= self.max_actions:
+                return self.search_candidates(
+                    obs_dict, verifier, n_actions, return_scores=return_scores,
+                    obs_features=obs_features, return_subgoals=return_subgoals)
+
+            # scores are always needed internally (the caller may only want values), but
+            # subgoals are only rendered when actually asked for.
+            head = self.search_candidates(
+                obs_dict, verifier, self.max_actions, return_scores=True,
                 obs_features=obs_features, return_subgoals=return_subgoals)
+            actions, values, scores = head[0], head[1], head[2]
+            subgoals = head[3] if return_subgoals else None
+            all_actions = actions.clone()
+            all_values = values.clone()
+            all_scores = scores.clone()
+            all_subgoals = [subgoals] if subgoals is not None else []
 
-        # scores are always needed internally (the caller may only want values), but
-        # subgoals are only rendered when actually asked for.
-        head = self.search_candidates(
-            obs_dict, verifier, self.max_actions, return_scores=True,
-            obs_features=obs_features, return_subgoals=return_subgoals)
-        actions, values, scores = head[0], head[1], head[2]
-        subgoals = head[3] if return_subgoals else None
-        all_actions = actions.clone()
-        all_values = values.clone()
-        all_scores = scores.clone()
-        all_subgoals = [subgoals] if subgoals is not None else []
+            action_history = actions[:, 1:]
+            value_history = values[:, 1:]
+            for _ in range(self.max_actions, n_actions):
+                new_action = self.predict_action(
+                    obs_dict,
+                    actions=action_history,
+                    values=value_history,
+                    obs_features=obs_features,
+                )['action_pred']
+                new_value, new_score, new_subgoal = self._score_candidates(
+                    verifier, obs_dict, new_action, want_subgoals=return_subgoals)
 
-        action_history = actions[:, 1:]
-        value_history = values[:, 1:]
-        for _ in range(self.max_actions, n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=action_history,
-                values=value_history,
-                obs_features=obs_features,
-            )['action_pred']
-            new_value, new_score, new_subgoal = self._score_candidates(
-                verifier, obs_dict, new_action, want_subgoals=return_subgoals)
-
-            all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
-            all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
-            all_scores = torch.cat([all_scores, new_score.unsqueeze(1)], dim=1)
-            action_history = torch.cat([action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
-            value_history = torch.cat([value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
-            if new_subgoal is not None:
-                # already (B, 1, ...) from the inner stack vs (B, ...) from the loop
-                all_subgoals.append({k: v.unsqueeze(1) for k, v in new_subgoal.items()})
+                all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
+                all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
+                all_scores = torch.cat([all_scores, new_score.unsqueeze(1)], dim=1)
+                action_history = torch.cat(
+                    [action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
+                value_history = torch.cat(
+                    [value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
+                if new_subgoal is not None:
+                    # already (B, 1, ...) from the inner stack vs (B, ...) from the loop
+                    all_subgoals.append({k: v.unsqueeze(1) for k, v in new_subgoal.items()})
 
         out = (all_actions, all_values)
         if return_scores:
@@ -794,35 +1058,188 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             obs_dict: Dict[str, torch.Tensor],
             n_actions: Optional[int] = None,
         ) -> Dict[str, torch.Tensor]:
-        """Best-of-n search readout, in the standard ``predict_action`` output format.
+        """Search readout, in the standard ``predict_action`` output format.
 
         Generates ``n_actions`` candidates via the sliding-window search
-        (``predict_n_actions``), scores each with this policy's verifier, and returns the
-        argmax-value candidate as ``{'action': (B, n_action_steps, Da), 'action_pred':
-        (B, horizon, Da), 'scores': (B, n)}`` -- the shape the env runners and
-        MultiStepWrapper expect.
+        (``predict_n_actions``), scores each with this policy's verifier, and returns one
+        action chunk as ``{'action': (B, n_action_steps, Da), 'action_pred': (B, horizon,
+        Da), 'scores': (B, n)}`` -- the shape the env runners and MultiStepWrapper expect.
+        (Tensors only: the runners push this dict straight through ``dict_apply``, so a
+        string mode tag here would crash them. Read the mode off ``policy.selection``.)
+
+        WHICH chunk depends on ``self.selection``:
+          * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
+          * 'final_pass' -- one MORE sample, conditioned on all n scored candidates, is
+            drawn and returned. It is not simulated and not compared to anything, so the
+            verifier scalar never touches selection; it reaches the model only as search
+            context. ``scores`` still describes the n context candidates (so the caller can
+            log the spread), but no longer describes the returned action.
+
+        Cost at width n: 'argmax' is n samples + n sims, 'final_pass' is n+1 samples + n
+        sims. Consumers that compare arms should compare at equal SAMPLES, not equal n --
+        see the ``n_generations`` field eval_search_pusht.py records.
         """
         n = n_actions if n_actions is not None else self.max_actions
         # `scores` is the scalar verifier value in every search_context mode; `values` may
         # be a wider context (e.g. a subgoal state), which is not rankable.
-        actions, _, scores = self.predict_n_actions(
-            obs_dict, verifier=self.verifier, n_actions=n,
-            return_scores=True)                             # (B, n, H, Da), _, (B, n)
+        # The crop scope spans the whole search so the obs and every candidate's subgoal
+        # share one offset, exactly as in training. (In eval mode that offset is the
+        # deterministic center crop, so this is belt-and-braces rather than load-bearing.)
+        with self._crop_scope():
+            # encoded once and shared by the search AND (in 'final_pass') the extra sample
+            obs_features = self._encode_obs_features(obs_dict)
+            actions, values, scores = self.predict_n_actions(
+                obs_dict, verifier=self.verifier, n_actions=n,
+                return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
 
-        B = actions.shape[0]
-        best_idx = scores.argmax(dim=1)                     # (B,)
-        arange = torch.arange(B, device=actions.device)
-        best_action_pred = actions[arange, best_idx]        # (B, H, Da)
+            if self.selection in ('argmax', 'softmax'):
+                B = actions.shape[0]
+                arange = torch.arange(B, device=actions.device)
+                if self.selection == 'argmax':
+                    pick = scores.argmax(dim=1)                         # (B,)
+                else:
+                    # z-score across the n candidates, then sample. unbiased=False so a
+                    # single candidate (n=1) gives std 0 rather than NaN; the eps then
+                    # leaves z==0, i.e. a uniform draw over one option -- the same action
+                    # argmax would have taken, so the n=1 column is comparable by
+                    # construction rather than by luck.
+                    mu = scores.mean(dim=1, keepdim=True)
+                    sd = scores.std(dim=1, unbiased=False, keepdim=True)
+                    z = (scores - mu) / (sd + 1e-6)
+                    logits = z / self.selection_temperature
+                    pick = torch.distributions.Categorical(logits=logits).sample()
+                action_pred = actions[arange, pick]                     # (B, H, Da)
+            else:
+                # Condition on the last max_actions-1 candidates: that is the widest
+                # context the model was ever trained at (the staircase memory mask tops out
+                # at max_context_actions), so a longer one would index past cond_pos_emb.
+                # `values`, not `scores` -- in the subgoal modes the context is the encoded
+                # subgoal observation and the bare scalar would be the wrong width.
+                keep = self.max_actions - 1
+                action_pred = self.predict_action(
+                    obs_dict,
+                    actions=actions[:, -keep:],
+                    values=values[:, -keep:],
+                    obs_features=obs_features,
+                )['action_pred']                                        # (B, H, Da)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
         return {
-            'action': best_action_pred[:, start:end],       # (B, n_action_steps, Da)
-            'action_pred': best_action_pred,
+            'action': action_pred[:, start:end],            # (B, n_action_steps, Da)
+            'action_pred': action_pred,
             'scores': scores,
         }
 
-    def compute_loss(self, batch):
+    def generate_search_context(self, obs_dict, obs_features=None):
+        """The search context ``compute_loss`` conditions on: ``(actions, values)``.
+
+        Exactly the ``search_candidates`` call the training loss makes, split out so a
+        trainer can generate the context ONCE for a pool of windows and reuse it across
+        several gradient steps (see TrainSearchOuterInnerWorkspace) instead of paying for
+        ``max_actions - 1`` candidate samples plus their verifier rollouts on every update.
+
+        Deliberately ``no_grad`` rather than ``inference_mode``: inference tensors carry a
+        permanent restriction against taking part in autograd-recorded operations, which
+        makes them unsafe to buffer and feed to the model on a later step. ``no_grad``
+        yields ordinary tensors, so the returned context can be stored for as long as the
+        caller likes. The search is a pure generator either way -- no graph is built.
+
+        ``actions`` come back in RAW action units (the verifier simulates them); the
+        normalization the model needs happens at the model boundary, see
+        ``_normalize_context_actions``.
+        """
+        with torch.no_grad():
+            return self.search_candidates(
+                obs_dict,
+                verifier=self.verifier,
+                n_actions=self.max_actions - 1,
+                obs_features=obs_features,
+            )
+
+    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
+        """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
+
+        Used to compare two snapshots of this policy at matched inputs. For a fixed
+        ``(noisy_trajectory, timestep, obs, context)`` the two snapshots' reverse
+        transition kernels are Gaussians whose variance comes from the scheduler and so is
+        identical between them; they differ only in a mean that is affine in the predicted
+        noise. Their KL is therefore exactly proportional to ``||eps_a - eps_b||^2``, which
+        makes epsilon-space MSE at matched inputs a per-denoising-step KL -- the tractable
+        stand-in for the policy KL that PPO would monitor (a diffusion policy has no
+        closed-form ``log p(a|s)`` to take a ratio of).
+
+        Obs corruption is deliberately NOT applied: ``corrupt_obs_features`` draws fresh
+        noise per call, so including it would book corruption noise as policy drift. The
+        obs ARE re-encoded here rather than taken from the caller, because the vision
+        backbone is part of what drifts and each snapshot must use its own.
+        """
+        with torch.no_grad():
+            return self.model(
+                noisy_trajectory,
+                timesteps,
+                obs_cond=self._encode_obs_features(batch['obs']),
+                actions=self._normalize_context_actions(actions),
+                values=values,
+            )
+
+    def _slot_weights(self, device, dtype) -> Optional[torch.Tensor]:
+        """Per-candidate-slot loss weights, or None for the uniform (unweighted) path.
+
+        WHAT THE SLOTS ARE. One forward decodes all K = max_actions candidate slots, and
+        every one of them is trained on the SAME target -- the expert action. What differs
+        is how much context each is allowed to see: the staircase memory mask lets slot k
+        attend to exactly the first k context candidates. So the model is fitting a family
+        of conditionals at once, from "no context" (slot 0, the BC case) up to "K-1 scored
+        candidates" (slot K-1).
+
+        WHY WEIGHT THEM. Under ``selection: final_pass`` the executed action is a sample
+        drawn with a FULL context, so slot K-1 is the deployment condition and the earlier
+        slots exist to manufacture the context it reads. Averaging flat spends 1 - 1/K of
+        the gradient on conditionals that arm never executes.
+
+        THE SHAPE. Geometric decay counting back from the last slot,
+        ``w_k ∝ decay^(K-1-k)``: weight rises monotonically with context length, each step
+        back costing a constant factor. Monotone rather than last-slot-only because the
+        earlier slots are not disposable -- they generate the candidates slot K-1 reads, so
+        starving them degrades its input. Geometric rather than linear because the thing
+        being traded off (how far a slot's conditioning is from deployment) is multiplicative
+        in the number of missing context entries, not additive.
+
+        THE NORMALIZATION. Weights are scaled to mean 1, i.e. they sum to K exactly as the
+        uniform weights do. Three things downstream read the loss MAGNITUDE --
+        ``gradient_clip_norm`` (a uniformly larger loss clips more often), the effective
+        step size under a shared ``lr``, and ``val_loss``, which the topk selector monitors
+        and the reports compare across arms. Without this, changing the decay would silently
+        change all three and the ablation would differ in scale as well as in mechanism.
+
+        Note the model has ONE set of weights shared by every slot -- this reweights which
+        conditioning regime those shared weights are tuned for, it does not give the final
+        slot parameters of its own.
+        """
+        if self.slot_weight_decay == 1.0 or self.max_actions == 1:
+            return None
+        k = torch.arange(self.max_actions, device=device, dtype=dtype)
+        w = self.slot_weight_decay ** (self.max_actions - 1 - k)
+        return w / w.mean()
+
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+        """Denoising loss for the expert action, conditioned on a best-of-n search context.
+
+        ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the
+        form ``generate_search_context`` returns it. ``None`` (the default) generates it
+        here from the current weights -- the offline path, which pays the full search cost
+        on every gradient step. A trainer that amortizes the search across several updates
+        passes the buffered context back in instead.
+
+        ``return_aux`` additionally returns the exact inputs the denoiser was called with,
+        so a frozen snapshot of this policy can be re-run on identical inputs via
+        ``predict_epsilon``; matched inputs are what make that comparison a KL.
+        """
+        with self._crop_scope():
+            return self._compute_loss(batch, actions, values, return_aux)
+
+    def _compute_loss(self, batch, actions=None, values=None, return_aux=False):
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon, \
@@ -832,17 +1249,13 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
         # encode the obs ONCE: the same features back the grad-tracked training forward
         # and every candidate of the context search below (which only reads them, under
-        # inference_mode, so no graph is built for the search).
+        # no_grad, so no graph is built for the search).
         obs_features = self._encode_obs_features(batch['obs'])
         obs_cond = self.corrupt_obs_features(obs_features)
 
-        with torch.inference_mode():
-            actions, values = self.search_candidates(
-                batch['obs'],
-                verifier=self.verifier,
-                n_actions=self.max_actions - 1,
-                obs_features=obs_features,
-            )
+        if actions is None:
+            actions, values = self.generate_search_context(
+                batch['obs'], obs_features=obs_features)
 
         trajectory = target_actions.unsqueeze(1).expand(
             -1,
@@ -892,6 +1305,19 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
-        loss = F.mse_loss(pred, target, reduction='none')
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        return loss.mean()
+        loss = F.mse_loss(pred, target, reduction='none')      # (B, K, H, Da)
+        weights = self._slot_weights(loss.device, loss.dtype)
+        if weights is None:
+            loss = reduce(loss, 'b ... -> b (...)', 'mean').mean()
+        else:
+            per_slot = reduce(loss, 'b k ... -> b k', 'mean')  # (B, K)
+            loss = (per_slot * weights).mean()
+        if not return_aux:
+            return loss
+        # everything a frozen snapshot needs to reproduce this exact forward
+        return loss, {
+            'noisy_trajectory': noisy_trajectory,
+            'timesteps': timesteps,
+            'actions': actions,
+            'values': values,
+        }

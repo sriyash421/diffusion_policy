@@ -1,0 +1,25 @@
+# SUBGOAL ONLY + corrupted observation conditioning.
+#
+# train_pusht_diffusion_search_subgoal_only, but the encoded obs features are noised before
+# they condition the denoiser (corrupt_obs, a separate DDPM at a random timestep per batch
+# row -- see DiffusionTransformerSearchPolicy.corrupt_obs_features).
+#
+# This is the more informative half of the pair. PushT is fully observed, so with a clean
+# obs the search context is theoretically redundant -- everything a candidate's subgoal
+# could tell the model is already derivable from the observation it is conditioned on, and
+# AUDIT.md 9.1 records that the context is conditionally uninformative under this loss.
+# Corrupting the obs is what makes the context carry information the model cannot get any
+# other way, so if reading subgoals is ever going to beat the oracle argmax, it is here.
+defaults:
+  - train_pusht_diffusion_search_subgoal_only
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_only_corrupt
+
+search_context: subgoal
+selection: final_pass
+corrupt_obs: True
+arm: subgoal-only
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass", "corrupt_obs"]

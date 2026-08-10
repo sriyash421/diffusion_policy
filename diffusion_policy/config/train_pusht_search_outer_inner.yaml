@@ -1,0 +1,67 @@
+# Outer/inner trainer for the conditional-diffusion search policy.
+#
+# Same policy, same data, same loss as train_pusht_diffusion_search -- only the training
+# LOOP differs. The baseline regenerates the search context inside compute_loss on every
+# gradient step (max_actions-1 candidate samples + their verifier rollouts, then discarded).
+# Here the context is generated once per outer step for a pool of outer_batch_size windows
+# and reused for inner_epochs passes, dividing the search cost per update by exactly
+# inner_epochs (4x at these settings: 480 -> 120 verifier sims per update).
+#
+# The cost of that amortization is staleness -- the buffered context comes from weights up
+# to num_inner updates old -- so a frozen snapshot of the collector policy is kept and
+# train_drift_mse_eps reports how far the live policy has moved from it. For fixed
+# (noisy_trajectory, timestep, obs, context) the two snapshots' reverse kernels are
+# Gaussians sharing the scheduler's variance, so that MSE is exactly proportional to the
+# per-denoising-step KL: it is the tractable stand-in for the policy KL PPO would monitor.
+# NOTE the defaults order: `_self_` LAST, so this file's values win over the base.
+# With `_self_` first (as the two _subgoal* ablation configs have it) the base is applied
+# afterwards and silently overrides everything it also defines -- including `name`,
+# `logging.tags` and, fatally here, `_target_`.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_search_outer_inner
+
+# Identity keys. `trainer` MUST be set: hydra.run.dir is
+#   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+# so without it every outer/inner arm lands in the OFFLINE run's directory and,
+# with training.resume: True, loads that run's checkpoints under a different
+# workspace. search_context must be top-level for the same reason -- setting it
+# under policy: left run_name reading ctx-value regardless of the real arm.
+trainer: outer_inner
+search_context: value
+corrupt_obs: False
+arm: value
+_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
+
+training:
+  # THE knob. Loop counts, the LR schedule, the EMA decay and every cadence below are
+  # defined independently of it, so changing this changes the run length and nothing else.
+  # 100k matches the two search-context ablations, keeping the runs comparable.
+  max_gradient_steps: 20000
+
+  outer_batch_size: 256    # windows whose context is generated per outer step
+  inner_batch_size: 32     # matches the baseline's dataloader.batch_size
+  inner_epochs: 4          # 256/32 = 8 batches/epoch x 4 = 32 updates per outer step
+  drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
+
+  use_ema: True
+  # Constant, NOT the repo's warmup curve. EMAModel's default decay is a function of the
+  # step index (1 - (1+step)^-0.75, capped at max_value), which makes the averaging window
+  # depend on where you are in the run -- and its step counter is not checkpointed, so a
+  # resumed run re-enters the curve at 0. A flat decay is the same at every step and
+  # identical across restarts. 1/(1-0.995) = a 200-step averaging window throughout.
+  # Override to 0.999 for a 1000-step window if this smooths too little.
+  ema_decay: 0.995
+
+  # Cadences in GRADIENT STEPS, so they are unaffected by run length or by changes to
+  # inner_epochs / batch sizes. Spacing matches the baseline, which rolls out every 50
+  # epochs (~5.4k steps) and validates every 10 epochs (~1.1k steps).
+  rollout_every_steps: 5000
+  val_every_steps: 1000
+  sample_every_steps: 1000
+  checkpoint_every: 1000   # matches the post-audit offline cadence -> 20 step ckpts
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "outer_inner"]

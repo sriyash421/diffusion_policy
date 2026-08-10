@@ -1,0 +1,38 @@
+# The SINGLE-STEP (on-policy) offline search trainer, pinned explicitly.
+#
+# This is the loop every one of the 26 runs on disk was trained with: `compute_loss`
+# regenerates the whole search context from the CURRENT weights on every gradient step --
+# max_actions-1 candidate samples plus their verifier rollouts, used once and discarded.
+# README_pusht.md calls it the maximally on-policy extreme. It is also the dominant cost:
+# 32 x 15 = 480 candidate samples and 480 verifier sims per update, which is why the batch
+# size is pinned at 32.
+#
+# WHY THIS FILE EXISTS. The base config is going to switch its default to the outer/inner
+# loop (see the DEFAULT TRAINER block in train_pusht_diffusion_search.yaml). Today that has
+# not happened, so this file is a no-op that resolves identically to the base -- the point
+# is that anything inheriting it is immune to the flip when it does happen, and that a run
+# trained the old way after the flip has a name for what it did.
+#
+# Inherit this, not the base, for anything that must stay single-step. `train_pusht_bc`
+# already does: BC has max_actions=1 and generates no candidates at all, so there is no
+# search cost to amortize and outer/inner would only add machinery it never uses.
+#
+# `_self_` LAST. With `_self_` first the base is applied afterwards and silently overrides
+# everything this file defines -- including `_target_`, which is the one value here that
+# must win. That exact mistake is documented in train_pusht_search_outer_inner.yaml:16.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_single
+
+# `trainer` is a PATH COMPONENT of hydra.run.dir
+#   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+# so it is not cosmetic: it is what keeps a single-step run and an outer/inner run of the
+# same arm in different directories instead of one resuming the other's checkpoints under
+# the wrong workspace.
+trainer: offline
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "single_step"]

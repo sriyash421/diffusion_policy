@@ -1,0 +1,21 @@
+# BC baseline at the SMALL data budget (25 demonstrations).
+#
+# Pairs with train_pusht_bc.yaml (100 demos); the only difference is n_demos, which selects
+# both the split manifest and the run directory. The 25-episode train set is a strict
+# subset of the 100-episode one and val/test are identical across the two manifests, so the
+# pair isolates data budget and nothing else.
+#
+# NOTE this is not the same 25 episodes as any existing search run: the six runs under
+# `offline/ctx-*_seed-42/` predate the manifest and were trained on 29 episodes against a
+# 10-episode val split (train_ratio 0.2 of a 146-episode pool). Nothing was ever trained at
+# 25 before this. See AUDIT.md.
+defaults:
+  - train_pusht_bc
+  - _self_
+
+name: train_pusht_bc_25
+
+n_demos: 25
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "bc", "demos-${n_demos}"]

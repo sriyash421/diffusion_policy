@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 import pathlib
+import datetime
 import hydra
 import copy
 from hydra.core.hydra_config import HydraConfig
@@ -8,6 +9,31 @@ from omegaconf import OmegaConf
 import dill
 import torch
 import threading
+
+
+def clone_policy(policy):
+    """Deep-copy a search policy WITHOUT duplicating its verifier's subprocess pool.
+
+    ``policy.verifier`` owns a pool of worker processes (PushTVerifier holds an
+    ``AsyncVectorEnv``), which ``copy.deepcopy`` would either choke on or silently fork a
+    second copy of -- doubling the sim processes on every clone. The verifier carries no
+    policy state (it is handed the obs and the candidate chunk on each call), so every
+    clone shares the original one. Only the live model's ``close()`` is ever called, so the
+    shared pool is torn down exactly once.
+
+    Lives here rather than in one workspace because both the offline and the outer/inner
+    trainers need it to build their EMA copy.
+    """
+    verifier = getattr(policy, 'verifier', None)
+    if verifier is None:
+        return copy.deepcopy(policy)
+    policy.verifier = None
+    try:
+        clone = copy.deepcopy(policy)
+    finally:
+        policy.verifier = verifier
+    clone.verifier = verifier
+    return clone
 
 
 class BaseWorkspace:
@@ -62,16 +88,29 @@ class BaseWorkspace:
                         payload['state_dicts'][key] = value.state_dict()
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
+        def _atomic_save():
+            """Write to a sibling .tmp then rename into place.
+
+            The rename is atomic on POSIX, so a reader never observes a partial file. Two
+            consumers depend on this: the eval watcher globs `step_*.ckpt` on existence
+            alone and would otherwise torch.load a half-written file, and `latest.ckpt` --
+            which `training.resume` reads -- was a truncate-then-write that a preemption
+            mid-save could leave truncated.
+            """
+            tmp = path.with_suffix(path.suffix + '.tmp')
+            with tmp.open('wb') as f:
+                torch.save(payload, f, pickle_module=dill)
+            os.replace(tmp, path)
+
         if use_thread:
             # A previous save may still be writing (possibly to this same path, e.g. two
             # `latest.ckpt` saves within one epoch). Joining first serializes the writes so
             # they cannot interleave and truncate each other.
             self.join_saving_thread()
-            self._saving_thread = threading.Thread(
-                target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
+            self._saving_thread = threading.Thread(target=_atomic_save)
             self._saving_thread.start()
         else:
-            torch.save(payload, path.open('wb'), pickle_module=dill)
+            _atomic_save()
         return str(path.absolute())
 
     def join_saving_thread(self):
@@ -85,6 +124,113 @@ class BaseWorkspace:
             thread.join()
             self._saving_thread = None
 
+
+    def write_manifest(self):
+        """Record run identity in <output_dir>/run.json, appending one entry per launch.
+
+        Nothing else on disk ties a run directory to the code and job that produced it:
+        the git sha existed only incidentally inside wandb's metadata, and there was no
+        back-pointer from a SLURM job id to a run dir at all -- which is why the reporting
+        scripts had to hand-maintain arm->path->jobid tables that drifted apart.
+
+        Appending rather than overwriting means requeues and resumes stay visible, so a
+        run that restarted three times is distinguishable from one that ran straight
+        through.
+        """
+        import json
+        import subprocess
+
+        def _git(*args):
+            try:
+                return subprocess.run(
+                    ['git', *args], cwd=os.path.dirname(os.path.abspath(__file__)),
+                    capture_output=True, text=True, timeout=10).stdout.strip()
+            except Exception:
+                return None
+
+        path = pathlib.Path(self.output_dir).joinpath('run.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cfg = self.cfg
+        launch = {
+            'started_at': datetime.datetime.now().isoformat(timespec='seconds'),
+            'slurm_job_id': os.environ.get('SLURM_JOB_ID'),
+            'hostname': os.environ.get('SLURMD_NODENAME') or os.uname().nodename,
+            'git_sha': _git('rev-parse', 'HEAD'),
+            'git_dirty': bool(_git('status', '--porcelain')),
+            'global_step': int(getattr(self, 'global_step', 0)),
+        }
+        payload = {}
+        if path.is_file():
+            try:
+                payload = json.loads(path.read_text())
+            except Exception:
+                payload = {}
+        payload.update({
+            'name': cfg.get('name'),
+            'exp_name': cfg.get('exp_name'),
+            'trainer': cfg.get('trainer'),
+            'task_name': cfg.get('task_name'),
+            'search_context': cfg.get('search_context'),
+            'corrupt_obs': cfg.get('corrupt_obs'),
+            'seed': cfg.training.get('seed'),
+            'zarr_path': cfg.task.dataset.get('zarr_path'),
+            'train_ratio': cfg.task.dataset.get('train_ratio'),
+            'target': cfg.get('_target_'),
+        })
+        payload.setdefault('launches', []).append(launch)
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, path)
+        return str(path)
+
+    def write_splits(self, dataset):
+        """Record the exact episodes this run trains/validates/tests on.
+
+        Nothing on disk used to say which episodes a checkpoint had been trained on: the
+        three splits were derived at runtime, independently, in the dataset, the env runner
+        and the eval script, from five config keys. Changing any one of them silently
+        repartitioned the data -- which is how a `n_val_episodes` 10 -> 30 change quietly
+        cut the training budget from 29 to 25 episodes.
+
+        On resume this ALSO acts as a guard: if the run directory already has a splits.json
+        whose checksum differs from what the current config resolves to, the data changed
+        underneath an in-flight experiment and we refuse rather than continue. That guard is
+        the main reason this method exists.
+
+        No-op for datasets that do not implement `get_split_indices` (the maze/robomimic
+        ones), so it is safe to call unconditionally.
+        """
+        import json
+
+        get_indices = getattr(dataset, 'get_split_indices', None)
+        if get_indices is None:
+            return None
+        splits = get_indices()
+
+        path = pathlib.Path(self.output_dir).joinpath('splits.json')
+        if path.is_file():
+            try:
+                previous = json.loads(path.read_text())
+            except Exception:
+                previous = None
+            if previous is not None and previous.get('checksum') != splits['checksum']:
+                raise RuntimeError(
+                    f'{path} records checksum {previous.get("checksum")} but this config '
+                    f'resolves to {splits["checksum"]}. The train/val/test partition '
+                    f'changed underneath an existing run -- resuming would train on '
+                    f'different data than the checkpoints in this directory were built '
+                    f'from, and every metric would silently mix the two. Restore the '
+                    f'original split settings, or start a new run directory.\n'
+                    f'  before: '
+                    f'{ {k: len(previous.get(k, [])) for k in ("train", "val", "test")} }\n'
+                    f'  now:    '
+                    f'{ {k: len(splits[k]) for k in ("train", "val", "test")} }')
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(splits, indent=2) + '\n')
+        os.replace(tmp, path)
+        return str(path)
 
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')

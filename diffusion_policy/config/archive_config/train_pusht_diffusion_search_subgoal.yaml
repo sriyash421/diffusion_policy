@@ -11,22 +11,23 @@
 # Candidate *ranking* (which candidate is executed) still uses the verifier scalar, so
 # rollout/eval is directly comparable with the baseline.
 #
-# 100k gradient steps, checkpointing every 10k (consumed by eval_search_pusht.py --watch),
-# same rollout / nrmse evaluation cadence as the baseline.
+# Training length, checkpoint cadence and the encoder/augmentation settings are all
+# INHERITED from train_pusht_diffusion_search so every arm of the ablation is identical
+# except for search_context. Do not override them here -- an earlier version pinned
+# max_gradient_steps: 100000 while the base ran 20k, which made the arms incomparable
+# and trained this one ~30x past its val_loss optimum. See AUDIT.md ROUND 4.
 defaults:
   - train_pusht_diffusion_search
   - _self_
 
 name: train_pusht_diffusion_search_subgoal
 
-policy:
-  search_context: subgoal
+# Ablation identity. These drive BOTH the policy and the output directory
+# (hydra.run.dir in the base config), so the arm is readable off the path.
+search_context: subgoal
+corrupt_obs: False
+arm: subgoal-chosen4value
 
-training:
-  # hard stop at 100k gradient steps; num_epochs is just an upper bound so the epoch
-  # loop never runs out first (the check is at the epoch boundary).
-  max_gradient_steps: 100000
-  num_epochs: 100000
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env"]

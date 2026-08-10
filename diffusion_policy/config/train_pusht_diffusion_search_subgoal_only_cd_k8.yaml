@@ -1,0 +1,24 @@
+# SUBGOAL ONLY + context recency decay, with a SHORTER search loop: K=8 candidates.
+#
+# Same objective as train_pusht_diffusion_search_subgoal_only_cd (uniform slot loss,
+# context_decay 0.9); only the loop length differs, so the K sweep is clean.
+#
+# WHY A SHORTER LOOP IS WORTH TESTING. CANDIDATES_FROM_SUBGOAL.md measured the ordering signal
+# decaying to the permutation null by k~6 -- beyond roughly six candidates the search is
+# resampling, not steering. If that holds, a 8-wide loop should lose little against 16 while
+# costing a fraction to train: generate_search_context draws K-1 candidates per gradient step,
+# each a full DDIM sample plus a verifier rollout, so cost scales as (K-1)/15.
+#     K=4  -> 20% of the K=16 cost
+#     K=8  -> 47%
+#
+# It also shrinks the deployed-slot spread. predict_action_best deploys slot min(n, K-1), so a
+# smaller K leaves less room for the deployed conditional to differ across n -- though with
+# context_decay that no longer matters for the weighting, which is n-independent by
+# construction.
+defaults:
+  - train_pusht_diffusion_search_subgoal_only_cd
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_only_cd_k8
+
+n_candidates: 8

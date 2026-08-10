@@ -1,0 +1,71 @@
+# SELECTION ablation: SUBGOAL ONLY -- no oracle pick anywhere in the loop.
+#
+# Every arm before this one selects the executed action with `argmax_k verifier_value_k`.
+# That makes each reported success rate a best-of-N over a ground-truth simulator, and it
+# is why AUDIT.md 2 records n=1 at 0-2% everywhere: the oracle argmax, not the model, is
+# doing the work. Nothing so far can tell whether the model has learned to READ the search
+# context or is merely being rescued by that argmax.
+#
+# This arm removes the argmax. The candidates are still generated and still simulated --
+# each one still reports its reached subgoal observation back into the context, exactly as
+# in train_pusht_diffusion_search_subgoal -- but the action that gets EXECUTED is one
+# FURTHER sample, drawn conditioned on all n scored candidates and run as-is, never
+# simulated and never compared to anything (`selection: final_pass`, see
+# DiffusionTransformerSearchPolicy.predict_action_best). So the verifier scalar reaches the
+# model only through the context, and the deployed action is the model's own synthesis.
+#
+# Nothing new is asked of the objective: compute_loss already trains candidate slot k to
+# emit the expert action given the first k context entries, so the last slot IS this extra
+# sample. What changes is its weight -- slot_weight_decay puts real gradient on the one
+# slot that is actually deployed, instead of the 1/16 it carries by default.
+#
+# Arm labels for the four (search_context, selection) pairs:
+#   (value,         argmax)     -> value
+#   (subgoal,       argmax)     -> subgoal-chosen4value
+#   (subgoal_value, argmax)     -> subgoal-value
+#   (subgoal,       final_pass) -> subgoal-only        <- this one
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_only
+
+# Ablation identity. These drive BOTH the policy and the output directory.
+search_context: subgoal
+selection: final_pass
+corrupt_obs: False
+arm: subgoal-only
+
+# The deployed slot is 1 of 16, so unweighted it receives 1/16 of the gradient despite
+# being the entire product of this arm. Weight decays back from it by a constant factor per
+# slot, so the whole family is tilted toward the deployment condition rather than one slot
+# being singled out -- the earlier slots are not disposable, they generate the candidates
+# this one reads, and starving them degrades its input.
+#
+# At K=16 this yields (renormalized to mean 1, so the loss scale and therefore
+# lr / gradient_clip_norm / val_loss stay comparable with the other arms):
+#     w_0 = 0.40   w_5 = 0.69   w_10 = 1.16   w_15 = 1.96      last/first = 4.9x
+#     the deployed slot takes 12.3% of the loss (6.2% uniform); the bottom 8 keep 30%
+# Lower decay tilts harder: 0.85 is 11x and leaves slot 0 at 0.23, 0.8 is 28x at 0.12 --
+# both starve the context builders, which is the failure mode this shape exists to avoid.
+slot_weight_decay: 0.9
+
+# This arm has no existing directory to resume, so it takes the post-rename naming now
+# while every other arm is still on the ctx-* form. Delete this override when the base
+# config's run_name is flipped -- see AUDIT.md 9.9.
+
+training:
+  # 100k rather than the base 20k. The base cap exists because the pre-augmentation runs
+  # overfit by ~3k steps (AUDIT.md ROUND 4); with the crop augmentation and EMA in place
+  # val_loss is still improving at 20k. Watch val_loss -- if it bottoms early here too, the
+  # extra budget costs nothing but disk, since selection is on val and not on the last step.
+  max_gradient_steps: 100000
+  # 100k/2k = 50 checkpoints x 274MB = 13.7GB per run. At the base cadence of 1k this would
+  # be 27GB per run, 55GB across the two arms, on a shared /gscratch.
+  checkpoint_every: 2000
+  # kept a multiple of checkpoint_every so every in-training success number belongs to
+  # weights that were saved and can be re-verified against an eval curve
+  rollout_every_steps: 4000
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass"]

@@ -16,8 +16,12 @@ defaults:
 
 name: train_pusht_diffusion_search_subgoal_corrupt
 
-policy:
-  corrupt_obs: True
+# Ablation identity. These drive BOTH the policy and the output directory
+# (hydra.run.dir in the base config), so the arm is readable off the path.
+search_context: subgoal
+corrupt_obs: True
+arm: subgoal-chosen4value
+
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "corrupt_obs"]

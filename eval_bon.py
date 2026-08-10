@@ -167,8 +167,9 @@ def plot_curves(c, rewards, out_path):
     ax.axhline(c['mean_reward'], color=MUTED, ls='--', lw=1)
     ax.annotate('single-sample mean %.3f' % c['mean_reward'], (n[-1], c['mean_reward']),
                 ha='right', va='bottom', color=MUTED, fontsize=8)
-    ax.set_xlabel('number of samples (n)'); ax.set_ylabel('best reward so far')
-    ax.set_title('Best-of-n reward'); ax.legend(loc='lower right', fontsize=8)
+    ax.set_xlabel('n = independent full episodes (post-hoc oracle max)')
+    ax.set_ylabel('best reward so far')
+    ax.set_title('Oracle best-of-n over EPISODES (not deployable; cf. eval_search_pusht)'); ax.legend(loc='lower right', fontsize=8)
 
     ax = axes[1]
     ax.plot(n, c['bon_success'], lw=2, color=YELLOW, label='best-of-n success')
@@ -177,9 +178,10 @@ def plot_curves(c, rewards, out_path):
     ax.axhline(c['mean_success'], color=MUTED, ls='--', lw=1)
     ax.annotate('single-sample mean %.3f' % c['mean_success'], (n[-1], c['mean_success']),
                 ha='right', va='bottom', color=MUTED, fontsize=8)
-    ax.set_xlabel('number of samples (n)'); ax.set_ylabel('success rate so far (coverage >= 95%)')
+    ax.set_xlabel('n = independent full episodes (post-hoc oracle max)')
+    ax.set_ylabel('success rate so far (coverage >= 95%)')
     ax.set_ylim(-0.03, 1.03)
-    ax.set_title('Best-of-n success rate'); ax.legend(loc='lower right', fontsize=8)
+    ax.set_title('Oracle best-of-n over EPISODES (not deployable; cf. eval_search_pusht)'); ax.legend(loc='lower right', fontsize=8)
 
     ax = axes[2]
     ax.plot(n, c['regret_reward'], lw=2, color=BLUE, label='reward regret')
