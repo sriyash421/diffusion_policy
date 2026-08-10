@@ -17,6 +17,11 @@ fuse.cfg
 # Generation results
 results/
 
+# PushT search: rendered rollouts (regenerate with scripts/render_search_videos.py)
+videos/
+# eval watcher bookkeeping -- runtime state, not source
+scripts/slurm/eval_watchers.tsv
+
 ray/auth.json
 
 # Byte-compiled / optimized / DLL files
