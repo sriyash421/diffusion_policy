@@ -11,26 +11,40 @@ This doc is the join between the two. `aug9_analysis.md` §1b says *what each ru
 
 ## What to copy from each run
 
+Take **everything except `checkpoints/`** — measured across all 26 runs, that is only ~2.3 GB,
+so there is no reason to be selective about the small stuff:
+
 ```
-bon_search/                      success_curves.jsonl, step_*/success_curve.json
-bon_search_sel-argmax/           the argmax/softmax selection sweep, where it exists
+bon_search/                      success_curves.jsonl  (one row per checkpoint)
+                                 step_*/success_curve.json -- per_n_rewards, the full
+                                 50-episode reward vector at each n, plus episode_idxs.
+                                 This is what any re-analysis beyond the summary rates
+                                 needs: per-episode outcomes, not just the mean.
+bon_search_sel-argmax/           the argmax-vs-softmax selection probe, where it exists
 bon_search_sel-softmax/
-run.json  splits.json            what was run, and on which episodes
-logs.json.txt  train.log         loss curves and the training record
+run.json  splits.json            what was run, and on exactly which episodes
+logs.json.txt  train.log         every training metric per step, and the run record
 .hydra/config.yaml               provenance -- aug9_analysis.md reads THIS, not config/
-checkpoints/step_<chosen>.ckpt   whichever step(s) you decide to keep -- see below
+media/                           96 rendered rollout mp4s per run -- qualitative failure
+                                 modes, which no scalar in the curves captures
+wandb/                           full run history and debug logs; the metrics are also in
+                                 logs.json.txt, so this is the one you can drop first
+checkpoints/step_<chosen>.ckpt   only the step(s) you decide to keep -- see below
 ```
 
-**Skip** `checkpoints/` beyond the steps you name, `wandb/`, and `media/`. Those are 99% of the
-213 GB and none of it is needed to reproduce a table or re-plot a curve.
+| | all 26 runs |
+|---|--:|
+| curves, configs, logs, splits | 408 MB |
+| `media/` | 463 MB |
+| `wandb/` | 1.4 GB |
+| **everything except checkpoints** | **~2.3 GB** |
+| one checkpoint per run | +6.5 GB (~200–265 MB each) |
+| every checkpoint | 213 GB |
 
 **Nothing on disk names a winner.** `bon_search/best.json` used to record one — highest val
 success at the largest n common to every evaluated checkpoint — and it was removed, along with
 the code that wrote it, because that rule is an analysis choice and having it on disk made it
 look like a result. Read `success_curves.jsonl`, decide which steps matter, and copy those.
-
-The artifacts are ~250 MB across all runs. Each checkpoint is ~200–265 MB, so one step per run
-adds ~6.5 GB (**≈7 GB total**); pick more steps and scale from there.
 
 ## The 26 runs under `pusht_search/pusht_image_search/offline/`
 
@@ -85,15 +99,15 @@ val first if you need one (`SUCCESS_RATES.md` §2, `aug9_analysis.md` §2).
 
 ```bash
 SRC=/gscratch/robotics/harine/diffusion_policy_outputs
-DST=/path/to/destination            # ~250 MB for artifacts, +~260 MB per checkpoint kept
-STEPS=()                            # e.g. STEPS=(2000 8000) -- empty copies curves only
+DST=/path/to/destination     # ~2.3 GB for everything below, +~260 MB per checkpoint kept
+STEPS=()                     # e.g. STEPS=(2000 8000); empty = no checkpoints this pass
+SKIP=(--exclude='checkpoints')          # add --exclude='wandb' to save 1.4 GB
 
 OFF=$SRC/pusht_search/pusht_image_search/offline
 for d in "$OFF"/*/; do
     [ -L "${d%/}" ] && continue                      # skip the ctx-* back-symlinks
     name=$(basename "$d")
-    rsync -a --exclude='checkpoints' --exclude='wandb' --exclude='media' \
-          "$d" "$DST/offline/$name/"
+    rsync -a "${SKIP[@]}" "$d" "$DST/offline/$name/"
     for s in "${STEPS[@]}"; do
         ckpt=$(printf '%s/checkpoints/step_%07d.ckpt' "${d%/}" "$s")
         [ -f "$ckpt" ] || continue
@@ -102,10 +116,23 @@ for d in "$OFF"/*/; do
     done
 done
 
-rsync -a --exclude='checkpoints' --exclude='wandb' --exclude='media' "$SRC/runs" "$DST/"
+rsync -a "${SKIP[@]}" "$SRC/runs" "$DST/"
 rsync -a "$SRC/candidate_scores" "$DST/"
 ```
 
-Copy the curves first with `STEPS=()`, decide from them, then re-run with the steps you want —
-rsync is incremental, so the second pass only moves the checkpoints.
+Run it once with `STEPS=()` to get all 2.3 GB of analysis material, decide which steps are
+worth the weights, then re-run with those steps — rsync is incremental, so the second pass
+moves only the checkpoints.
+
+Then point the generator at the copy and the tables rebuild off-cluster:
+
+```bash
+export DP_OUTPUT_ROOT=$DST
+python scripts/build_success_rates_doc.py
+```
+
+One caveat for anything that matches run directories by string: the `checkpoint` paths recorded
+*inside* `success_curves.jsonl` are absolute cluster paths, and for runs evaluated before the
+2026-08-05 rename they point through the `ctx-*` alias. Resolve them yourself; nothing reads
+them back automatically.
 
