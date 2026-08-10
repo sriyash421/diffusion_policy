@@ -48,14 +48,15 @@ DRY="${DRY:-}"
 STRIDE="${STRIDE:-10000}"
 MODES="${MODES:-argmax softmax}"
 
-# BC defaults to its val-selected best-at-n=1 checkpoint rather than the grid: that is the
-# policy the doc quotes, and BC has no selection rule of its own to sweep over training --
-# with max_actions=1 the n candidates are i.i.d. samples, so argmax vs softmax is a readout
-# over unstructured scores rather than over a learned search.
+# BC is skipped unless BC_GRID=1, which puts all three BC runs on the same stride as the
+# search arms. That is +96 jobs at STRIDE=10000 (BC@100 alone saves 30 checkpoints, all of
+# them multiples of 10000), which is why it is off by default.
 #
-# It is still a real comparison, so BC_GRID=1 puts all three BC runs on the same stride as
-# the search arms. That is +96 jobs at STRIDE=10000 (BC@100 alone saves 30 checkpoints, all
-# of them multiples of 10000), which is why it is off by default.
+# BC@100 used to fall back to a single val-selected step instead of being skipped, read out
+# of best.json. That file is gone -- it recorded one selection rule as though it were a
+# result -- so there is no fallback step source and BC is now all-or-nothing. BC also has no
+# selection rule of its own to sweep: with max_actions=1 the n candidates are i.i.d. samples,
+# so argmax vs softmax is a readout over unstructured scores, not over a learned search.
 BC_GRID="${BC_GRID:-}"
 
 # Rotate across three pools so a 100+ job sweep does not all queue behind one. Never the
@@ -81,15 +82,11 @@ for d in "$ROOT"/*_seed-42; do
     [ -L "$d" ] && continue
     case "$run" in ctx-*) continue;; esac
     [ -d "$d/checkpoints" ] || continue
-    # BC takes the grid only under BC_GRID; otherwise just its val-selected best step, and
-    # the two smaller BC budgets are skipped entirely (the doc quotes BC@100).
-    on_grid=1
+    # BC takes the grid only under BC_GRID, and is skipped entirely otherwise -- see above.
     case "$run" in
-        bc_demos-25*|bc_demos-29*) [ -n "$BC_GRID" ] || continue;;
-        bc_*)                      [ -n "$BC_GRID" ] || on_grid=0;;
+        bc_*) [ -n "$BC_GRID" ] || continue;;
     esac
-    if [ "$on_grid" = 1 ]; then
-        steps=$("$PY" - "$d" "$STRIDE" <<'EOF'
+    steps=$("$PY" - "$d" "$STRIDE" <<'EOF'
 import pathlib, re, sys
 d = pathlib.Path(sys.argv[1])
 stride = int(sys.argv[2])
@@ -100,10 +97,6 @@ have = sorted(int(re.search(r'step_(\d+)\.ckpt', f.name).group(1))
 print(' '.join(str(s) for s in have if s % stride == 0))
 EOF
 )
-    else
-        echo "  STRIDE= is required: nothing records a 'best' step any more" >&2
-        exit 2
-    fi
     [ -n "$steps" ] || { echo "  no checkpoints on the grid for $run"; continue; }
 
     for step in $steps; do

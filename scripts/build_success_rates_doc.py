@@ -13,11 +13,15 @@ checkpoint appears. Selection is never done on test.
     python scripts/build_success_rates_doc.py
 """
 import json
+import os
 import pathlib
 
 import numpy as np
 
-ROOT = pathlib.Path('/gscratch/robotics/harine/diffusion_policy_outputs')
+# $DP_OUTPUT_ROOT so this runs off-cluster against a copied results tree; the Hyak path is
+# only the default. Everything it reads is the small bon_search/ JSON, not the checkpoints.
+ROOT = pathlib.Path(os.environ.get(
+    'DP_OUTPUT_ROOT', '/gscratch/robotics/harine/diffusion_policy_outputs'))
 OFF = ROOT / 'pusht_search' / 'pusht_image_search' / 'offline'
 NS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
