@@ -14,8 +14,12 @@
 # Wall time per job, from measured single-split times x2 splits, ~1.6x margin:
 #   n=128 ~53m   n=256 ~100m   n=512 ~135m   n=1024 ~270m
 #
-#   bash scripts/slurm/submit_large_n_evals.sh            # val-selected best ckpt per arm
-#   bash scripts/slurm/submit_large_n_evals.sh 1000 2000  # or explicit steps, all arms
+#   bash scripts/slurm/submit_large_n_evals.sh 1000 2000  # explicit steps, all arms
+#
+# Steps are REQUIRED. This script used to default to the winner recorded in best.json, which
+# silently spent the tail budget according to one selection rule (val success at the largest
+# common n). Nothing records a winner any more -- read success_curves.jsonl, decide which
+# steps you want, and pass them.
 set -euo pipefail
 
 ROOT=/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline
@@ -30,6 +34,11 @@ declare -A TIME=( [128]=2:00:00 [256]=3:30:00 [512]=5:00:00 [1024]=8:00:00 )
 # guaranteed-partition exception. Pass NS=1024 explicitly if you want it anyway.
 NS="${NS:-128 256 512}"
 STEPS=("$@")
+if [ ${#STEPS[@]} -eq 0 ]; then
+    echo "usage: $(basename "$0") <step> [step...]" >&2
+    echo "no default: pick the steps from each run's bon_search/success_curves.jsonl" >&2
+    exit 2
+fi
 
 submitted=0
 # Arm-label globs (post-rename, AUDIT.md 9.9). Deliberately NOT `ctx-*`: those paths now
@@ -43,15 +52,7 @@ for arm in "$ROOT"/value_*_seed-42 "$ROOT"/subgoal-chosen4value_*_seed-42 \
            "$ROOT"/subgoal-value_*_seed-42 "$ROOT"/subgoal-only_*_seed-42 \
            "$ROOT"/bc_*_seed-42; do
     [ -d "$arm/checkpoints" ] || continue
-    if [ ${#STEPS[@]} -gt 0 ]; then
-        arm_steps=("${STEPS[@]}")
-    else
-        # the val-selected winner; selection is never done on test
-        best=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['step'])" \
-               "$arm/bon_search/best.json" 2>/dev/null || echo "")
-        [ -n "$best" ] || { echo "no best.json for $(basename "$arm"), skipping"; continue; }
-        arm_steps=("$best")
-    fi
+    arm_steps=("${STEPS[@]}")
     for step in "${arm_steps[@]}"; do
         ckpt=$(printf '%s/checkpoints/step_%07d.ckpt' "$arm" "$step")
         [ -f "$ckpt" ] || { echo "missing $ckpt, skipping"; continue; }

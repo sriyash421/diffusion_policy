@@ -286,8 +286,8 @@ training:
   sample_every_steps: 1000
   rollout_every: 50
   # persist a checkpoint every 1k gradient steps (consumed by eval_search_pusht --watch).
-  # Halved from 2k now that the run is 20k rather than 100k, so best.json still has ~20
-  # checkpoints to select from.
+  # Halved from 2k now that the run is 20k rather than 100k, so the eval curve still has
+  # ~20 checkpoints on it.
   checkpoint_every: 1000
   val_every: 10
   sample_every: 10
@@ -316,9 +316,9 @@ checkpoint:
   # continued to 100k, and because nothing tracked it the good model was overwritten and
   # every evaluated checkpoint came from the overfit regime.
   #
-  # Final selection is still done from real eval -- eval_search_pusht.py --watch evaluates
-  # each checkpoints/step_*.ckpt and maintains bon_search/success_curves.jsonl plus
-  # bon_search/best.json. topk just guarantees the low-val_loss weights still exist by the
+  # Any checkpoint choice should come from real eval, not from val_loss -- eval_search_pusht.py
+  # --watch evaluates each checkpoints/step_*.ckpt into bon_search/success_curves.jsonl, and
+  # you pick from that curve. topk just guarantees the low-val_loss weights still exist by the
   # time that runs.
   topk:
     monitor_key: val_loss

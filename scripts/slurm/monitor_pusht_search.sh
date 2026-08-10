@@ -81,17 +81,16 @@ for run_dir in "${run_dirs[@]}"; do
         echo "  [$label] watcher ${st:-GONE}; resubmit FAILED"
       fi
     fi
-    # latest evaluated checkpoint / best-so-far from the run-level index
-    bj="$run_dir/bon_search/best.json"
-    best=$( [ -f "$bj" ] && python -c "
-import json,sys
-d=json.load(open('$bj'))
-sr=d.get('success_rate');
-peak=max(sr) if isinstance(sr,list) else sr
-n=d.get('n'); nmax=(max(n) if isinstance(n,list) else n)
-print('step=%s peak_success=%.3f @n<=%s' % (d.get('step'), peak, nmax))
+    # how far the eval has got -- a count and the latest step, NOT a ranking. This used to
+    # print best.json's winner, which made a selection rule look like a status line.
+    cj="$run_dir/bon_search/success_curves.jsonl"
+    prog=$( [ -f "$cj" ] && python -c "
+import json
+rows=[json.loads(l) for l in open('$cj') if l.strip()]
+if rows:
+    print('%d ckpt evaluated, latest step=%s' % (len(rows), max(r['step'] for r in rows)))
 " 2>/dev/null )
-    echo "  [$label] job $jid $st  ${best:+best: $best}"
+    echo "  [$label] job $jid $st  ${prog:+eval: $prog}"
     printf '%s\t%s\t%s\n' "$label" "$run_dir" "$jid" >> "$tmp"
 done
 mv "$tmp" "$STATE"

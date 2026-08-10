@@ -142,68 +142,16 @@ def rows_for(bon):
     return sorted(out)
 
 
-def best_at_n(rs, n):
-    """The checkpoint with the highest VAL success at this n; test is only reported.
-
-    Selecting on test and then reporting that same test number is a max over many noisy
-    estimates and inflates it by one to two standard errors. Falls back to test only for
-    runs with no val curve at all, and those show '—' in the val column.
-    """
-    cand = [c for c in rs if n in c[1]]
-    if not cand:
-        return None
-    # index rather than unpack: a row is (step, test_succ, val_succ, *reward_series) and
-    # grew from 4 fields to 7 when the final/discounted series were added
-    keyed = [c for c in cand if n in c[2]]
-    if keyed:
-        c = max(keyed, key=lambda c: (c[2][n], c[3].get(n, 0.0)))
-        return c[0], c[2][n], c[1][n], c[3].get(n)
-    c = max(cand, key=lambda c: c[1][n])
-    return c[0], None, c[1][n], c[3].get(n)
-
-
-def summary_table(sources, which='reward', fmt=None):
-    """ONE row per arm, at the checkpoint selected on VAL for that quantity.
-
-    The companion to demo_table: that one is exhaustive so a decaying arm cannot hide, this
-    one is the at-a-glance read. Selection is still on val -- for the reward series on val
-    mean reward, for the success series on val success -- and the number shown is the TEST
-    value at that step, never a max over test.
-
-    The step is printed per row because the arms do NOT peak together: the argmax arms top
-    out around 5k-17k and subgoal-only is still climbing at 26k, so a table pinned to one
-    step would understate whichever arm had not got there yet.
-    """
-    idx = {'test': 1, 'val': 2}.get(which)
-    if idx is None:
-        idx = 3 + [k for k, _ in REWARD_SERIES].index(which)
-    # reward rows select on val mean reward (series 'val_reward'); success rows on val success
-    sel_idx = 2 if which in ('test', 'val') else 3 + [k for k, _ in REWARD_SERIES].index('val_reward')
-    if fmt is None:
-        fmt = ((lambda v: f'{100*v:.0f}%') if which in ('test', 'val')
-               else (lambda v: f'{v:.3f}'))
-    L = ['| feedback mechanism | obs | step | ' + ' | '.join(f'n={n}' for n in NS) + ' |',
-         '|---|---|---|' + '---|' * len(NS)]
-    for mech, obs, bon in sources:
-        rs = rows_for(bon)
-        cand = [r for r in rs if r[sel_idx]]
-        if not cand:
-            L.append(f'| {mech} | {obs} | _pending_ | ' + ' | '.join(['—'] * len(NS)) + ' |')
-            continue
-        best = max(cand, key=lambda r: max(r[sel_idx].values()))
-        d = best[idx]
-        L.append(f'| {mech} | {obs} | {best[0]} | '
-                 + ' | '.join(fmt(d[n]) if n in d else '—' for n in NS) + ' |')
-    return L
-
-
 def demo_table(sources, which='test', fmt=None):
     """EVERY checkpoint, with n as COLUMNS. One row per (mechanism, obs, checkpoint).
 
     Exhaustive rather than best-per-n: the per-checkpoint trajectory is what shows whether
     an arm peaks early and decays, which a summary row hides. `which` selects the quantity
-    -- 'test' / 'val' success rate, or 'reward' (test mean reward). A '*' on the checkpoint
-    marks that it is the val-selected best at one or more n.
+    -- 'test' / 'val' success rate, or 'reward' (test mean reward).
+
+    No checkpoint is marked. These tables used to star the val-selected best, which made one
+    selection rule (val success at that n) read as the answer; picking a checkpoint is an
+    analysis step, done from the curves, not something this generator should decide.
     """
     idx = {'test': 1, 'val': 2}.get(which)
     if idx is None:
@@ -218,13 +166,11 @@ def demo_table(sources, which='test', fmt=None):
         if not rs:
             L.append(f'| {mech} | {obs} | _pending_ | ' + ' | '.join(['—'] * len(NS)) + ' |')
             continue
-        picked = {(best_at_n(rs, n) or (None,))[0] for n in NS}
         first = True
         for row in rs:
             step, d = row[0], row[idx]
-            star = ' \\*' if step in picked else ''
             cells = [fmt(d[n]) if n in d else '—' for n in NS]
-            L.append(f'| {mech if first else ""} | {obs if first else ""} | {step}{star} | '
+            L.append(f'| {mech if first else ""} | {obs if first else ""} | {step} | '
                      + ' | '.join(cells) + ' |')
             first = False
     return L
@@ -234,12 +180,15 @@ REWARD_BLURB = ('\\nThe three reward series answer different questions, and Push
 
 L = ['# PushT best-of-N success rate\n',
      'Every evaluated checkpoint, with **n as columns**. One row per '
-     '(feedback mechanism, obs, checkpoint). A **\\*** on the checkpoint marks that it is '
-     'the val-selected best at one or more n.\n',
-     '\n**Selection is on val; test is only reported.** Taking the max over many noisy test '
-     'estimates and reporting that same maximum inflates it by one to two standard errors, '
-     'so the starred checkpoints are chosen from the VAL table (b) and their test numbers '
-     'are read off table (a), never maximised.\n',
+     '(feedback mechanism, obs, checkpoint).\n',
+     '\n**No checkpoint is selected here.** These tables report measurements; they mark no '
+     'winner. Earlier revisions starred the best checkpoint under one rule (val success at '
+     'the largest n common to every row) and recorded the same pick in `bon_search/best.json`, '
+     'which made that one rule read as the result. Choose a checkpoint yourself, from '
+     '`bon_search/success_curves.jsonl`, and say which rule you used.\n',
+     '\nWhen you do pick: taking the max over many noisy **test** estimates and reporting that '
+     'same maximum inflates it by one to two standard errors, so select on val and read test '
+     'at the selected step rather than maximising it.\n',
      '\n`success = coverage >= 95%`; `mean reward = clip(coverage/0.95, 0, 1)` averaged over '
      'episodes. At 50 test episodes SE is ~7pp near 50%, so gaps under ~14pp are not '
      'resolvable.\n',
@@ -330,8 +279,8 @@ L += ['\n## 1. 100 demos\n',
       'steps (its own optimum); the six argmax search arms to 20k, since they peak at step '
       '1k–8k and decline after; subgoal-only to 100k.\n']
 
-# ---- at-a-glance summary, before the 2000 lines of per-checkpoint detail
-L += ['\n### 1·0 Summary — mean reward (episode max), TEST, at the val-selected step\n',
+# ---- what the mean-reward quantity is, before the per-checkpoint detail
+L += ['\n### 1·0 How to read mean reward (episode max)\n',
       '\n**What the number is.** For each episode, PushT scores every env step\n'
       '`reward = clip(coverage / 0.95, 0, 1)`, where `coverage` is the fraction of the goal\n'
       'area the block currently covers. Take the **maximum over the episode** — the best the\n'
@@ -346,16 +295,11 @@ L += ['\n### 1·0 Summary — mean reward (episode max), TEST, at the val-select
       'coverage and the other never touches it. That gap is not hypothetical here — it is the\n'
       'whole story of the subgoal-only arm, which sits near zero on success and 0.66–0.92 on\n'
       'this table.\n',
-      '\nOne row per arm, at the checkpoint with the best VAL mean reward; the value shown is\n'
-      'TEST at that step. The step differs per row because the arms do not peak together.\n']
-L += summary_table(D100, 'reward')
-L += ['\n### 1·0b Summary — binary success rate, TEST, at the val-selected step\n',
-      'The same layout for the thresholded quantity, so the two can be compared row by row.\n']
-L += summary_table(D100, 'test')
+      '\nThe per-checkpoint tables below carry every measurement; read them as curves.\n']
 
 L += ['\n### 1a. Binary success rate — TEST (50 episodes)\n']
 L += demo_table(D100, 'test')
-L += ['\n### 1b. Binary success rate — VAL (30 episodes; this is the selector)\n']
+L += ['\n### 1b. Binary success rate — VAL (30 episodes)\n']
 L += demo_table(D100, 'val')
 L += ['\n### 1c. Mean reward, episode max — TEST\n',
       'Continuous, so it separates "nearly solved" from "never moved", which the binary rate '
@@ -408,15 +352,12 @@ L += ['\n## 2. 29 demos\n',
       '`splits.json`, so nothing *on disk* ties those checkpoints to those episodes. The '
       'r8 runs train on the same 29 via a committed manifest, so old-vs-new isolates the '
       'four changes above.\n',
-      '\n**The r8 stars are selected on TEST, not val.** Their eval watchers were launched '
-      '`--skip-val` (`scripts/slurm/launch_round8_29demo.sh`) so the whole budget went to the 50 '
-      'test episodes, which means every r8 row has an empty val curve and `best.json` '
-      'records `selected_on: "test (legacy row)"`. All six then land on step 2000, the '
-      'first checkpoint. Everywhere else in this document selection is on val and test is '
-      'only reported; **the r8 `*` is the exception and must not be quoted as a held-out '
-      'number.** Read the r8 rows as a curve, not as a picked step. (That all six pick the '
-      'earliest checkpoint is consistent with the known decay of the search gain over '
-      'training, but selected-on-test cannot be evidence for it.)\n',
+      '\n**The r8 runs have no val curve at all.** Their eval watchers were launched '
+      '`--skip-val` (`scripts/slurm/launch_round8_29demo.sh`) so the whole budget went to the '
+      '50 test episodes. Any checkpoint picked from these rows is therefore picked on TEST, '
+      'and a test number read at a step chosen on test is not a held-out estimate. Read the '
+      'r8 rows as a curve; if you need a held-out number from them, re-evaluate on val '
+      'first.\n',
       '\nThe r8 generation is also still **in progress** and covers only the three argmax '
       'arms — there is no r8 `subgoal-only` and no r8 BC, so the crop/EMA fix has not been '
       'applied to the `final_pass` selection rule at any budget.\n']
@@ -543,8 +484,6 @@ L += ['\n## 4. Where the raw results are\n',
       '| `bon_search/step_XXXXXXX/success_curve.json` | per-checkpoint detail: '
       '`per_n_rewards`, the full 50-episode reward vector at each n, from which the mean '
       'reward tables are computed. |',
-      '| `bon_search/best.json` | the val-selected checkpoint, plus `selected_at_n` = the '
-      'largest n common to every evaluated checkpoint of that run. |',
       '| `logs.json.txt` | every training metric per step (losses, nRMSE, rollout scores). |',
       '| `splits.json` | the exact val/test episode indices the run trained under; the eval '
       'cross-checks against it and refuses to score a mismatched partition. |',
@@ -557,7 +496,6 @@ L += ['\n## 4. Where the raw results are\n',
       '    ctx-<mech>_corrupt-<bool>_seed-42/             29-demo search arms   [section 2]',
       '        checkpoints/step_XXXXXXX.ckpt',
       '        bon_search/success_curves.jsonl           one row per checkpoint',
-      '        bon_search/best.json                      val-selected winner',
       '        bon_search/step_XXXXXXX/success_curve.json  per_n_rewards, episode_idxs',
       '```',
       '',

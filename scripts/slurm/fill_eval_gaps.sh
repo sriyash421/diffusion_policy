@@ -8,6 +8,12 @@
 #   bash scripts/slurm/fill_eval_gaps.sh              # print the gap table
 #   SUBMIT=1 bash scripts/slurm/fill_eval_gaps.sh     # ...and sbatch the fillable ones
 #   GRID="1 2 4 8 16 32 64" bash scripts/slurm/fill_eval_gaps.sh
+#   BC_STEPS="290000 96000" bash scripts/slurm/fill_eval_gaps.sh   # BC steps to sweep fully
+#
+# BC gets n=1 at every checkpoint and the full grid only at the steps you name in BC_STEPS,
+# because a best-of-N curve for BC costs the same as one for a search arm. This used to pick
+# that step itself, by val success at n=1 -- a selection rule, and not one this script should
+# be making. With BC_STEPS unset, no BC checkpoint is swept beyond n=1 and it says so.
 #
 # What counts as a gap here is only what a single eval job can fix: a checkpoint with no
 # row, or a row missing an n level. The other four coverage holes (missing mean_reward,
@@ -21,6 +27,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python
 GRID="${GRID:-1 2 4 8 16 32 64}"
 SUBMIT="${SUBMIT:-}"
+BC_STEPS="${BC_STEPS:-}"
 
 # Runs whose watcher is alive are skipped: it will evaluate the checkpoint itself, and a
 # second job on the same run dir contends for the same success_curve.json lock.
@@ -29,12 +36,13 @@ LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sed -n 's/^ev_//p' | sort -u)
 PLAN=$(mktemp)
 trap 'rm -f "$PLAN"' EXIT
 
-GRID="$GRID" LIVE="$LIVE" ROOT="$ROOT" "$PY" - "$PLAN" <<'EOF' || { echo "gap detection failed"; exit 1; }
+GRID="$GRID" LIVE="$LIVE" ROOT="$ROOT" BC_STEPS="$BC_STEPS" "$PY" - "$PLAN" <<'EOF' || { echo "gap detection failed"; exit 1; }
 import json, os, re, sys
 
 ROOT = os.environ['ROOT']
 GRID = [int(x) for x in os.environ['GRID'].split()]
 LIVE = set(filter(None, os.environ['LIVE'].splitlines()))
+BC_STEPS = {int(x) for x in os.environ.get('BC_STEPS', '').split()}
 
 def rows_of(run):
     p = os.path.join(run, 'bon_search', 'success_curves.jsonl')
@@ -63,23 +71,19 @@ for name in sorted(os.listdir(ROOT)):
     # a split the rest of its curve never saw.
     skip_val = bool(rows) and all(not r.get('val_success_rate') for r in rows)
 
-    # BC is swept at every n only at its best-val-n=1 checkpoint -- best-of-N over i.i.d.
-    # samples costs the same as a search arm, so the whole curve is not worth it. The target
-    # is re-derived, never hardcoded: a later checkpoint can overtake and move it.
+    # BC gets n=1 everywhere and the full grid only at the steps named in BC_STEPS -- a
+    # best-of-N curve for BC costs the same as one for a search arm, so the whole trajectory
+    # is not worth it. Which step is worth it is a call for whoever reads the curves; this
+    # script no longer makes it.
     is_bc = name.startswith('bc_')
-    bc_target = None
-    if is_bc:
-        cand = [(at_n(r, 'val_success_rate', 1), r['step']) for r in rows
-                if at_n(r, 'val_success_rate', 1) is not None]
-        bc_target = max(cand)[1] if cand else None
 
     for step in ck:
         row = evaluated.get(step)
         if row is None:
-            want = [1] if is_bc else list(GRID)       # off-target BC needs only n=1
+            want = [1] if is_bc else list(GRID)       # unnamed BC steps need only n=1
             gap = 'G1'
-        elif is_bc and step != bc_target:
-            continue                                  # BC off-target: n=1 only, by design
+        elif is_bc and step not in BC_STEPS:
+            continue                                  # BC not named in BC_STEPS: n=1 only
         else:
             want = sorted(set(GRID) - set(row['n']))
             gap = 'G3' if is_bc else 'G2'

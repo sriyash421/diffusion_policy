@@ -307,9 +307,9 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     test_states, test_idxs = get_split_states(cfg, 'test', run_dir=run_dir)
     # skip_val halves the cost: val's 10-or-30 episodes are padded out to n_envs=50, so the
     # two splits cost the SAME despite the episode counts (measured 505s vs 503s at n=32).
-    # The tradeoff is that best.json's val-based selector has nothing to rank on, so a
-    # test-only run must not be the sole input to checkpoint selection -- it is for
-    # REPORTING a checkpoint chosen some other way.
+    # The tradeoff is that the run then has no val curve, so any checkpoint later picked
+    # from it is picked on TEST -- and a test number read at a test-chosen step is not a
+    # held-out estimate. Use --skip-val for REPORTING a checkpoint chosen some other way.
     if skip_val:
         val_states, val_idxs = [], np.zeros(0, dtype=int)
     else:
@@ -561,42 +561,16 @@ def step_from_ckpt(path):
 
 
 # ---------------------------------------------------------------------------
-# Run-level result index. Training deliberately saves no "best" checkpoint (val loss
-# does not identify the best task policy), so selection is done here, from real eval:
-# every evaluated checkpoint is appended to success_curves.jsonl and best.json always
-# names the current winner. A downstream process reads one file, not a directory tree.
+# Run-level result index: every evaluated checkpoint is merged into
+# success_curves.jsonl, one row per checkpoint.
+#
+# This file records measurements ONLY. It deliberately names no winner. Any rule for
+# picking a checkpoint (which n to read it at, val vs test, success vs mean reward, how
+# to break ties) is an analysis choice, and baking one into the eval writer made that
+# choice look like a result -- downstream scripts and the generated tables then inherited
+# it silently. Read the curves and choose explicitly.
 # ---------------------------------------------------------------------------
 CURVES_JSONL = 'success_curves.jsonl'
-BEST_JSON = 'best.json'
-
-
-def _curve_key(row, at_n):
-    """Selection criterion, computed on the VAL split only, at a FIXED n.
-
-    Selecting on test and then reporting that same test number is a max over ~N
-    checkpoints x len(n_list) noisy estimates, which inflates the reported figure by
-    roughly one to two standard errors (order +10pp at these split sizes) even when the
-    true rate is flat. Val is small and therefore a weak selector, but a weak unbiased
-    selector beats a strong biased one.
-
-    `at_n` is the largest n present in EVERY row, not each row's own max. Once n is swept
-    per-job, rows cover different n ranges, and comparing a checkpoint's n=1024 rate
-    against another's n=64 rate would select on how much compute a checkpoint happened to
-    receive rather than on how good it is.
-
-    Falls back to the test curve only for rows written before val was recorded, so old
-    jsonl files still load; those rows are flagged in best.json.
-    """
-    sr = row.get('val_success_rate') or row['success_rate']
-    idx = list(row['n']).index(at_n)
-    # Mean val reward is the LAST tie-break, and it is the one that does the work whenever
-    # binary success is saturated at 0 (BC at n=1) or at 1. Rows written before this field
-    # existed fall back to 0.0 and are ordered purely by success, as before.
-    # A merged curve can be RAGGED here: rows written by the currently-running eval jobs
-    # predate this field, so merging an old n with a new one leaves None in the gaps.
-    mr = row.get('val_mean_reward') or []
-    reward = float(mr[idx]) if idx < len(mr) and mr[idx] is not None else 0.0
-    return (sr[idx], float(np.mean(sr)), reward)
 
 
 def _row_from_curve(step, checkpoint, curve):
@@ -627,7 +601,7 @@ def _row_from_curve(step, checkpoint, curve):
 
 
 def append_curve_row(out_root, step, checkpoint, curve):
-    """Merge this checkpoint's result into the run-level jsonl and refresh best.json.
+    """Merge this checkpoint's result into the run-level jsonl.
 
     Merge, not append: with one job per n a checkpoint is written several times, and plain
     appends left several partial rows per step -- which read back as distinct checkpoints
@@ -651,35 +625,6 @@ def append_curve_row(out_root, step, checkpoint, curve):
                 f.write(json.dumps(r) + '\n')
         os.replace(tmp, jsonl)
 
-    # largest n every row reached; see _curve_key
-    common = set.intersection(*(set(r['n']) for r in rows)) if rows else set()
-    at_n = max(common) if common else max(row['n'])
-    best = max(rows, key=lambda r: _curve_key(r, at_n))
-    payload = {
-        'criterion': f'VAL success_rate at n={at_n} (the largest n common to all evaluated '
-                     'checkpoints), tie-broken by mean val success_rate; test is reported '
-                     'at the val-selected step and never selected on',
-        'selected_at_n': at_n,
-        'selected_on': 'val' if best.get('val_success_rate') else 'test (legacy row)',
-        'step': best['step'],
-        'checkpoint': best['checkpoint'],
-        'n': best['n'],
-        'val_success_rate': best.get('val_success_rate'),
-        'val_success_ci': best.get('val_success_ci'),
-        'val_mean_reward': best.get('val_mean_reward'),
-        'val_n_episodes': best.get('val_n_episodes'),
-        'success_rate': best['success_rate'],
-        'success_ci': best.get('success_ci'),
-        'mean_reward': best.get('mean_reward'),
-        'n_episodes': best.get('n_episodes'),
-        'n_evaluated': len(rows),
-    }
-    # atomic: several eval jobs can share one run dir, and a truncate-then-write here was
-    # observed being read mid-write by monitor_pusht_search.sh
-    tmp = out_root.joinpath(BEST_JSON + '.tmp')
-    with open(tmp, 'w') as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, out_root.joinpath(BEST_JSON))
     return row
 
 

@@ -15,7 +15,8 @@
 # --skip-val: the 50 test episodes only. val costs the SAME as test despite being 10-30
 # episodes (they pad out to n_envs=50), so dropping it halves every job. Safe here because
 # nothing is being SELECTED -- the checkpoints are named up front. Do not use it for a
-# sweep that feeds best.json.
+# sweep whose curves you intend to choose a checkpoint from: with no val curve, that choice
+# is made on test.
 #
 # Results go to bon_search_sel-<mode>/ per run, never bon_search/, so they cannot merge
 # with the native-mode curves already on disk.
@@ -100,8 +101,8 @@ print(' '.join(str(s) for s in have if s % stride == 0))
 EOF
 )
     else
-        steps=$("$PY" -c "import json,sys;print(json.load(open(sys.argv[1]))['step'])" \
-                "$d/bon_search/best.json" 2>/dev/null || echo "")
+        echo "  STRIDE= is required: nothing records a 'best' step any more" >&2
+        exit 2
     fi
     [ -n "$steps" ] || { echo "  no checkpoints on the grid for $run"; continue; }
 

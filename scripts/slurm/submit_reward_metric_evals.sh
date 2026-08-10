@@ -10,12 +10,13 @@
 # so the success rates it recomputes reproduce the existing ones exactly and merge into the
 # same curve rather than replacing it.
 #
-# Scope is one checkpoint per arm -- the val-selected best from best.json, which is the row
-# every headline number is read off. Re-running all ~397 evaluated checkpoints would be
-# ~400 GPU-hours for table cells nothing is quoted from.
+# Scope is the step(s) you name, applied to every arm. Re-running all ~397 evaluated
+# checkpoints would be ~400 GPU-hours, so this is deliberately narrow -- but which
+# checkpoint is worth the re-run is an analysis call, not something this script should
+# make. It used to read the winner out of best.json; nothing records a winner any more.
 #
-#   bash scripts/slurm/submit_reward_metric_evals.sh          # submit
-#   DRY=1 bash scripts/slurm/submit_reward_metric_evals.sh    # print only
+#   bash scripts/slurm/submit_reward_metric_evals.sh 2000          # submit
+#   DRY=1 bash scripts/slurm/submit_reward_metric_evals.sh 2000    # print only
 set -uo pipefail
 
 ROOT=/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline
@@ -23,6 +24,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python
 MAX_N="${MAX_N:-64}"
 DRY="${DRY:-}"
+STEPS=("$@")
+if [ ${#STEPS[@]} -eq 0 ]; then
+    echo "usage: $(basename "$0") <step> [step...]" >&2
+    echo "no default: pick the steps from each run's bon_search/success_curves.jsonl" >&2
+    exit 2
+fi
 
 shopt -s nullglob
 submitted=0
@@ -32,14 +39,12 @@ for arm in "$ROOT"/*_seed-42; do
     case "$r" in ctx-*) continue;; esac
     [ -d "$arm/checkpoints" ] || continue
 
-    step=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['step'])" \
-           "$arm/bon_search/best.json" 2>/dev/null || echo "")
-    [ -n "$step" ] || { echo "  no best.json, skipping  $r"; continue; }
-    ckpt=$(printf '%s/checkpoints/step_%07d.ckpt' "$arm" "$step")
-    [ -f "$ckpt" ] || { echo "  missing $ckpt, skipping"; continue; }
+    for step in "${STEPS[@]}"; do
+        ckpt=$(printf '%s/checkpoints/step_%07d.ckpt' "$arm" "$step")
+        [ -f "$ckpt" ] || { echo "  missing $ckpt, skipping"; continue; }
 
-    # already has the new series at every n it was evaluated at?
-    have=$("$PY" - "$arm/bon_search/step_$(printf '%07d' "$step")/success_curve.json" <<'EOF' || echo no
+        # already has the new series at every n it was evaluated at?
+        have=$("$PY" - "$arm/bon_search/step_$(printf '%07d' "$step")/success_curve.json" <<'EOF' || echo no
 import json, sys
 try:
     c = json.load(open(sys.argv[1]))
@@ -49,20 +54,21 @@ except Exception:
     print('no')
 EOF
 )
-    if [ "$have" = yes ]; then
-        echo "  have final/discounted  step=$step  $r"
-        continue
-    fi
-    if [ -n "$DRY" ]; then
-        echo "  would submit  step=$step  n<=$MAX_N  $r"
+        if [ "$have" = yes ]; then
+            echo "  have final/discounted  step=$step  $r"
+            continue
+        fi
+        if [ -n "$DRY" ]; then
+            echo "  would submit  step=$step  n<=$MAX_N  $r"
+            submitted=$((submitted+1))
+            continue
+        fi
+        # ckpt partition, per the standing rule that all success-rate evals go there
+        jid=$(sbatch --parsable --time=8:00:00 \
+                --job-name="rew_$(echo "$r" | sed 's/_demos-100//;s/_seed-42//')" \
+                "$HERE/eval_ckpt_pusht_search.sbatch" "$ckpt" --max-n "$MAX_N")
+        echo "  submitted $jid  step=$step  n<=$MAX_N  $r"
         submitted=$((submitted+1))
-        continue
-    fi
-    # ckpt partition, per the standing rule that all success-rate evals go there
-    jid=$(sbatch --parsable --time=8:00:00 \
-            --job-name="rew_$(echo "$r" | sed 's/_demos-100//;s/_seed-42//')" \
-            "$HERE/eval_ckpt_pusht_search.sbatch" "$ckpt" --max-n "$MAX_N")
-    echo "  submitted $jid  step=$step  n<=$MAX_N  $r"
-    submitted=$((submitted+1))
+    done
 done
 echo "${DRY:+DRY-RUN: }$submitted job(s)"

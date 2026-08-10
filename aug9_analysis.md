@@ -291,8 +291,8 @@ run twice.
 | `ctx-subgoal_value_corrupt-{False,True}_seed-42` | `subgoal-value_corrupt-{False,True}_demos-29_seed-42` |
 
 One live trap: the `checkpoint` path recorded inside `bon_search/success_curves.jsonl` and
-`step_*/success_curve.json` was written **through the alias**, while `best.json` uses the
-real path. Anything that string-matches a run directory against the `checkpoint` field must
+`step_*/success_curve.json` was written **through the alias** for runs evaluated before the
+rename. Anything that string-matches a run directory against the `checkpoint` field must
 resolve symlinks first.
 
 ---
@@ -333,13 +333,12 @@ run rather than hardcoding a step.
 - **The six r8 runs have no val curve at all** (`val_n_episodes == 0` on every row). The
   watchers were launched `--skip-val`
   ([launch_round8_29demo.sh:70-77](scripts/slurm/launch_round8_29demo.sh#L70-L77)) so the budget
-  went entirely to the 50 test episodes. Consequence: their `best.json` records
-  `selected_on: "test (legacy row)"`, and **all six select step 2000, the first
-  checkpoint**. Those stars are test-selected. They must not be quoted as held-out
-  numbers, and the fact that all six land on the earliest checkpoint is consistent with
-  the known decay of the search gain with training rather than evidence about it.
-  `fill_eval_gaps.sh` preserves `--skip-val` per run so a filled gap cannot leave one
-  curve half-scored on a split the rest of it never saw.
+  went entirely to the 50 test episodes. Consequence: **any step picked from an r8 curve is
+  picked on test**, so a test number read at that step is not a held-out estimate. (Under the
+  val-success rule that `best.json` used to apply, all six landed on step 2000, the earliest
+  checkpoint — consistent with the known decay of the search gain with training, but
+  selected-on-test cannot be evidence for it.) `fill_eval_gaps.sh` preserves `--skip-val` per
+  run so a filled gap cannot leave one curve half-scored on a split the rest of it never saw.
 - **`bon_search_sel-{argmax,softmax}/` is a sparse probe**, 3–6 steps on 14 runs, test-only.
   It is kept in separate directories so a selection-override curve can never merge into the
   native one.
@@ -379,7 +378,6 @@ rather than reading it here.
 ```
 <run>/checkpoints/step_0005000.ckpt        the policies (~275 MB each)
 <run>/bon_search/success_curves.jsonl      one merged row per checkpoint — the source for every table
-<run>/bon_search/best.json                 val-selected checkpoint (test-selected on r8)
 <run>/bon_search/step_XXXXXXX/success_curve.json   full curve + per_n_rewards + episode_idxs
 <run>/bon_search_sel-{argmax,softmax}/     the selection probe, kept separate on purpose
 <run>/splits.json                          the exact episodes this run trained/validated/tested on

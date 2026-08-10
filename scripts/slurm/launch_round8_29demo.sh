@@ -68,10 +68,9 @@ for spec in $ARMS; do
     n=$((n+1))
 
     # Watcher: --skip-val, so every checkpoint is scored on the SAME 50 test episodes and
-    # nothing is spent on val. That makes best.json's marker test-selected rather than
-    # val-selected -- fine here because the doc reports every checkpoint and the star is
-    # only a convenience, but it means the starred number must not be quoted as if it were
-    # held out.
+    # nothing is spent on val. Consequence: these runs have no val curve, so any checkpoint
+    # later picked from them is picked on TEST, and that number is not held out. Fine while
+    # the rows are read as a curve, which is how the doc reports them.
     [ -n "$DRY" ] || wid=$(sbatch --parsable --account=robotics --partition=ckpt \
             --job-name="ev_${run}" \
             "$HERE/eval_watch_pusht_search.sbatch" "$ROOT/$run" --max-n 64 --skip-val)

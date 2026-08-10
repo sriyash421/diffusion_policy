@@ -73,9 +73,9 @@ dataset:
   # byte-identical to the legacy 2-way split for this seed, so previously-collected test
   # numbers stay measured on the same episodes.
   n_test_episodes: 50
-  # the val split is the CHECKPOINT SELECTOR (best.json picks on val success); at 10
-  # episodes its SE was ~9.5pp at p=0.9, which made three arms tie at 9/10 while their
-  # test numbers were 84 / 70 / 32%. 30 halves that to ~5.5pp.
+  # the val split is what a checkpoint should be CHOSEN on, so that test stays a report
+  # rather than a maximum; at 10 episodes its SE was ~9.5pp at p=0.9, which made three arms
+  # tie at 9/10 while their test numbers were 84 / 70 / 32%. 30 halves that to ~5.5pp.
   n_val_episodes: 30
   # ABSOLUTE episode budget, from the top-level n_demos. Absolute rather than a fraction,
   # so it no longer moves when the test or val split sizes change -- which is exactly how

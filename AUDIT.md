@@ -51,8 +51,9 @@ most important structural fact about the arm.
 
 **Eval.** Two paths. `PushTSearchImageRunner` rolls out val+test every 2000 gradient steps
 with `n_search_actions = 8`. `eval_search_pusht.py --watch` evaluates every `step_*.ckpt` over
-`n ∈ {1,2,4,...,64}`, selects on **val**, reports **test** at the val-selected step, and
-maintains `bon_search/success_curves.jsonl` + `best.json`.
+`n ∈ {1,2,4,...,64}` on both **val** and **test**, and maintains
+`bon_search/success_curves.jsonl`. It selects nothing: choosing a checkpoint is done from that
+curve, at analysis time.
 
 ---
 
@@ -148,7 +149,7 @@ that made the arms incomparable and is now explicitly warned against in their he
 | | `val_every_steps` / `sample_every_steps` | 1000 / 1000 | also gradient steps; the epoch-based `val_every`/`sample_every` remain only as the fallback for older configs |
 | | `nrmse_max_batches` | 4 | 128 windows, drawn as a seeded spanning subset |
 | | `use_ema` / `ema_decay` | **True** / **0.995** | constant decay (a 200-step window), not the repo's step-dependent warmup curve; EMA weights are what gets rolled out, validated and shipped |
-| ckpt | `topk` | `val_loss`, min, k=5 | safety net only; real selection is `best.json` on val success |
+| ckpt | `topk` | `val_loss`, min, k=5 | safety net only; `val_loss` does not identify the best task policy — choose from the eval curve |
 | runner | `n_search_actions` / `max_steps` / `n_envs` | 8 / 300 / `null` | `null` → **80** persistent env subprocesses (P2-1) |
 | paths | `hydra.run.dir` | `${output_root}/${exp_name}/${task_name}/${trainer}/ctx-${search_context}_corrupt-${corrupt_obs}_seed-${training.seed}` | identity-keyed, so relaunch resumes |
 
@@ -1002,7 +1003,7 @@ config in ~30 files).
 | ✅ | best checkpoint chosen by max **test** success over ~50 ckpts × 7 `n` values, and that same number reported → +10–15pp optimistic bias | `_curve_key` selects on **val**; test reported at the val-selected step, never selected on |
 | ✅ | eval entirely unseeded; the `for n in n_list` loop consumed one continuous RNG stream, so curve points were un-paired | re-seeded from `cfg.training.seed` before every `n` |
 | ✅ | no error bars | Wilson 95% CI on every rate, plotted as a band, `n_episodes` recorded per row |
-| ✅ | single-ckpt eval wrote a flat `bon_search/success_curve.{json,png}` — **12 concurrent jobs observed, 3 of every 4 curves lost** | per-step subdir, same convention as watch mode; `best.json` written atomically via `os.replace` |
+| ✅ | single-ckpt eval wrote a flat `bon_search/success_curve.{json,png}` — **12 concurrent jobs observed, 3 of every 4 curves lost** | per-step subdir, same convention as watch mode; `success_curves.jsonl` merged under a file lock |
 | ✅ | `seen.add(step)` before the `try` → any transient failure permanently skipped that checkpoint | added after success, with 3 retries |
 | ✅ | watcher never exited; `wandb.init(resume='allow')` with no `id` minted a new run per requeue | `--idle-exit-sec`; deterministic wandb id from an md5 of the run dir; `wandb.init` wrapped |
 | ✅ | non-atomic checkpoint save vs the watcher's existence-only glob → torn reads | `_atomic_save` (`.tmp` + `os.replace`); also protects `latest.ckpt`, which `resume` depends on |

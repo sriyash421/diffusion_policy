@@ -10,9 +10,9 @@
 #SBATCH --output=/gscratch/robotics/harine/slurm_logs/%x-%j.out
 # Best-of-N success-rate eval of ONE checkpoint, on the preemptible checkpoint partition
 # so the guaranteed robotics/weirdlab GPUs stay free for training. --requeue re-runs after
-# preemption. Results append to <run>/bon_search/success_curves.jsonl and refresh
-# best.json -- the same run-level index the --watch watcher maintains, so one-off evals
-# and watched evals share one history.
+# preemption. Results merge into <run>/bon_search/success_curves.jsonl -- the same
+# run-level index the --watch watcher maintains, so one-off evals and watched evals share
+# one history.
 #
 # Usage: sbatch scripts/slurm/eval_ckpt_pusht_search.sbatch <CHECKPOINT.ckpt>
 set -euo pipefail
