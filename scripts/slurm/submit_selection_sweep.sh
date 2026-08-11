@@ -37,16 +37,43 @@
 #   DRY=1 bash scripts/slurm/submit_selection_sweep.sh
 #   STRIDE=5000 bash scripts/slurm/submit_selection_sweep.sh    # denser, uneven across arms
 #   MODES=softmax bash scripts/slurm/submit_selection_sweep.sh  # skip the paired argmax
+#   MODES=argmax  bash scripts/slurm/submit_selection_sweep.sh  # the paired twin, after
+#
+# The twin is NOT optional if the softmax numbers are going to be compared to anything.
+# The native bon_search curve is argmax for the argmax arms, but it is not a usable
+# control: measured at the 24 checkpoints carrying both, the native curve and a
+# `--selection argmax` re-run of the SAME weights disagree at 20 of them, by up to 22pp at
+# n=8. Nothing is wrong with either -- the search is stochastic (every candidate is a fresh
+# DDIM draw) and the native run consumed RNG on the val split first, so the two are
+# independent samples at roughly the binomial SE. Which is exactly why softmax must be read
+# against an argmax run under the same protocol, not against the native column.
+#
+#   MODES=final_pass MIN_N=16 MAX_N=16 ONLY_K=16 ...   # see ONLY_K below
 set -uo pipefail
 
 ROOT=/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python
 MAX_N="${MAX_N:-64}"
+MIN_N="${MIN_N:-1}"
 TEMP="${TEMP:-1.0}"
 DRY="${DRY:-}"
 STRIDE="${STRIDE:-10000}"
 MODES="${MODES:-argmax softmax}"
+
+# Restrict to runs of one search width. Empty = every run.
+#
+# The motivating case is `final_pass` at n=16 on the K=16 arms:
+#   MODES=final_pass MIN_N=16 MAX_N=16 ONLY_K=16 bash scripts/slurm/submit_selection_sweep.sh
+# That is the one width the model is actually TRAINED at -- compute_loss conditions on
+# max_actions-1 = 15 context entries -- and AUDIT.md P2-7 flags it as the width never
+# evaluated (the in-training rollout uses 8, the eval sweep sweeps 1..64). Running it under
+# final_pass asks that arm's whole question: does the model's own synthesis, conditioned on
+# all 15 scored candidates, beat the oracle argmax it replaces?
+#
+# K is read from the run's own saved config, not guessed from the name: `n_candidates` is
+# absent in the pre-Round-8 configs, where max_actions is the only place the width appears.
+ONLY_K="${ONLY_K:-}"
 
 # BC is skipped unless BC_GRID=1, which puts all three BC runs on the same stride as the
 # search arms. That is +96 jobs at STRIDE=10000 (BC@100 alone saves 30 checkpoints, all of
@@ -86,6 +113,23 @@ for d in "$ROOT"/*_seed-42; do
     case "$run" in
         bc_*) [ -n "$BC_GRID" ] || continue;;
     esac
+    if [ -n "$ONLY_K" ]; then
+        runk=$("$PY" - "$d" <<'EOF'
+import pathlib, sys, yaml
+c = yaml.safe_load(open(pathlib.Path(sys.argv[1]) / '.hydra' / 'config.yaml'))
+# max_actions is `${n_candidates}` in the post-Round-8 configs and a literal in the older
+# ones, so try both and take whichever resolves to a number.
+for v in ((c.get('policy') or {}).get('max_actions'), c.get('n_candidates')):
+    if isinstance(v, int):
+        print(v); break
+    if isinstance(v, str) and v.strip().isdigit():
+        print(int(v)); break
+else:
+    print('')
+EOF
+)
+        [ "$runk" = "$ONLY_K" ] || { echo "  skip K=$runk $run"; continue; }
+    fi
     steps=$("$PY" - "$d" "$STRIDE" <<'EOF'
 import pathlib, re, sys
 d = pathlib.Path(sys.argv[1])
@@ -104,12 +148,20 @@ EOF
         [ -f "$ckpt" ] || continue
         for sel in $MODES; do
             # skip what is already on disk: re-running a (run, step, mode) would re-append
-            # a duplicate row to the same success_curves.jsonl, not overwrite it
-            done_already=$("$PY" - "$d/bon_search_sel-$sel/success_curves.jsonl" "$step" <<'EOF'
+            # a duplicate row to the same success_curves.jsonl, not overwrite it.
+            # "Already done" means the row COVERS every n this invocation asks for, not
+            # merely that the step appears -- otherwise raising MAX_N (or asking for a
+            # single high level via MIN_N) would silently skip every step that already had
+            # a narrower curve, and the sweep would submit nothing while looking complete.
+            done_already=$("$PY" - "$d/bon_search_sel-$sel/success_curves.jsonl" \
+                               "$step" "$MIN_N" "$MAX_N" <<'EOF'
 import json, sys
+path, step, lo, hi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+want = {n for n in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024) if lo <= n <= hi}
 try:
-    print('yes' if any(json.loads(l)['step'] == int(sys.argv[2])
-                       for l in open(sys.argv[1]) if l.strip()) else 'no')
+    rows = [json.loads(l) for l in open(path) if l.strip()]
+    have = {n for r in rows if r['step'] == step for n in r['n']}
+    print('yes' if want and want <= have else 'no')
 except Exception:
     print('no')
 EOF
@@ -125,10 +177,14 @@ EOF
             fi
             k=$((submitted % ${#ACCTS[@]}))     # round-robin the pools; see ACCTS above
             acct=${ACCTS[$k]}; part=${PARTS[$k]}
+            # A single-level request (MIN_N == MAX_N) is a fraction of a full sweep, whose
+            # cost is ~2x its top level, so ask for less walltime -- shorter requests
+            # schedule sooner on the preemptible ckpt partition.
+            [ "$MIN_N" = "$MAX_N" ] && tlim=2:00:00 || tlim=8:00:00
             jid=$(sbatch --parsable --account="$acct" --partition="$part" \
-                    --time=8:00:00 --job-name="${tag:0:60}" \
+                    --time="$tlim" --job-name="${tag:0:60}" \
                     "$HERE/eval_ckpt_pusht_search.sbatch" "$ckpt" \
-                    --max-n "$MAX_N" --skip-val \
+                    --min-n "$MIN_N" --max-n "$MAX_N" --skip-val \
                     --selection "$sel" --selection-temperature "$TEMP")
             echo "  $jid  $sel  step=$step  $run"
             submitted=$((submitted+1))

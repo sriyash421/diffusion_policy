@@ -109,20 +109,41 @@ clean and corrupt rows of that table are not comparable.
 
 | file | role |
 |---|---|
-| `config/train_pusht_diffusion_search.yaml` | **base.** All policy/optimizer/training/logging/hydra settings live here. `search_context: value`, `corrupt_obs: False` |
-| `config/train_pusht_diffusion_search_corrupt.yaml` | inherits base; sets `corrupt_obs: True` |
-| `config/train_pusht_diffusion_search_subgoal.yaml` | inherits base; sets `search_context: subgoal` |
-| `config/train_pusht_diffusion_search_subgoal_corrupt.yaml` | inherits `_subgoal`; sets `corrupt_obs: True` |
-| `config/train_pusht_diffusion_search_subgoal_verifier.yaml` | inherits base; sets `search_context: subgoal_value` |
-| `config/train_pusht_diffusion_search_subgoal_verifier_corrupt.yaml` | inherits `_subgoal_verifier`; sets `corrupt_obs: True` |
-| `config/task/pusht_image_search.yaml` | shape_meta, dataset, env_runner. Shared by all six |
+| `config/train_pusht_diffusion_search.yaml` | **base, 100 demos.** All policy/optimizer/training/logging/hydra settings live here. `search_context: value`, `corrupt_obs: False`, `trainer: offline` |
+| `config/train_pusht_diffusion_search_29.yaml` | **base, 29 demos (r8 parity).** Inherits base; swaps to `pusht_seed42_train29_val30.json` and a 100k/2k budget |
+| `config/train_pusht_diffusion_search_single.yaml` | pins the single-step (on-policy) trainer explicitly; inherit this for anything that must survive the staged outer/inner flip |
+| `config/train_pusht_bc{,_25,_29}.yaml` | the baseline: `policy.max_actions: 1`, empty context, verifier never spawned. Inherits `_single` |
+| `config/train_pusht_diffusion_search_subgoal_only*.yaml` (5) | `selection: final_pass`, plus the `cd` / `k4` / `k8` variants |
+| `config/train_pusht_search_outer_inner*.yaml` (3) | a different WORKSPACE, not a variant of the arms |
+| `config/task/pusht_image_search.yaml` | shape_meta, dataset, env_runner. Shared by every arm |
 | `config/splits/pusht_seed42.json` | **the committed split manifest** — the exact train/val/test episode indices, plus a checksum of the zarr's `episode_ends`. Read by the dataset, the env runner and the eval script; regenerated only by `scripts/dump_pusht_splits.py` |
+| `config/archive_config/` | the five retired per-arm files, plus the override recipe that replaced them |
 
-**This inheritance structure is correct and worth keeping.** Each of the five derived configs
-overrides only `name`, the two identity keys, and `logging.tags` — nothing else. Verified by
-diff: no derived config touches the encoder, the horizons, or the training length. An earlier
-version pinned `max_gradient_steps: 100000` in the `_subgoal*` files while the base ran 20k;
-that made the arms incomparable and is now explicitly warned against in their headers.
+**✅ The five per-arm files were archived (2026-08-09).** `_corrupt`, `_subgoal`,
+`_subgoal_corrupt`, `_subgoal_verifier` and `_subgoal_verifier_corrupt` each overrode only
+`name`, the three identity keys and `logging.tags` — verified by diff: none touched the
+encoder, the horizons or the training length. That made them exactly reproducible as CLI
+overrides, which is the form Round 8 already used: `scripts/slurm/launch_round8_29demo.sh`
+launches all six arms from one config plus `search_context=` / `arm=` / `corrupt_obs=`, and
+all six r8 runs came out of that path. Verified after the move: base + three overrides
+reproduces each archived arm's `run_name` index-for-index, 12 of 12 distinct across both
+budgets. See `config/archive_config/README.md`.
+
+The reason to collapse them was not tidiness. A 3×2 matrix as six files meant six places to
+edit when the base changed, and two of them inherited from their clean sibling rather than
+the base, so knowing what a run resolved to took two hops. An earlier version pinned
+`max_gradient_steps: 100000` in the `_subgoal*` files while the base ran 20k; that made the
+arms incomparable, and it is exactly the class of drift one base plus overrides cannot have.
+
+`train_pusht_bc*`, `_subgoal_only*` and `_outer_inner*` were **not** archived: they change
+the selection rule, the context width, the budget, the `run_name` template or the workspace,
+so they are not overrides of the base.
+
+**⬜ Staged: the base default is due to flip to `trainer: outer_inner`.** Not applied — six
+r8 trainers are live against `_29`, which inherits the base, and `trainer` is a path
+component of `hydra.run.dir`, so flipping it mid-flight sends any requeued job to a fresh
+empty directory (the 9.9 failure). The precondition, the four mechanical steps and the
+already-immune configs are documented in the base config's `DEFAULT TRAINER` header block.
 
 ### 3.2 The resolved block every arm shares **[V]**
 
@@ -510,7 +531,16 @@ denoiser is trained against.
 The docstring at `:653-654` notes the per-call draw deliberately ("caching the corrupted
 features instead would make every candidate share one noise sample") — but sharing one sample
 *within a decision* is arguably the correct semantics: the agent has one observation, not 16.
-Worth revisiting alongside P0-2.
+
+**Agreed fix, DEFERRED (2026-08-10).** Share one corruption draw across the whole decision,
+exactly as the crop offset already is: a reentrant `_corrupt_scope` entered by the same four
+search entry points that now open `_crop_scope`, caching `(noise, timesteps)` for the
+duration so `compute_loss`'s `obs_cond` and every candidate reuse it. Deliberately not
+applied yet — **two of the six live r8 arms are corrupt and still training**, and changing
+the semantics mid-run would leave their curve mixing both. It lands once those runs finish.
+Recorded for readers in `SUCCESS_RATES.md` under "What `corrupt` currently means", so no
+corrupt row is read as a clean ablation in the meantime. P0-1 and P0-2 remain open and are
+*not* addressed by this fix.
 
 #### ✅ P0-5. The training data budget was a fraction of a pool that moves, and no split was recorded anywhere **[V]**
 
@@ -595,6 +625,28 @@ RNG, so they are identical across restarts and machines with no RNG state to per
 no longer interleaved with the diffusion-noise stream. All of this is asserted, not eyeballed:
 obs and subgoal offsets equal per batch element, same step reproduces, different steps differ,
 eval yields `[10, 10]`, output 76×76, `obs_feature_dim` still 530.
+
+**⚠ The fix was a property of two call paths, not of the search — widened 2026-08-10.**
+`_crop_scope` was opened only by `compute_loss` and `predict_action_best`, so it held
+wherever *those* were the entry point. But `generate_search_context` and `search_candidates`
+are also called **directly**: `TrainSearchOuterInnerWorkspace` regenerates the context that
+way on every outer pass (`train_search_outer_inner_workspace.py:158,507`), the workspaces'
+diagnostic blocks call `search_candidates`, and the dump/render scripts call
+`predict_n_actions`. Every one of those encoded the observation and each candidate's subgoal
+under **independent per-image crops** — the original defect, intact, for any mode whose
+context contains a subgoal image. A second instance hid inside `predict_n_actions`: its
+rolling-window branch (n > `max_actions`) encodes subgoals in a loop of its own rather than
+inside `search_candidates`, so wrapping only that method would still have left every
+candidate past K on its own crop.
+
+Fixed by making `_crop_scope` **reentrant** — a depth counter, only depth 0 resets — and
+opening it in `search_candidates` and `predict_n_actions` as well. Nesting is a no-op, so
+`compute_loss` → `generate_search_context` → `search_candidates` still shares the single
+offset set drawn at the top and the offline trainer is bit-for-bit unchanged; verified by
+`scripts/selection_smoke.py` plus a contract test covering nesting, isolation between
+sibling scopes, and depth unwinding on exception. Only the training paths were ever
+affected: in eval mode `_draw_crop_offsets` returns the deterministic centre crop, so the
+diagnostic call sites produced correct numbers regardless.
 
 #### ⬜ P1-2. The context is generated with dropout active **[V]**
 `compute_loss` runs while the model is in `train()`, and `generate_search_context` →
