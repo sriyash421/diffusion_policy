@@ -199,7 +199,12 @@ L = ['# PushT best-of-N success rate\n',
      '\nThe 50 **test** episodes are identical in every section (`test = perm[:50]` does not '
      'move when the val split changes), so test columns are comparable across sections even '
      'though the training sets and the selectors are not.\n',
-     '\nRegenerate with `python scripts/build_success_rates_doc.py`.\n']
+     '\nRegenerate with `python scripts/build_success_rates_doc.py`. It reads '
+     '`$DP_OUTPUT_ROOT` (default: the Hyak path), so it rebuilds off-cluster against a copied '
+     'results tree.\n',
+     '\n**To analyse these results off the cluster, see '
+     '[aug10_results2copy.md](aug10_results2copy.md)** — which directories to copy, what is '
+     'inside each, and an rsync recipe. Everything except the model weights is ~2.3 GB.\n']
 
 L += ['\n## What each arm is\n',
       'All arms share the same policy class, encoder, backbone and trainer. They differ only '
@@ -409,10 +414,23 @@ L += ['\n### What differs between the 29- and 100-demo generations, besides the 
 
 
 # ---------------------------------------------------------------- selection sweep -------
+# Selection readouts swept post-hoc, each in its own bon_search_sel-<mode>/ directory.
+#
+# `final_pass` is here as a READOUT on arms that were trained under argmax -- the model
+# synthesises one extra action conditioned on all n scored candidates and executes it
+# unsimulated, instead of picking the oracle's best. Swept at n=16 only on the K=16 arms,
+# which is the width those models were actually trained at (compute_loss conditions on
+# max_actions-1 = 15 context entries) and, per AUDIT.md P2-7, the one width nothing else
+# evaluates. Listing it here rather than hardcoding two modes is what stops a swept mode
+# from landing on disk and appearing in no table -- which is exactly what happened to the
+# k*_cd0.9 arms in section 1 before that list was globbed.
+SEL_MODES = ('argmax', 'softmax', 'final_pass')
+
+
 def selection_rows(bon_parent):
     """{(step, mode): {n: test success}} from bon_search_sel-<mode>/ next to bon_search/."""
     out = {}
-    for mode in ('argmax', 'softmax'):
+    for mode in SEL_MODES:
         jl = bon_parent / f'bon_search_sel-{mode}' / 'success_curves.jsonl'
         if not jl.is_file():
             continue
@@ -445,19 +463,24 @@ def selection_table():
         name = d.name.replace('_demos-100_seed-42', '').replace('_seed-42', '')
         first = True
         for step in sorted({s for s, _ in rows}):
-            for mode in ('argmax', 'softmax'):
+            # the step prints once per block, on whichever mode happens to come first --
+            # keying it to 'argmax' left the step column blank for any step where only
+            # softmax or only final_pass had landed yet
+            first_of_step = True
+            for mode in SEL_MODES:
                 sr = rows.get((step, mode))
                 if sr is None:
                     continue
                 cells = [f'{100*sr[n]:.0f}%' if n in sr else '—' for n in NS]
                 L.append(f'| {name if first else ""} | {native if first else ""} | '
-                         f'{step if mode == "argmax" else ""} | `{mode}` | '
+                         f'{step if first_of_step else ""} | `{mode}` | '
                          + ' | '.join(cells) + ' |')
                 first = False
+                first_of_step = False
     return L
 
 
-L += ['\n## 3. Selection rule: argmax vs softmax (TEST only)\n',
+L += ["\n## 3. Selection rule: argmax vs softmax vs final_pass (TEST only)\n",
       'Both rules run on the **same trained weights** — selection is a pure readout over '
       'the n scored candidates, so it can be swapped after training. Only the 50 test '
       'episodes are evaluated (`--skip-val`), since the checkpoints here are named up '
@@ -471,13 +494,32 @@ L += ['\n## 3. Selection rule: argmax vs softmax (TEST only)\n',
       'candidate leaves nothing to choose), which is why that column agrees.\n',
       '\n`native selection` is the rule the checkpoint was TRAINED under. For the '
       '`subgoal-only` rows that is `final_pass`, so the `argmax` line here is a readout the '
-      'policy never saw during training.\n']
+      'policy never saw during training.\n',
+      '\n**`final_pass` rows on an argmax-native arm are the reverse of that**, and they '
+      'answer a different question from the argmax/softmax pair. argmax and softmax both '
+      'PICK one of the n simulated candidates, so they isolate how the verifier ranking is '
+      'consumed. `final_pass` instead draws one MORE sample conditioned on all n scored '
+      'candidates and executes it **unsimulated**, so the verifier never selects anything — '
+      "`action_value_final − action_value_best` is that arm's whole question: does the "
+      "model's own synthesis beat the oracle argmax it replaces? It is swept at **n=16 "
+      'only, on the K=16 arms**, because that is the width those models were trained at '
+      '(`compute_loss` conditions on `max_actions - 1` = 15 context entries) and, per '
+      '`AUDIT.md` P2-7, the one width nothing else evaluates. Note it costs n+1 samples to '
+      "argmax's n, so compare at equal samples, not equal n.\n"]
 L += selection_table()
 
 L += ['\n## 4. Where the raw results are\n',
       'Everything in this file is DERIVED. The raw per-checkpoint eval output lives under '
       '`$DP_OUTPUT_ROOT` = `/gscratch/robotics/harine/diffusion_policy_outputs`; nothing is '
       "on home, where one run's checkpoints alone exceed the 10G quota.\n",
+      '\n**Copying this off the cluster: [aug10_results2copy.md](aug10_results2copy.md).** It '
+      'lists all 26 run directories plus the outer/inner runs and `candidate_scores/`, says '
+      'what each file below is worth keeping for, and carries an rsync recipe. Everything '
+      'except the model weights is ~2.3 GB against 213 GB for a full mirror; set '
+      '`DP_OUTPUT_ROOT` to the copy and this document rebuilds from it. Two traps it '
+      'documents: the `ctx-*` entries are back-symlinks, so `rsync -L` copies every run '
+      'twice, and the `checkpoint` paths recorded inside the jsonl are absolute cluster '
+      'paths.\n',
       '',
       '| file | what it holds |',
       '|---|---|',
