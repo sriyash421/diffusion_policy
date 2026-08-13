@@ -125,8 +125,68 @@ real derivation (`get_split_masks_3way(n_test=50, n_val=10)` then
 `downsample_mask(train_ratio=0.2, seed=42)`) and is the source of truth; treat it as data,
 not as something to re-derive.
 
-The r8 manifest is built *from* that file, so the two generations share their 29 training
-episodes exactly:
+#### The indices themselves
+
+Since the 29 is data rather than a derivation, here it is. These are episode indices into
+`data/pusht_cchi_v7_replay.zarr` (206 episodes) and mean nothing against any other zarr —
+check `episode_ends_checksum` first, see *Verifying* below.
+
+**train, 29 episodes (3,707 frames)** — byte-identical in `pusht_seed42_legacy_val10_train29.json`
+and `pusht_seed42_train29_val30.json`; this is the set the CLI cannot reproduce:
+
+```
+15, 16, 23, 39, 72, 73, 74, 80, 87, 95, 97, 99, 114, 115, 125, 130, 133, 134, 138, 143,
+144, 156, 161, 166, 172, 174, 181, 191, 194
+```
+
+**test, 50 episodes (6,232 frames)** — identical in *all five* manifests. This is the anchor
+that makes test numbers comparable across every section of `SUCCESS_RATES.md`:
+
+```
+3, 7, 8, 9, 20, 24, 25, 26, 29, 33, 37, 38, 46, 50, 51, 54, 56, 67, 70, 75, 79, 84, 94,
+96, 98, 101, 104, 106, 107, 108, 112, 119, 132, 146, 149, 150, 152, 154, 159, 167, 168,
+178, 184, 195, 196, 197, 198, 201, 202, 203
+```
+
+**val** — the one split that differs between generations:
+
+```
+r8    (30, 3,462 fr)  0, 1, 2, 4, 5, 6, 12, 27, 28, 32, 52, 55, 62, 66, 68, 81, 82, 86,
+                      88, 89, 92, 120, 123, 145, 153, 155, 157, 171, 180, 205
+100   (30, 3,586 fr)  0, 2, 4, 12, 27, 28, 32, 52, 55, 62, 66, 68, 80, 81, 82, 86, 88,
+                      89, 92, 114, 120, 123, 138, 145, 153, 155, 157, 171, 180, 205
+legacy(10, 1,147 fr)  2, 27, 82, 86, 88, 123, 153, 155, 180, 205
+```
+
+Print any of them without loading the images:
+
+```bash
+python -c "import json;m=json.load(open('diffusion_policy/config/splits/pusht_seed42_train29_val30.json'));print({k:m[k] for k in ('train','val','test')})"
+```
+
+**The 29- and 100-demo manifests are different partitions, not nested budgets.** Each is
+internally disjoint, but they disagree with each other, so a split label is only meaningful
+relative to its own manifest:
+
+| relation | result |
+|---|---|
+| `test` | **identical** — test numbers are comparable across every arm |
+| train29 ∩ train100 | 23 of 29 — overlapping, *not* a subset |
+| train29 ∩ val100 | **{80, 114, 138}** — trained on at 29 demos, held out at 100 |
+| val29 ∩ train100 | **{1, 5}** — held out at 29 demos, trained on at 100 |
+| val29 ∩ val100 | 27 of 30 |
+
+Practical consequence: **never compare a `val_*` number across the two budgets**, and never
+select a checkpoint for one budget using the other's val split. Within an arm it is fine —
+val only ever chooses a checkpoint and is never reported. (`train25` *is* a strict prefix
+subset of `train100`, so that pair does nest.)
+
+For contrast, the prefix derivation the CLI implements gives a genuinely different 29:
+`--n-train-episodes 29` overlaps the real set in only **4 of 29** episodes at `n_val 10`
+(the like-for-like comparison against the legacy config), or 7 of 29 at `n_val 30`.
+
+The r8 manifest is built *from* the legacy one, so the two generations share their 29
+training episodes exactly:
 
 ```bash
 python scripts/make_29demo_parity_split.py        # -> pusht_seed42_train29_val30.json
@@ -152,6 +212,40 @@ guards against the *data* changing under fixed indices, which the in-place `agen
 heredoc above makes a real failure mode. Pass the same `--seed` / `--n-*-episodes` the
 manifest was built with — they are recorded in its own `derivation` block. Neither flag
 works on the legacy-29 or r8 manifests, whose derivations the CLI does not implement.
+
+Those two can still be checked, in the two ways that matter. **Does the zarr still match?**
+Every manifest records `episode_ends_checksum`, so this is manifest-agnostic:
+
+```bash
+python -c "
+import zarr, numpy as np, hashlib
+ee = np.asarray(zarr.open('data/pusht_cchi_v7_replay.zarr','r')['meta']['episode_ends'])
+print(len(ee), hashlib.md5(np.ascontiguousarray(ee.astype(np.int64)).tobytes()).hexdigest())
+"
+# expect: 206 c88b56c9af8c5ee778293e50768ae0a5
+```
+
+The `agent_pos` / `block_pos` patch adds arrays under `data/` and leaves `meta/episode_ends`
+untouched, so a patched and a freshly-patched zarr are interchangeable here.
+
+**Does the legacy 29 still match its recorded derivation?** It does reproduce — "cannot be
+regenerated" means the *CLI* has no flag for it, not that the derivation is lost:
+
+```bash
+python -c "
+import json, numpy as np, zarr
+from diffusion_policy.common.sampler import downsample_mask
+from diffusion_policy.dataset.pusht_image_dataset import get_split_masks_3way
+ee = zarr.open('data/pusht_cchi_v7_replay.zarr','r')['meta']['episode_ends'][:]
+tr, _, _ = get_split_masks_3way(n_episodes=len(ee), n_test_episodes=50,
+                                n_val_episodes=10, seed=42)
+tr29 = downsample_mask(tr, max_n=round(0.2 * int(tr.sum())), seed=42)
+got = sorted(int(i) for i in np.nonzero(tr29)[0])
+want = sorted(json.load(open('diffusion_policy/config/splits/pusht_seed42_train29_val30.json'))['train'])
+print('match:', got == want)
+"
+# expect: match: True   (pool after 50 test + 10 val = 146; round(0.2*146) = 29)
+```
 
 Why any of this exists: the splits used to be derived independently in three places from
 `(seed, n_test_episodes, n_val_episodes, n_train_episodes, train_ratio)`, with nothing

@@ -1,0 +1,120 @@
+# SEARCH TRANSFORMER AT WIDTH 1, 100 demos. Half of the 2x2 against the diffusion-UNet BC.
+#
+# `policy.max_actions: 1` sets the transformer's `max_context_actions` to max_actions-1 = 0,
+# so the conditioning sequence is just the n_obs_steps observation tokens and there is ONE
+# candidate slot with an empty context. `cond_pos_emb` is (1, 2, 256) here against
+# (1, 17, 256) in the width-16 arms; every other parameter tensor is identical. This is
+# literally slot 0 of the search transformer, trained on its own.
+#
+# WHAT IT IS BEING COMPARED TO. `train_pusht_unet_bc` -- a diffusion UNET (DDPM,
+# DiffusionUnetImagePolicy), a genuinely different architecture, on the identical episodes
+# with the identical LR schedule. So the 2x2 is {transformer, unet} x {29, 100} demos and
+# the contrast is architecture, not search width (which is 1 everywhere here).
+#
+# OFFLINE TRAINER, BECAUSE OUTER/INNER DOES NOT APPLY AT WIDTH 1 -- verified, not assumed.
+# `generate_search_context` asks `search_candidates` for `max_actions - 1 = 0` candidates,
+# whose loop body never executes, so it returns `(None, None)`. TrainSearchOuterInnerWorkspace
+# then tries to `torch.cat` those into a context buffer and dies. The workspace now asserts
+# `max_actions > 1` up front and points here rather than failing on a bare NoneType.
+#
+# That is the right outcome, not a limitation to work around: outer/inner exists to amortize
+# the cost of generating `max_actions - 1` candidates per gradient step, and at width 1 that
+# cost is zero. Forcing it through would buy nothing on the objective (the loss is
+# bit-identical) while making data ordering strictly worse -- a resampled 256-window pool
+# with 4 passes, instead of full-dataset epochs.
+#
+# So the width-1 arms differ from the width-16 arm (`value (oi)`) in trainer as well as in
+# search width. Unavoidable, and it costs nothing: the two trainers compute the same loss.
+#
+# LR: 100k steps, 3k warmup, cosine decay from 1e-4 to a 1e-5 FLOOR reached at step 80,000,
+# then held constant. `decay_then_constant` with decay_steps 77000 -- NOT the inherited
+# decay_steps 10000, which is calibrated for the 20k search runs and would hit the floor by
+# 13k and sit there for 87% of the run. That defect is recorded in
+# data/outputs/_discarded/bc_demos-29-r8_seed-42__BAD-lr-decay_steps-10000/WHY_DISCARDED.md.
+#
+# `_self_` LAST, or the parent overrides everything below it.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_st_n1
+
+trainer: offline
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+
+n_demos: 100
+# `ctx-`/`corrupt-` are dropped: neither applies to a policy whose context is always empty.
+# `stn1` distinguishes these from the `bc_demos-*` directories, which are a DIFFERENT
+# generation (decay_then_constant, offline trainer) that must not be resumed by these.
+run_name: stn1_demos-${n_demos}_seed-${training.seed}
+
+policy:
+  # THE knob: 1 candidate == empty context.
+  max_actions: 1
+
+  # 100, NOT the search line's 8. Set for PARITY with train_pusht_unet_bc, whose DDPM
+  # sampler runs at its native 100 -- so the 2x2 varies architecture and demo budget with
+  # the sampler held equal, instead of confounding them with a 12.5x difference in
+  # denoising steps.
+  #
+  # Free at training time and only at width 1: num_inference_steps drives
+  # `conditional_sample`, which the loss never calls. The offline loop pays it because
+  # compute_loss generates max_actions-1 candidates per step; here that is 0, so the
+  # gradient step is untouched. What it does cost is ROLLOUT and EVAL, both 12.5x slower.
+  #
+  # CONSEQUENCE, worth stating: this makes the width-1 arms no longer sampler-matched to
+  # the width-16 arm (`value (oi)`, at 8). Compare width-1 to width-16 with that in mind.
+  # On frozen BC weights the repo measured n=1 success identical at 8/16/32/100
+  # (scripts/slurm/diag_bc_n1.sbatch), so the effect is expected to be nil -- but it was
+  # measured on this architecture only, not on the UNet.
+  num_inference_steps: 100
+
+task:
+  env_runner:
+    # the runner special-cases 1 and calls predict_action, so no verifier pool is spawned
+    n_search_actions: 1
+
+training:
+  max_gradient_steps: 100000
+  lr_scheduler: decay_then_constant
+  lr_warmup_steps: 3000
+  # Cosine from peak 1e-4 down to min_lr_ratio*lr = 1e-5, reaching the floor at step 80,000,
+  # then HELD constant at 1e-5 for the rest of the run.
+  #
+  # decay_steps is measured from the END of warmup (progress = (step - warmup)/decay_steps),
+  # so 3000 + 77000 = the floor lands exactly at step 80,000.
+  #
+  # Unlike plain `cosine` this schedule is EXTENDABLE and safe to resume: it is a pure
+  # function of the step index and holds its floor indefinitely, so training past 100k just
+  # continues at 1e-5. Plain cosine is periodic past its horizon -- it climbs back to peak --
+  # so a resumed run would silently start a second cycle.
+  lr_scheduler_kwargs:
+    decay_steps: 77000
+    min_lr_ratio: 0.1
+
+  # SAFETY BOUND ONLY -- `max_gradient_steps` above is what ends the run, and since
+  # 2026-08-12 it is enforced MID-EPOCH, so it stops on the exact step.
+  #
+  # It did not, before. The cap was only checked between epochs, and at 382 steps/epoch the
+  # 786th epoch began at step 299,870 -- under the cap, so it never fired and the run went
+  # to 300,252. `num_epochs` was the real bound, which meant recomputing it from
+  # `ceil(n_windows / batch_size)` whenever the demo budget or batch size moved.
+  #
+  # Now set far above any epoch count that could reach 300k steps (2,728 at the smallest
+  # budget in this family), so it never binds and never needs recomputing. Kept rather than
+  # removed because the loop is `range(num_epochs)` and `self.epoch` feeds the topk
+  # `format_str`. `decay_then_constant` ignores num_training_steps, so the LR curve does not
+  # depend on this either.
+  num_epochs: 100000
+  # no outer_batch_size / inner_batch_size / inner_epochs / drift_every here: those are
+  # TrainSearchOuterInnerWorkspace knobs and this run uses the offline loop (see header).
+  #
+  # 10000, matching the UNet arm and the eval grid exactly -- every checkpoint written is
+  # evaluated, and nothing is evaluated off-grid. At 1000 a 300k run wrote 300 checkpoints
+  # of which only 30 were ever scored; the other 270 were dead weight (78 GB here, and the
+  # same cadence on the 4.4 GB UNet checkpoints is what filled a 1.9 TB disk at step 115k).
+  checkpoint_every: 10000
+  rollout_every_steps: 20000
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "st-n1", "demos-${n_demos}"]

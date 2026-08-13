@@ -2631,6 +2631,34 @@ The r8 generation is also still **in progress** and covers only the three argmax
 |  |  | 80000 | 4% | 24% | 20% | 36% | 22% | 40% | 42% | — | — | — | — |
 |  |  | 82000 | 6% | 14% | 38% | 22% | 30% | 36% | 38% | — | — | — | — |
 |  |  | 84000 | 6% | 10% | 20% | 30% | 34% | — | — | — | — | — | — |
+| value **(oi)** | oi clean | 1000 | 0% | 0% | 0% | 14% | 36% | 56% | 78% | — | — | — | — |
+|  |  | 2000 | 0% | 0% | 4% | 26% | 34% | 66% | 72% | — | — | — | — |
+|  |  | 5000 | 0% | 0% | 14% | 14% | 26% | 22% | 34% | — | — | — | — |
+|  |  | 10000 | 0% | 10% | 12% | 30% | 18% | 34% | 32% | — | — | — | — |
+|  |  | 15000 | 0% | 10% | 18% | 18% | 36% | 26% | 40% | — | — | — | — |
+|  |  | 20000 | 4% | 6% | 14% | 28% | 26% | 24% | 26% | — | — | — | — |
+| none (BC) **(oi-baseline)** | r8 clean, n=1 only | 1000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 2000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 5000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 10000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 20000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 30000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 40000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 50000 | 2% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 60000 | 4% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 70000 | 2% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 80000 | 0% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 90000 | 4% | — | — | — | — | — | — | — | — | — | — |
+|  |  | 100000 | 6% | — | — | — | — | — | — | — | — | — | — |
+
+**About the `(oi)` and `(oi-baseline)` rows.** Both were trained locally on 2026-08-11 and are the only rows in this document not produced on the cluster; they were inserted into this table directly rather than by regenerating it (the local results mirror is incomplete, so a regeneration here would delete rows). `scripts/build_success_rates_doc.py` now discovers `outer_inner/` on its own, so the next regeneration from a complete tree reproduces them without hand-editing.
+
+- **`value (oi)`** — `arm=value` (verifier scalar as context, argmax selection), the same 29 r8 episodes as the `(r8)` rows, EMA on, shared crop offset, 20k steps. The only difference from `value (r8)` is the **training loop**: `TrainSearchOuterInnerWorkspace` generates the search context once per pool of 256 windows and reuses it for 4 inner epochs, instead of regenerating it from the current weights every gradient step. Measured staleness was negligible (`train_drift_mse_eps` mean 0.0062 across 5,000 readings, flat across the inner loop after the first ~4 updates). Compare against `value (r8)` **at a matched step** — those rows run to 100k, these stop at 20k.
+- **`none (BC) (oi-baseline)`** — the same policy class with `max_actions: 1`, so the context is always empty and no candidates or verifier sims are generated. It is slot 0 of the search model trained on its own, on the identical 29 r8 episodes, to 100k steps. Evaluated at **n=1 only**, which is why every other column is blank — not "not run", but "not applicable to the question it was run to answer".
+
+Both were evaluated `--skip-val`, so like the `(r8)` rows they have no val curve and any checkpoint picked from them is picked on test.
+
+**What these two rows say together.** `value (oi)` peaks almost immediately — 78% at n=64 by step 1000 and 72% by 2000 — then falls to 26–40% for the rest of the run, which matches `val_loss` bottoming at step 3k. Meanwhile n=1 never leaves the floor in either run: 0–4% for `(oi)` across all six checkpoints, and 0–6% for the BC baseline even at 100k steps and 5x the gradient budget. Nearly all the measured performance is coming from search width, and a large part of that from the verifier argmax being an oracle over a ground-truth simulator rather than from the model having learned to read its context — which is the concern `AUDIT.md` §2 raises and the `subgoal-only` arm exists to test.
 
 ### 2b. Binary success rate — VAL (10 episodes; this is the selector)
 
@@ -5041,6 +5069,155 @@ Both rules run on the **same trained weights** — selection is a pure readout o
 |  |  | 20000 | `argmax` | 4% | 10% | 18% | 16% | 24% | 28% | 42% | — | — | — | — |
 |  |  |  | `softmax` | 0% | 4% | 10% | 14% | 20% | 20% | 18% | — | — | — | — |
 |  |  |  | `final_pass` | — | — | — | — | 0% | — | — | — | — | — | — |
+
+## 5. Architecture at search width 1 — transformer vs diffusion UNet
+
+
+**All four runs have `n=1`: one action sampled, no search, no verifier.** The contrast is the ARCHITECTURE and the demo budget, not search width. Evaluated at n=1 only — the UNet has no verifier attached and so cannot rank candidates, which makes best-of-n undefined for it; every other `n` column would be blank rather than zero.
+
+
+| | search transformer | diffusion UNet |
+|---|---|---|
+| policy | `PushTDiffusionSearchPolicy`, `max_actions: 1` | `DiffusionUnetImagePolicy` |
+| denoiser | transformer, 4 layer x 4 head x 256 emb | UNet, `down_dims [512,1024,2048]` |
+| scheduler | DDIM | DDPM |
+| params (denoiser / total) | 5.9M / 17.1M | 282M / 293M |
+| trainer | `TrainMLPImageWorkspace` | `TrainDiffusionUnetImageWorkspace` |
+
+
+At `max_actions: 1` the transformer's `max_context_actions` is 0, so its conditioning sequence is just the two observation tokens (`cond_pos_emb` is `(1, 2, 256)` against `(1, 17, 256)` in the width-16 arms). It is slot 0 of the search transformer trained on its own.
+
+
+**Held equal**: the committed split manifests (identical 29 / 100 training episodes, and the same 50 test episodes as every other section), LR (3k warmup to 1e-4, cosine to a 1e-5 floor at step 80k, then held), 100k steps, batch 32, `num_inference_steps: 100`, `diffusion_step_embed_dim: 256`, ResNet18 + GroupNorm encoder with `imagenet_norm: False`, EMA 0.995, and the eval protocol. **Not equal, and not equalisable**: denoiser capacity (48x) and the sampler family (DDIM vs DDPM). See `diffusion_policy/config/ARCH_2x2_PARITY.md`.
+
+
+> Trained locally 2026-08-12/13 and inserted directly rather than by regenerating this file. Evaluated `--skip-val`, so any checkpoint picked from these rows is picked on test.
+
+
+### 5a. Binary success rate — TEST (50 episodes), n=1
+
+| checkpoint | ST @29 | UNet @29 | ST @100 | UNet @100 |
+|---|---|---|---|---|
+| 20000 | 2% | 16% | 2% | 36% |
+| 40000 | 0% | 12% | 4% | 56% |
+| 60000 | 4% | 18% | 18% | 62% |
+| 80000 | 2% | 18% | 28% | 56% |
+| 100000 | 8% | 20% | 26% | 62% |
+
+### 5b. Mean reward, episode max — TEST, n=1
+
+
+The success column thresholds this at 1.0 (`coverage >= 95%`), so it is the same measurement without the cliff. Read it for trend: at 50 episodes one episode is 2%, and much of the test set sits just under the threshold, which makes the binary column swing over a nearly-flat policy.
+
+| checkpoint | ST @29 | UNet @29 | ST @100 | UNet @100 |
+|---|---|---|---|---|
+| 20000 | 0.370 | 0.628 | 0.265 | 0.912 |
+| 40000 | 0.448 | 0.616 | 0.690 | 0.959 |
+| 60000 | 0.494 | 0.606 | 0.780 | 0.915 |
+| 80000 | 0.521 | 0.558 | 0.795 | 0.915 |
+| 100000 | 0.546 | 0.585 | 0.784 | 0.912 |
+
+### 5c. Mean reward, FINAL step — TEST, n=1
+
+
+The same quantity at the LAST step rather than the episode maximum — it catches the policy that reaches the goal and then leaves.
+
+| checkpoint | ST @29 | UNet @29 | ST @100 | UNet @100 |
+|---|---|---|---|---|
+| 20000 | 0.154 | 0.574 | 0.097 | 0.838 |
+| 40000 | 0.256 | 0.467 | 0.432 | 0.919 |
+| 60000 | 0.377 | 0.514 | 0.574 | 0.901 |
+| 80000 | 0.416 | 0.486 | 0.673 | 0.888 |
+| 100000 | 0.433 | 0.510 | 0.634 | 0.877 |
+
+### 5d. ST @29 beyond 100k — supplementary
+
+
+This run reached 300k before the budget was capped at 100k; the other three stop there. Not part of the matched comparison, and included because it answers whether the transformer was simply undertrained. **It was not** — it never beats its own 18% at 70k, and mean reward decays from 0.558 to ~0.50.
+
+
+| checkpoint | n=1 success | mean reward (max) |
+|---|---|---|
+| 120001 | 8% | 0.540 |
+| 140001 | 6% | 0.549 |
+| 160001 | 6% | 0.547 |
+| 180001 | 8% | 0.506 |
+| 200001 | 12% | 0.538 |
+| 220001 | 10% | 0.529 |
+| 240001 | 2% | 0.497 |
+| 260001 | 10% | 0.475 |
+| 280001 | 4% | 0.500 |
+| 300001 | 4% | 0.534 |
+
+### 5e. Does matching the embedding size change anything?
+
+
+Three conditions per demo budget. The two UNet columns differ in **exactly one value** — `diffusion_step_embed_dim`, 128 against 256 — and are identical on lr (1e-4), schedule (`decay_then_constant`, 3k warmup, 77k decay to a 1e-5 floor), batch (32), `num_inference_steps` (100), encoder, EMA and split manifests. The ST column is the reference both are matched toward: 256 is the transformer's `n_emb`, the width its timestep embedding is built at.
+
+
+| column | LR matched to ST | embedding matched to ST |
+|---|---|---|
+| **ST** | — (is the reference) | — (is the reference) |
+| **UNet-128** | yes | no (128 vs 256) |
+| **UNet-256** | yes | yes |
+
+
+**Binary success rate — TEST (50 episodes), n=1**
+
+| checkpoint | ST @29 | UNet-128 @29 | UNet-256 @29 | ST @100 | UNet-128 @100 | UNet-256 @100 |
+|---|---|---|---|---|---|---|
+| 20000 | 2% | 8% | 16% | 2% | 24% | 36% |
+| 40000 | 0% | 18% | 12% | 4% | 50% | 56% |
+| 60000 | 4% | 10% | 18% | 18% | 60% | 62% |
+| 80000 | 2% | 16% | 18% | 28% | 64% | 56% |
+| 100000 | 8% | 14% | 20% | 26% | 52% | 62% |
+
+**Mean reward, episode max — TEST, n=1**
+
+| checkpoint | ST @29 | UNet-128 @29 | UNet-256 @29 | ST @100 | UNet-128 @100 | UNet-256 @100 |
+|---|---|---|---|---|---|---|
+| 20000 | 0.370 | 0.693 | 0.628 | 0.265 | 0.878 | 0.912 |
+| 40000 | 0.448 | 0.636 | 0.616 | 0.690 | 0.893 | 0.959 |
+| 60000 | 0.494 | 0.571 | 0.606 | 0.780 | 0.931 | 0.915 |
+| 80000 | 0.521 | 0.587 | 0.558 | 0.795 | 0.880 | 0.915 |
+| 100000 | 0.546 | 0.589 | 0.585 | 0.784 | 0.925 | 0.912 |
+
+**Best n=1 within 100k**
+
+| | ST | UNet-128 | UNet-256 |
+|---|---|---|---|
+| **29 demos** | 18% @ 70000 | 26% @ 50001 | 20% @ 100000 |
+| **100 demos** | 28% @ 80000 | 66% @ 50000 | 62% @ 60000 |
+
+**What it says.** Widening the embedding to match the transformer moved nothing outside noise. At 100 demos the two UNet generations peak at 66% and 62%; at 29 demos at 26% and 20%. Every one of those differences is 2-3 episodes out of 50, well inside the ~7pp standard error, and the sign is not even consistent across the two budgets once the full curves are read rather than the peaks.
+
+
+So the architecture gap in 5a-5c is **not** an artifact of the embedding width: the UNet beats the transformer at 100 demos by roughly the same margin whether its timestep embedding is 128 or 256, and the two converge at 29 demos either way. That is the useful conclusion here — a matched-embedding run was worth doing precisely because it could have overturned the result, and it did not.
+
+
+Note what this ablation does **not** control: the UNet has no token projection at all (no `obs_emb`), so `diffusion_step_embed_dim` is only the nearest analogue to the transformer's `n_emb`. The observation still enters the UNet at full 1060 width as a FiLM signal, against 2 tokens of width 256 in the transformer, and the denoiser is 48x larger either way. Those differences are structural and no config value closes them.
+
+
+### What these rows say
+
+
+**Best n=1 within the matched 100k budget:** ST @29 18%, UNet @29 20%, ST @100 28%, **UNet @100 62%**.
+
+
+**The UNet wins decisively at 100 demos** — 62% against 28%, and 0.959 against 0.796 on mean reward, on identical episodes with a matched schedule. It also learns much faster: 56% by step 40k, a level the transformer never reaches at any checkpoint.
+
+
+**At 29 demos the two converge** (20% vs 18%, indistinguishable at 50 episodes). So the architecture gap is a function of DATA BUDGET, not a fixed offset: moving 29 -> 100 demos takes the UNet 20% -> 62% and the transformer only 18% -> 28%. The UNet exploits the extra data far better.
+
+
+**This replicates an earlier run of the same 2x2** at `diffusion_step_embed_dim: 128`, which gave 66% / 28% / 26% / 18%. Widening the UNet's timestep embedding to match the transformer's `n_emb` changed nothing outside noise, which is mild evidence the gap is architectural rather than a hyperparameter artifact. Those runs are archived at `data/outputs/_discarded/unet_bc_diffusion_step_embed_dim-128/`.
+
+
+**Neither architecture is usable at n=1.** The best cell here is 62%; the width-16 search arms in section 2 reach 78% at n=64 by step 1000. Nearly all the performance in this project comes from search width, not from the single-sample policy.
+
+
+**Caveats.** (1) The UNet's denoiser is 48x larger (282M vs 5.9M) — the one axis that could not be equalised without turning one architecture into the other. (2) These runs use `num_inference_steps: 100` for sampler parity with DDPM, while every search arm in sections 1-3 uses 8. (3) UNet @29's `val_loss` bottoms at step ~7k, before the first eval point at 20k, so its true peak may be unmeasured; its 10k checkpoint is on disk if that gap needs closing.
+
 
 ## 4. Where the raw results are
 

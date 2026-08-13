@@ -1,0 +1,41 @@
+# SEARCH TRANSFORMER AT WIDTH 1, 29 demos (the Round-8 parity split).
+#
+# Identical to train_pusht_st_n1 except for the demo budget. See that file for what
+# max_actions: 1 does, why outer/inner is a no-op on the objective at width 1, and why the
+# LR schedule is set here rather than inherited.
+#
+# `n_demos: 29` alone is NOT enough, and the failure is silent in the worst way.
+# task.dataset.split_file interpolates as splits/pusht_seed42_train${n_demos}.json; there is
+# no train29.json, and generating one with `dump_pusht_splits.py --n-train-episodes 29`
+# would take a PREFIX of the permuted pool -- a different 29 episodes, overlapping the real
+# set in only 4 of 29 (README_pusht 2.1). The committed manifest is data, not a derivation.
+#
+# `_self_` LAST.
+defaults:
+  - train_pusht_st_n1
+  - _self_
+
+name: train_pusht_st_n1_29
+
+n_demos: 29
+run_name: stn1_demos-29-r8_seed-${training.seed}
+
+task:
+  dataset:
+    split_file: diffusion_policy/config/splits/pusht_seed42_train29_val30.json
+    n_train_episodes: 29
+    n_val_episodes: 30
+    n_test_episodes: 50
+    # must stay null with a split_file: it would re-subsample the pinned manifest
+    train_ratio: null
+
+# RUN LENGTH needs NO override here. The parent's `max_gradient_steps: 300000` is in
+# gradient steps and so is already independent of the demo budget, and its `num_epochs` is
+# a safety bound large enough never to bind at either budget.
+#
+# This block used to carry `num_epochs: 2728`, because at 110 steps/epoch (3,504 windows /
+# batch 32) the same step budget needed a different epoch count than the parent's 382
+# steps/epoch. An epoch is not a stable unit across demo budgets.
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "st-n1", "demos-29", "r8-split"]
