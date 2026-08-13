@@ -59,14 +59,9 @@ task:
     # leaving it set would downsample the manifest's 29 again.
     train_ratio: null
 
-training:
-  # 100k, matching the subgoal-only arms rather than the legacy 20k. The 100-demo argmax
-  # arms peaked at 1k-8k and declined, but that was at 385 steps/epoch; at 29 episodes an
-  # epoch is ~110 steps, so the same number of gradient steps is ~3.5x more passes over the
-  # data and the peak lands somewhere else. Reaching 100k is what makes the two budgets
-  # comparable at equal OPTIMIZATION rather than at equal epochs.
-  max_gradient_steps: 100000
-  # every 2000, as in the subgoal-only runs: 50 checkpoints over the run rather than the
-  # legacy 20, and a cadence that puts 50000/100000 exactly on a boundary
-  checkpoint_every: 2000
-  rollout_every_steps: 4000
+# Budget and cadence are INHERITED now: the base sets max_gradient_steps 100000,
+# checkpoint_every 10000 and rollout_every_steps 20000. This file used to re-state
+# max_gradient_steps: 100000 (identical to the base, so redundant) and override
+# checkpoint_every: 2000 / rollout_every_steps: 4000, which predated the 10k eval grid --
+# 2000 wrote 50 checkpoints per run of which only ~10 were ever scored, and left rollouts
+# landing on steps with no checkpoint behind them.

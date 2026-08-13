@@ -3,7 +3,10 @@ defaults:
   - task: pusht_image_search
 
 name: train_pusht_diffusion_search
-_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+# Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
+# move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
+# actually selects the workspace.
+_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
 output_dir: null
 
 task_name: ${task.name}
@@ -22,39 +25,43 @@ shape_meta: ${task.shape_meta}
 exp_name: pusht_search
 
 # ---------------------------------------------------------------------------
-# DEFAULT TRAINER -- STAGED FLIP TO outer_inner, NOT YET APPLIED.
+# DEFAULT TRAINER -- outer_inner. FLIP APPLIED 2026-08-13.
 #
-# The intent is for outer/inner to become the default way to train offline search. It is
-# deliberately not the default yet: SIX r8 trainers are running against
-# train_pusht_diffusion_search_29, which inherits this file, and they carry Requeue=1.
-# `trainer` is a path component of hydra.run.dir
+# Outer/inner is now the default way to train offline search, and everything inheriting this
+# file gets it. The flip was staged for a long time because SIX r8 trainers were live against
+# train_pusht_diffusion_search_29 with Requeue=1: `trainer` is a path component of
 #   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
-# so flipping it while they are live means any preempted job resolves to
-# .../outer_inner/<run>/, finds no latest.ckpt there, and SILENTLY RESTARTS FROM SCRATCH
-# in a new directory -- abandoning six runs. This is the failure AUDIT.md 9.9 documents.
+# so flipping it under a running job means any preempt resolves to .../outer_inner/<run>/,
+# finds no latest.ckpt, and SILENTLY RESTARTS FROM SCRATCH in a new directory. That is the
+# failure AUDIT.md 9.9 documents. The precondition (no live `tr_` jobs) held when this was
+# applied -- training now runs locally and nothing was in flight.
 #
-# PRECONDITION for the flip, same trigger rule as the 9.9 rename:
-#   squeue -u $USER | grep -E 'tr_'      must be empty
+# WHAT CHANGES. `offline` regenerates the search context from the CURRENT weights on every
+# gradient step: max_actions-1 candidate samples plus their verifier rollouts, used once and
+# discarded. `outer_inner` generates it once per pool of `outer_batch_size` windows and
+# reuses it for `inner_epochs` passes -- ~4x cheaper per update (480 -> 120 verifier sims),
+# paid for with a context drawn from weights up to num_inner updates stale. That staleness is
+# measured, not assumed: `train_drift_mse_eps` compares the live policy against a frozen
+# snapshot of the collector at matched inputs, which is proportional to the per-denoising-step
+# KL. Measured at these settings it is ~0.006 and flat across the inner loop.
 #
-# THE FLIP, mechanically:
-#   1. here:            trainer: offline  ->  trainer: outer_inner
-#   2. line 6:          _target_ -> ...train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
-#   3. training block:  add outer_batch_size 256 / inner_batch_size 32 / inner_epochs 4 /
-#                       drift_every 4, copied from train_pusht_search_outer_inner.yaml
-#   4. verify:          bash scripts/slurm/check_configs.sbatch  -- every run_name still distinct,
-#                       and train_pusht_bc* still resolve to trainer=offline
+# **Runs trained the two ways are not comparable.** Every run in SUCCESS_RATES.md sections
+# 1-3 predates this flip and is `offline`; their directories are under .../offline/ and are
+# not resumed by anything launched now.
 #
-# Already immune to the flip: train_pusht_bc / _25 / _29 inherit
-# train_pusht_diffusion_search_single, which pins the single-step loop explicitly. Anything
-# else that must stay on-policy should inherit that file too.
+# STILL SINGLE-STEP, deliberately: train_pusht_diffusion_search_single re-pins BOTH
+# `trainer: offline` and `_target_`, so train_pusht_bc* inherit the on-policy loop -- BC has
+# max_actions=1 and generates no candidates, so there is no search cost to amortize. The
+# train_pusht_st_n1* configs re-pin it for the same reason, and MUST: outer/inner asserts
+# max_actions > 1, because at width 1 generate_search_context returns (None, None) and there
+# is no context to buffer. Anything else that must stay on-policy should inherit
+# train_pusht_diffusion_search_single rather than re-pin by hand.
 #
-# What actually changes: `offline` regenerates the search context from the CURRENT weights
-# every gradient step; `outer_inner` generates it once per pool of 256 windows and reuses
-# it for 4 inner epochs -- ~4x cheaper per update, at the cost of a context drawn from
-# weights up to num_inner updates stale. Runs trained the two ways are not comparable, and
-# all 26 runs currently on disk are `offline`.
+# Verify after touching any of this:
+#   python train.py --config-name=<cfg> --cfg job --resolve | grep -E 'trainer|_target_'
+#   -- and confirm train_pusht_bc* / train_pusht_st_n1* still say offline.
 # ---------------------------------------------------------------------------
-trainer: offline                 # {offline, outer_inner} -- see the staged flip above
+trainer: outer_inner             # {offline, outer_inner} -- paired with _target_ at the top
 search_context: value            # {value, state, state_value, subgoal, subgoal_value}
 corrupt_obs: False
 # How the executed action is picked. ORTHOGONAL to search_context, which only says what
@@ -245,18 +252,36 @@ training:
   seed: 42
   debug: False
   resume: True
-  # decay lr over the first 10k steps, then hold constant at min_lr_ratio * lr.
+  # Linear warmup to lr over 3k steps, cosine decay to min_lr_ratio*lr = 1e-5 reached at
+  # step 80,000, then HELD constant. decay_steps is measured from the END of warmup
+  # (progress = (step - warmup)/decay_steps), so 3000 + 77000 puts the floor at exactly 80k.
+  #
+  # This is the standard shared with the width-1 arms (train_pusht_st_n1*, train_pusht_unet_bc*)
+  # so n=1 and n=16 results are directly comparable. It replaces warmup 500 / decay_steps
+  # 10000, which was calibrated for the old 20k runs and left a 100k run at its 1e-5 floor
+  # for 89% of training -- the defect recorded in
+  # data/outputs/_discarded/bc_demos-29-r8_seed-42__BAD-lr-decay_steps-10000/WHY_DISCARDED.md.
+  #
+  # `decay_then_constant` is a pure function of the step index, so it is safe to resume and
+  # safe to EXTEND: training past 100k just continues at 1e-5. Plain `cosine` is periodic
+  # past its horizon (it climbs back to peak), so a resumed run would silently start a
+  # second cycle.
   lr_scheduler: decay_then_constant
-  lr_warmup_steps: 500
+  lr_warmup_steps: 3000
   lr_scheduler_kwargs:
-    decay_steps: 10000
+    decay_steps: 77000
     min_lr_ratio: 0.1
-  num_epochs: 1000
-  # Hard stop well before the old 100k. With augmentation on, val_loss should keep
-  # improving much longer than the ~3k it managed without -- but the previous run trained
-  # ~32x past its val optimum and every evaluated checkpoint was deep in the overfit
-  # regime. Raise this only after checking where val_loss actually bottoms.
-  max_gradient_steps: 20000
+  # SAFETY BOUND ONLY -- max_gradient_steps below is what ends the run, and it is enforced
+  # mid-epoch so it stops on the exact step. num_epochs must stay far above any epoch count
+  # that could reach the budget: an epoch is ceil(n_windows/batch_size) steps, so at 29 demos
+  # it is ~110 steps and the old `num_epochs: 1000` was only ~110k -- close enough to bind
+  # first and silently become the real limit. Kept rather than removed because the loop is
+  # `range(num_epochs)` and self.epoch feeds the topk format_str.
+  num_epochs: 100000
+  # 100k. The old 20k cap dates from the pre-augmentation runs that overfit by ~3k steps;
+  # with crop augmentation and EMA in place val_loss keeps improving much longer. Matches
+  # the width-1 arms, so the two search widths are compared at equal optimization.
+  max_gradient_steps: 100000
   gradient_accumulate_every: 1
   gradient_clip_norm: 1.0
   # EMA weights are what gets rolled out, validated, sampled and shipped in the checkpoint;
@@ -270,6 +295,17 @@ training:
   # Override to 0.999 for a 1000-step window if this smooths too little.
   ema_decay: 0.995
   freeze_encoder: False
+
+  # ---- outer/inner loop geometry (TrainSearchOuterInnerWorkspace) ----
+  # THE knob is max_gradient_steps above; these four define the loop shape and are
+  # independent of run length. num_inner = inner_epochs * ceil(outer_bs/inner_bs) = 32
+  # updates per outer step, so the search cost per update is divided by exactly
+  # inner_epochs (4x here: 480 -> 120 verifier sims). There is deliberately no num_outer --
+  # the outer loop runs until the gradient-step budget is spent.
+  outer_batch_size: 256    # windows whose search context is generated per outer step
+  inner_batch_size: 32     # matches dataloader.batch_size
+  inner_epochs: 4          # 256/32 = 8 batches/epoch x 4 = 32 updates per outer step
+  drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
   # Rollout on GRADIENT STEPS and on a multiple of checkpoint_every, so every rollout
   # number belongs to weights that were saved and can be re-verified against an eval curve.
   # rollout_every (epochs) is kept only as the fallback for configs that predate this.
@@ -281,14 +317,19 @@ training:
   # were saved and can be re-verified against an eval curve.
   # The *_every (epoch) keys below are retained only as the fallback for configs predating
   # this; the workspace prefers the *_every_steps ones whenever they are set.
-  rollout_every_steps: 2000
+  # MUST be a multiple of checkpoint_every, so every in-training success number belongs to
+  # weights that were saved and can be re-verified against an eval curve. It was 2000 when
+  # checkpoint_every was 1000; at the 10k cadence that would put rollouts on steps with no
+  # checkpoint behind them. 20000 -> 5 rollouts over a 100k run.
+  rollout_every_steps: 20000
   val_every_steps: 1000
   sample_every_steps: 1000
   rollout_every: 50
-  # persist a checkpoint every 1k gradient steps (consumed by eval_search_pusht --watch).
-  # Halved from 2k now that the run is 20k rather than 100k, so the eval curve still has
-  # ~20 checkpoints on it.
-  checkpoint_every: 1000
+  # 10k, matching the eval grid: every checkpoint written gets scored and nothing is scored
+  # off-grid. At the old 1k cadence a 100k run wrote 100 checkpoints of which ~10 were ever
+  # evaluated; on the 4.4 GB UNet checkpoints that same cadence filled a 1.9 TB disk at step
+  # 115k. A search-policy checkpoint is ~261 MB, so 10 x 261 MB per 100k run.
+  checkpoint_every: 10000
   val_every: 10
   sample_every: 10
   # Bound the (verifier-driven) normalized-RMSE eval. These batches are now drawn as a

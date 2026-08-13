@@ -25,6 +25,15 @@ from collections import defaultdict
 OUT_ROOT = pathlib.Path(os.environ.get(
     'DP_OUTPUT_ROOT', '/gscratch/robotics/harine/diffusion_policy_outputs')) / 'runs'
 
+# DIRECTORY NAMES, not config names. These are the 2026-07-30 outer/inner runs under
+# $DP_OUTPUT_ROOT/runs/<name>/, which happen to be named after the configs that produced
+# them. Those three config files were deleted on 2026-08-13 when outer/inner became the
+# default in train_pusht_diffusion_search.yaml and they became exact duplicates of
+# `base + search_context=<ctx> arm=<label>` -- the directories they name are unaffected.
+#
+# New outer/inner runs do NOT land here: they go to
+# $DP_OUTPUT_ROOT/pusht_search/pusht_image_search/outer_inner/<arm>_corrupt-<c>_demos-<n>_seed-<s>/
+# and are picked up by scripts/build_success_rates_doc.py instead.
 RUNS = [
     ('value',         'train_pusht_search_outer_inner'),
     ('subgoal',       'train_pusht_search_outer_inner_subgoal'),

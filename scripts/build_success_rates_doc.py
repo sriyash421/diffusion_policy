@@ -120,6 +120,12 @@ D100 += oi_sources(100)
 D29 += oi_sources(29)
 
 ARCHIVE = [('none (BC)', '25 demos', OFF / 'bc_demos-25_seed-42' / 'bon_search')]
+# DIRECTORY NAMES, not config names -- the 2026-07-30 outer/inner runs live under
+# ROOT/runs/<name>/ and are named after the configs that produced them. Those three config
+# files were deleted on 2026-08-13 when outer/inner became the default in
+# train_pusht_diffusion_search.yaml and they became exact duplicates of
+# `base + search_context=<ctx> arm=<label>`. The directories are unaffected, and CURRENT
+# outer/inner runs are discovered by oi_sources() above rather than listed here.
 for name, lbl in (('train_pusht_search_outer_inner', 'value'),
                   ('train_pusht_search_outer_inner_subgoal', 'subgoal'),
                   ('train_pusht_search_outer_inner_subgoal_verifier', 'subgoal_value')):

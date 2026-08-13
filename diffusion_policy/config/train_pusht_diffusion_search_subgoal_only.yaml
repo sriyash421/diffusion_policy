@@ -54,18 +54,10 @@ slot_weight_decay: 0.9
 # while every other arm is still on the ctx-* form. Delete this override when the base
 # config's run_name is flipped -- see AUDIT.md 9.9.
 
-training:
-  # 100k rather than the base 20k. The base cap exists because the pre-augmentation runs
-  # overfit by ~3k steps (AUDIT.md ROUND 4); with the crop augmentation and EMA in place
-  # val_loss is still improving at 20k. Watch val_loss -- if it bottoms early here too, the
-  # extra budget costs nothing but disk, since selection is on val and not on the last step.
-  max_gradient_steps: 100000
-  # 100k/2k = 50 checkpoints x 274MB = 13.7GB per run. At the base cadence of 1k this would
-  # be 27GB per run, 55GB across the two arms, on a shared /gscratch.
-  checkpoint_every: 2000
-  # kept a multiple of checkpoint_every so every in-training success number belongs to
-  # weights that were saved and can be re-verified against an eval curve
-  rollout_every_steps: 4000
+# Budget and cadence are INHERITED now: the base sets max_gradient_steps 100000,
+# checkpoint_every 10000 and rollout_every_steps 20000. This file used to re-state the 100k
+# budget (identical to the base, so redundant) and override checkpoint_every: 2000 /
+# rollout_every_steps: 4000, which predated the 10k eval grid.
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass"]

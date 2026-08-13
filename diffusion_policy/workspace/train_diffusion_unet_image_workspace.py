@@ -90,6 +90,23 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
+
+        # Record the exact episodes this run trains/validates/tests on, and refuse to resume
+        # if they differ from what the run directory already recorded. TrainMLPImageWorkspace
+        # and TrainSearchOuterInnerWorkspace both do this; this workspace did not, so its runs
+        # carried no splits.json at all.
+        #
+        # That is not only a provenance gap: eval_search_pusht.get_split_states cross-checks
+        # its resolved indices against <run_dir>/splits.json, but only `if recorded.is_file()`
+        # -- so a missing file silently SKIPS the check, and every UNet checkpoint was scored
+        # with no guard against being evaluated on a different partition than it trained on.
+        #
+        # Must follow the instantiate above: the guard needs the resolved partition, not the
+        # config keys. write_splits is a no-op for datasets without get_split_indices.
+        if self.accelerator.is_main_process:
+            self.write_manifest()
+            self.write_splits(dataset)
+
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
 
         # configure validation dataset
