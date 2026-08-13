@@ -1017,6 +1017,33 @@ def build_report(dirs, out_path, n_example_steps=8):
               f"{st['record_rate'][k]:.3f} | {st['perm_null_rate'][k]:.3f} | "
               f"{st['iid_null_rate'][k]:.3f} | "
               f"{st['argmax_hist'][k]:.3f} |")
+
+        # The same numbers transposed -- slot across the columns, metric down the rows. This
+        # orientation answers "how does the value move ALONG the slots", which is the question
+        # the decay arms exist to ask; the per-index table above answers "what is slot k like".
+        # Wide searches are truncated exactly as the per-step table is: 64 columns will not
+        # render, so show a head slice and always the last slot.
+        cols = list(range(min(12, n))) + ([n - 1] if n > 12 else [])
+        A('\n### Value by candidate slot\n')
+        A('Same statistics as above, transposed. The verifier value is '
+          '`-mean_kp||feedback||`\nin PIXELS — distance to the goal T, so 0 is on-goal and '
+          'less negative is better.\n')
+        A('\n| metric | ' + ' | '.join(f'slot {k}' for k in cols) + ' |')
+        A('|---|' + '---|' * len(cols))
+        for label, fn in (
+            ('mean (px)',      lambda k: _fmt(st['mean_by_index'][k])),
+            ('±95%',           lambda k: f"{1.96 * st['sem_by_index'][k]:.2f}"),
+            ('step-centered',  lambda k: f"{st['centered_mean_by_index'][k]:+.2f}"),
+            ('±95%',           lambda k: f"{1.96 * st['centered_sem_by_index'][k]:.2f}"),
+            ('within-step SD', lambda k: f"{st['centered_sd_by_index'][k]:.1f}"),
+            ('E[running max]', lambda k: _fmt(st['running_max_by_index'][k])),
+            ('P(record)',      lambda k: f"{st['record_rate'][k]:.3f}"),
+            ('perm null',      lambda k: f"{st['perm_null_rate'][k]:.3f}"),
+            ('i.i.d.',         lambda k: f"{st['iid_null_rate'][k]:.3f}"),
+            ('P(executed)',    lambda k: f"{st['argmax_hist'][k]:.3f}"),
+        ):
+            A(f'| {label} | ' + ' | '.join(fn(k) for k in cols) + ' |')
+
         A(f"\n![{tag}]({d.name}/candidate_scores.png)\n")
 
     pathlib.Path(out_path).write_text('\n'.join(L) + '\n')
