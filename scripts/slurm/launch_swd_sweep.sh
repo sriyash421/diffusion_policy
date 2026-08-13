@@ -46,13 +46,74 @@ CELLS=(
 )
 SWDS=(1.0 0.9)
 
+# Per-job ask, from train_pusht_search.sbatch's #SBATCH lines. Both matter.
+JOB_GPUS=1
+JOB_CPUS=8
+
+# CAPACITY IS ALLOCATED ONCE, UP FRONT, AND DECREMENTED AS WE SUBMIT.
+#
+# Do NOT call pick_gpu.sh per job. It reports the single best free (account, partition)
+# from a fresh `hyakalloc`, and a job submitted a second ago is still PENDING and has not
+# reduced anything hyakalloc reports -- so six calls in a loop return the SAME partition
+# six times and pile the whole sweep onto one account.
+#
+# It also considers only GPUs. That is the half that bit: robotics/gpu-a40 showed 4 free
+# GPUs but 26 CPUs TOTAL, and at 8 CPUs a job the fourth submission was rejected with
+# AssocGrpCpuLimit while GPUs were still nominally free. Track both.
+mapfile -t SLOTS < <(hyakalloc | sed 's/│/|/g' | awk -F'|' -v jg="$JOB_GPUS" -v jc="$JOB_CPUS" '
+  {
+    for (i = 1; i <= NF; i++) gsub(/^ +| +$/, "", $i)
+    if ($2 != "") acct = $2
+    if ($3 != "") part = $3
+    if ($7 == "FREE" && ($6 + 0) >= jg && ($4 + 0) >= jc &&
+        (acct == "robotics" || acct == "weirdlab")) {
+      # prefer robotics, then whichever slot holds the most jobs
+      cap = ($6 + 0); if (int(($4 + 0) / jc) < cap) cap = int(($4 + 0) / jc)
+      print (acct == "robotics" ? 0 : 1), cap, part "-" acct, part, cap
+    }
+  }' | sort -k1,1n -k2,2nr | awk '{print $3, $4, $5}')
+
+if [ ${#SLOTS[@]} -eq 0 ]; then
+  echo "FATAL: no robotics/weirdlab partition has both a free GPU and ${JOB_CPUS} free CPUs." >&2
+  echo "       Check with hyakalloc; either wait, or lower --cpus-per-task." >&2
+  exit 1
+fi
+echo "capacity found (account partition jobs_it_can_hold):"
+printf '  %s\n' "${SLOTS[@]}"
+echo
+
+slot_i=0
+PICK_ACCT=; PICK_PART=
+# Sets PICK_ACCT/PICK_PART and decrements that slot. It assigns to GLOBALS rather than
+# echoing, because the caller would otherwise have to read it through `< <(take_slot)` --
+# process substitution runs the function in a SUBSHELL, so the decrement would be discarded
+# and every job would be handed the same first slot. (Which is the same class of bug as
+# calling pick_gpu.sh per job: capacity bookkeeping that silently does not persist.)
+take_slot () {
+  while [ "$slot_i" -lt "${#SLOTS[@]}" ]; do
+    read -r a p cap <<<"${SLOTS[$slot_i]}"
+    if [ "$cap" -gt 0 ]; then
+      SLOTS[$slot_i]="$a $p $((cap - 1))"
+      PICK_ACCT="$a"; PICK_PART="$p"
+      return 0
+    fi
+    slot_i=$((slot_i + 1))
+  done
+  return 1
+}
+
 for cell in "${CELLS[@]}"; do
   ctx="${cell%%|*}"; arm="${cell##*|}"
   for swd in "${SWDS[@]}"; do
-    # pick_gpu.sh reports a free (account, partition) pair on robotics/weirdlab. The ACCOUNT
-    # is e.g. gpu-l40-weirdlab while the PARTITION is gpu-l40 -- passing the account as the
-    # partition fails with "invalid partition specified".
-    read -r acct part < <(bash scripts/slurm/pick_gpu.sh)
+    # The ACCOUNT is e.g. gpu-l40-weirdlab while the PARTITION is gpu-l40 -- passing the
+    # account as the partition fails with "invalid partition specified".
+    if ! take_slot; then
+      echo "OUT OF CAPACITY before submitting $arm swd=$swd. Submitting it anyway would" >&2
+      echo "  queue it behind a multi-day run. Wait for capacity and re-run -- but check" >&2
+      echo "  squeue first: this script does not know which cells are already submitted." >&2
+      exit 1
+    fi
+    acct="$PICK_ACCT"; part="$PICK_PART"
     name="swd_${arm}_${swd}"
     if [ -n "$DRY" ]; then
       echo "would submit [$acct/$part] $name:"
