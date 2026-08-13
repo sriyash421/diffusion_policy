@@ -78,28 +78,51 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         cfg = copy.deepcopy(self.cfg)
 
         # resume training
+        checkpoint_loaded = False
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+                checkpoint_loaded = True
 
         # configure dataset
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer)
+        # The RESUMED normalizer wins, as in TrainMLPImageWorkspace. This used to refit from
+        # the dataset unconditionally, after load_checkpoint had already restored the saved
+        # statistics -- so a resume silently re-derived them. That is a no-op while the data
+        # is fixed (get_normalizer(mode='limits') is deterministic over a manifest-pinned
+        # train set, so the refit reproduces the stored values), and a silent corruption the
+        # moment the split or the zarr changes underneath a `resume: True` run: the action
+        # and obs scales would shift mid-run with nothing reporting it, while every
+        # checkpoint before the change had been trained against the old ones.
+        if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
+            print("Checkpoint loaded with normalizer - preserving existing normalizer statistics")
+            normalizer = self.model.normalizer
+        else:
+            print("Computing normalizer from dataset")
+            normalizer = dataset.get_normalizer()
+            self.model.set_normalizer(normalizer)
         if cfg.training.use_ema:
+            # the EMA copy is what gets rolled out, validated and shipped in the checkpoint;
+            # without this it would carry empty normalizer stats
             self.ema_model.set_normalizer(normalizer)
 
         # configure lr scheduler
+        # Forward training.lr_scheduler_kwargs, as TrainMLPImageWorkspace does. Without
+        # this the custom `decay_then_constant` schedule silently falls back to its
+        # defaults (decay_steps=10000, min_lr_ratio=0.1) no matter what the config says --
+        # no error, just the wrong curve. A 100k run configured to decay over 77k would
+        # instead hit its floor by 13k and sit there for the remaining 87k.
+        lr_scheduler_kwargs = dict(cfg.training.get('lr_scheduler_kwargs', {}) or {})
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
@@ -109,7 +132,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     // cfg.training.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
-            last_epoch=self.global_step-1
+            last_epoch=self.global_step-1,
+            **lr_scheduler_kwargs
         )
 
         # configure ema
@@ -156,6 +180,17 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # when set, rollouts are triggered on gradient steps instead of epochs
         rollout_every_steps = cfg.training.get('rollout_every_steps', None)
 
+        # Hard stop in GRADIENT STEPS, as in TrainMLPImageWorkspace. This workspace used to
+        # have no step bound at all, so `num_epochs` was the only thing ending a run -- and
+        # since an epoch is `ceil(n_windows / batch_size)` steps, the run length had to be
+        # recomputed by hand from the demo budget and the batch size every time either
+        # moved. With this set, `num_epochs` is only a safety bound.
+        max_gradient_steps = cfg.training.get('max_gradient_steps', None)
+        # Enforced MID-EPOCH (see the break below), not just at epoch boundaries: an
+        # epoch-granular check overshoots by up to a full epoch and, whenever the last epoch
+        # begins below the cap, never fires at all.
+        stop_training = False
+
         if cfg.training.debug:
             cfg.training.num_epochs = 2
             cfg.training.max_train_steps = 3
@@ -189,6 +224,14 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
+                            # Honors training.gradient_clip_norm when set, as
+                            # TrainMLPImageWorkspace does. Previously this workspace had no
+                            # clip call at all, so the key was silently dead here -- a
+                            # config could ask for clipping and simply not get it. Left
+                            # UNSET in the pusht UNet configs, so behaviour is unchanged.
+                            if cfg.training.get('gradient_clip_norm', None) is not None:
+                                self.accelerator.clip_grad_norm_(
+                                    self.model.parameters(), cfg.training.gradient_clip_norm)
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
@@ -249,6 +292,15 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                         'epoch': self.epoch})
                                 self.model.train()
 
+                        # Stop on the exact step. Placed AFTER the checkpoint and rollout
+                        # blocks above so the final step is still saved, and it leaves the
+                        # end-of-epoch block below to run once on the truncated epoch -- so
+                        # a capped run still ends with a val_loss and a topk checkpoint.
+                        if max_gradient_steps is not None \
+                            and self.global_step >= max_gradient_steps:
+                            stop_training = True
+                            break
+
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
                             break
@@ -293,10 +345,24 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
-                        gt_action = batch['action']
-                        
+
+                        # Score only the EXECUTED window, matching TrainMLPImageWorkspace.
+                        # This used to compare the full `horizon` (16) prediction against the
+                        # full ground truth, while the search workspace sliced both sides to
+                        # [n_obs_steps-1 : n_obs_steps+n_action_steps-1] -- the 8 steps
+                        # `predict_action` actually returns for execution. The other 8 are
+                        # discarded at the next re-plan and are the least constrained part of
+                        # the prediction, so including them inflated this number relative to
+                        # the search arms and made the two workspaces' `train_action_mse_*`
+                        # series not comparable. A config difference would have been visible;
+                        # this was only in the logging code.
+                        To = cfg.n_obs_steps
+                        Ta = cfg.n_action_steps
+                        asl = slice(To - 1, To + Ta - 1)
+                        gt_action = batch['action'][:, asl]
+
                         result = policy.predict_action(obs_dict)
-                        pred_action = result['action_pred']
+                        pred_action = result['action_pred'][:, asl]
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch
@@ -330,8 +396,19 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
-                self.global_step += 1
+                # This increment accounts for the epoch's LAST batch, which takes a gradient
+                # step but is deliberately not counted inside the loop (`if not
+                # is_last_batch`). On a capped stop the epoch was cut short and that batch
+                # never ran, so counting it would leave global_step one past the cap.
+                if not stop_training:
+                    self.global_step += 1
                 self.epoch += 1
+
+                # The batch loop already ran its end-of-epoch validation, sampling and topk
+                # checkpoint above, so the run ends fully evaluated rather than mid-epoch.
+                if stop_training:
+                    print(f'Reached max_gradient_steps={max_gradient_steps}, stopping.')
+                    break
         # trackers only exist if the Accelerator was built with log_with=; this repo
         # logs to wandb directly, so end_training() would raise on an empty tracker list
         self.join_saving_thread()

@@ -146,6 +146,18 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         context is a few MB. That is safe because the dataset is deterministic per index
         here (``random_crop: False``), so a re-fetch returns byte-identical obs.
         """
+        # A width-1 policy has no context to buffer: generate_search_context asks
+        # search_candidates for max_actions - 1 = 0 candidates, which returns (None, None),
+        # and the torch.cat below would fail with a bare "expected Tensor ... got NoneType".
+        # There is also nothing for this trainer to do in that case -- the whole point is
+        # amortizing a search cost that does not exist at width 1 -- so say so here rather
+        # than let it look like a tensor bug. Use the offline trainer
+        # (train_mlp_image_workspace.TrainMLPImageWorkspace) for max_actions: 1.
+        assert policy.max_actions > 1, (
+            f'{type(self).__name__} needs a search context to amortize, but the policy has '
+            f'max_actions={policy.max_actions} (context width {policy.max_actions - 1}). '
+            f'Set trainer: offline and _target_: '
+            f'diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace.')
         actions, values = list(), list()
         was_training = policy.training
         policy.eval()
@@ -191,6 +203,18 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         dataset: BaseImageDataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         collate = get_collate_fn() if dataset.return_sequences else default_collate
+
+        # Record the exact episodes this run trains/validates/tests on, and refuse to
+        # resume if they differ from what the run directory already recorded. The parent
+        # workspace does this inside its own run(); this class overrides run(), so without
+        # repeating it here an outer/inner run writes no splits.json and gets no guard --
+        # which matters because the demo budget is selected by a COMMAND-LINE override
+        # (n_demos + split_file), so a mistyped relaunch would otherwise resume a directory
+        # whose checkpoints were built from different episodes. Must follow the instantiate
+        # above: the guard needs the resolved partition, not the config keys.
+        if self.accelerator.is_main_process:
+            self.write_manifest()
+            self.write_splits(dataset)
 
         if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
             print("Checkpoint loaded with normalizer - preserving existing normalizer statistics")

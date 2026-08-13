@@ -492,10 +492,15 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             # SUBPROCESSES, which garbage collection will not reap. Register their
             # shutdown so they are released on normal exit and on exceptions alike.
             stack.callback(self._close_worker_pools, env_runner)
+            # Hard stop in GRADIENT STEPS. Enforced both here (so a run resumed already past
+            # the cap exits before training) and MID-EPOCH in the batch loop below, which is
+            # what actually makes it exact.
+            max_gradient_steps = cfg.training.get('max_gradient_steps', None)
+            stop_training = False
             for local_epoch_idx in range(cfg.training.num_epochs):
-                if cfg.training.get('max_gradient_steps', None) is not None:
-                    if self.global_step >= cfg.training.max_gradient_steps:
-                        break
+                if max_gradient_steps is not None \
+                    and self.global_step >= max_gradient_steps:
+                    break
                 step_log = dict()
                 # ========= train for this epoch ==========
                 if cfg.training.freeze_encoder:
@@ -590,6 +595,22 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
                                 # Update last checkpoint step
                                 self.last_checkpoint_step = self.global_step
+
+                        # Stop on the EXACT step. The epoch-level check above only fires
+                        # between epochs, so on its own it overshoots by up to a full epoch
+                        # -- and whenever the final epoch begins below the cap it never
+                        # fires at all, leaving num_epochs as the real bound. (At 382
+                        # steps/epoch x 786 epochs the last epoch started at 299,870, so a
+                        # 300,000 cap did nothing and the run ended at 300,252.)
+                        #
+                        # Placed after the checkpoint block so the final step is saved, and
+                        # it leaves the end-of-epoch block below to run once on the
+                        # truncated epoch -- so a capped run still ends with a val_loss and
+                        # a topk checkpoint.
+                        if max_gradient_steps is not None \
+                            and self.global_step >= max_gradient_steps:
+                            stop_training = True
+                            break
 
                         if max_train_steps is not None \
                             and batch_idx >= (max_train_steps - 1):
@@ -775,6 +796,12 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 # made it drift from the true step count (and from the step_*.ckpt names
                 # that the eval script parses) by one per epoch.
                 self.epoch += 1
+
+                # The end-of-epoch validation, sampling and topk checkpoint above have
+                # already run, so the run ends fully evaluated rather than mid-epoch.
+                if stop_training:
+                    print(f'Reached max_gradient_steps={max_gradient_steps}, stopping.')
+                    break
         # the last checkpoint may still be writing on the background save thread; without
         # this the process can exit and leave it truncated
         self.join_saving_thread()

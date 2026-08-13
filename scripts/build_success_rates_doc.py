@@ -91,6 +91,34 @@ for arm, _ctx in ARMS:
             D29.append((arm + ' **(r8)**',
                         'r8 ' + ('corrupt' if corrupt == 'True' else 'clean'), bon))
 
+# ---------------------------------------------------------------------------
+# OUTER/INNER trainer runs. `trainer` is a path component of hydra.run.dir
+#   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+# so these live under outer_inner/ and NOT under offline/ -- which is why every table here
+# silently omitted them until this block existed. They are a different trainer, not a
+# variant of the offline arms: the search context is generated once per pool of 256 windows
+# and reused for 4 inner epochs, rather than regenerated from the current weights on every
+# gradient step.
+#
+# Globbed rather than listed, for the same reason the subgoal-only rows are: an arm that
+# postdates this file should appear the moment its directory does, instead of reading as
+# "not run yet". Budget is parsed off the run name so a run lands in its own section.
+OI = ROOT / 'pusht_search' / 'pusht_image_search' / 'outer_inner'
+
+
+def oi_sources(n_demos):
+    """(label, obs, bon_search) for every outer/inner run at this demo budget."""
+    out = []
+    for run in sorted(OI.glob(f'*_demos-{n_demos}_seed-42')):
+        arm = run.name.split('_corrupt-')[0]
+        corrupt = 'corrupt' if '_corrupt-True' in run.name else 'clean'
+        out.append((arm + ' **(oi)**', 'oi ' + corrupt, run / 'bon_search'))
+    return out
+
+
+D100 += oi_sources(100)
+D29 += oi_sources(29)
+
 ARCHIVE = [('none (BC)', '25 demos', OFF / 'bc_demos-25_seed-42' / 'bon_search')]
 for name, lbl in (('train_pusht_search_outer_inner', 'value'),
                   ('train_pusht_search_outer_inner_subgoal', 'subgoal'),
@@ -324,7 +352,7 @@ L += ['\n### 1f. Mean reward, episode max — VAL (the selector\'s tie-break)\n'
 L += demo_table(D100, 'val_reward')
 
 L += ['\n## 2. 29 demos\n',
-      'Two generations, trained on the **identical 29 episodes**, marked inline in every '
+      'Three generations, trained on the **identical 29 episodes**, marked inline in every '
       'table below. Read side by side without the markers the legacy rows look like a '
       'weaker version of the same policy; they are a different one.\n',
       '\n**Naming.** Everything trained before Round 8 is the **legacy 29** generation — '
@@ -361,6 +389,21 @@ L += ['\n## 2. 29 demos\n',
       '`splits.json`, so nothing *on disk* ties those checkpoints to those episodes. The '
       'r8 runs train on the same 29 via a committed manifest, so old-vs-new isolates the '
       'four changes above.\n',
+      '\n**The `(oi)` rows are a THIRD generation, and the one thing that differs is the '
+      'training LOOP.** Same policy class, same 29 episodes (the r8 manifest, val = 30), '
+      'same EMA and shared crop offset as `(r8)`, same 20k budget — but trained by '
+      '`TrainSearchOuterInnerWorkspace` instead of `TrainMLPImageWorkspace`, so they live '
+      'under `outer_inner/<arm>_corrupt-<c>_demos-29_seed-42` rather than `offline/`. The '
+      'offline loop regenerates the whole search context from the *current* weights on '
+      'every gradient step; the outer/inner loop generates it once for a pool of 256 '
+      'windows and reuses it for 4 inner epochs — about 4x cheaper per update (480 -> 120 '
+      'verifier sims), paid for with a context drawn from weights up to 32 updates stale. '
+      'That staleness is measured, not assumed: `train_drift_mse_eps` in each run\'s '
+      '`logs.json.txt` is the epsilon-space MSE against a frozen snapshot of the policy '
+      'that filled the buffer, which is proportional to the per-denoising-step KL.\n',
+      '\nSo `(oi)` vs `(r8)` at the same arm isolates the loop, and nothing else. Note the '
+      '`(r8)` rows run to 100k steps while `(oi)` stops at 20k, so compare them at a '
+      'matched step rather than at each row\'s end.\n',
       '\n**The r8 runs have no val curve at all.** Their eval watchers were launched '
       '`--skip-val` (`scripts/slurm/launch_round8_29demo.sh`) so the whole budget went to the '
       '50 test episodes. Any checkpoint picked from these rows is therefore picked on TEST, '

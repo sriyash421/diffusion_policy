@@ -228,7 +228,19 @@ def rollout_max_rewards(env, policy, states, device, n):
     while not done:
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         with torch.no_grad():
-            action = policy.predict_action_best(obs_dict, n_actions=n)['action']
+            if not hasattr(policy, 'predict_action_best'):
+                # A policy with no search interface at all -- the diffusion-UNet BC
+                # baseline, which has only predict_action. It cannot rank candidates
+                # (there is no verifier attached), so n > 1 is not defined for it; the
+                # caller is responsible for passing --max-n 1. Asserting here rather than
+                # silently returning the n=1 action for every n, which would fill a curve
+                # with a flat line that looks like a measurement.
+                assert n == 1, (
+                    f'{type(policy).__name__} has no predict_action_best, so best-of-n is '
+                    f'undefined for it; got n={n}. Re-run with --max-n 1.')
+                action = policy.predict_action(obs_dict)['action']
+            else:
+                action = policy.predict_action_best(obs_dict, n_actions=n)['action']
         action = action.detach().cpu().numpy()
         obs, reward, done, info = env.step(action)
         done = np.all(done)
