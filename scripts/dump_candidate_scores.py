@@ -917,18 +917,32 @@ def build_report(dirs, out_path, n_example_steps=8):
           f"n={n} split={st['split']} episodes={len(st['episode_idxs'])} "
           f"success={st['success_rate']:.2f}\n")
 
-        # the weighting this checkpoint was TRAINED under, read off its own config
+        # The weighting this checkpoint carries. The two keys are NOT the same kind of thing
+        # and the heading must not imply they are: slot_weight_decay is a term in the loss
+        # and therefore exists only while training, whereas context_decay is an attention
+        # bias inside the forward pass and is live at INFERENCE too.
         sw = _slot_weight_table(st)
         if sw and (sw['slot_weight_decay'] < 1.0 or sw['context_decay'] < 1.0):
             K = sw['K']
-            A(f"\n### Training weights (K={K})\n")
+            A(f"\n### Search weighting (K={K})\n")
             if sw['context_decay'] < 1.0:
                 lam = sw['context_decay']
-                A(f"**Context recency decay λ={lam}.** For a candidate generated against `m`\n"
-                  f"context entries, entry `j` is weighted `{lam}^(m-1-j)`: the latest counts\n"
-                  f"1, the previous {lam}, the one before {lam ** 2:.2f}. Depends only on\n"
+                A(f"**Context recency decay λ={lam} — ACTIVE AT INFERENCE.** This is not a\n"
+                  f"loss weight. It is an additive attention bias inside the forward pass\n"
+                  f"(`_build_memory_masks`): `(m-1-j)·log({lam})` on the pre-softmax logit,\n"
+                  f"which multiplies the attention weight on entry `j` by `{lam}^(m-1-j)`.\n"
+                  f"So it shapes what this policy attends to every time it runs, deployment\n"
+                  f"included — unlike `slot_weight_decay`, which vanishes once there is no\n"
+                  f"loss.\n")
+                A(f"\nFor a candidate generated against `m` context entries the latest counts\n"
+                  f"1, the previous {lam}, the one before {lam ** 2:.2f}. It depends only on\n"
                   f"distance-from-latest — never on absolute index, K, or n — so the profile\n"
                   f"is identical in every loop at every search width.\n")
+                A(f"\n**It never reaches zero.** The bias is a *relative* reweighting that\n"
+                  f"softmax renormalizes, not an absolute attenuation, and only invalid\n"
+                  f"entries are masked out — the obs tokens keep bias 0 and are never\n"
+                  f"decayed. At K={K} the oldest context entry still carries\n"
+                  f"`{lam}^{K - 1}` = {lam ** (K - 1):.3f} of the latest entry's weight.\n")
                 A('\n| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |')
                 A('|---|---|---|---|---|---|---|')
                 A('| weight | ' + ' | '.join(f'{lam ** i:.3f}' for i in range(6)) + ' |')
@@ -936,8 +950,10 @@ def build_report(dirs, out_path, n_example_steps=8):
                 lam = sw['slot_weight_decay']
                 w = lam ** (K - 1 - np.arange(K))
                 w = w / w.mean()
-                A(f"\n**Slot loss weighting λ={lam}** — `w_k ∝ {lam}^(K-1-k)`, normalized to "
-                  f"mean 1:\n")
+                A(f"\n**Slot loss weighting λ={lam} — TRAINING ONLY.** A per-slot factor on "
+                  f"the\nloss terms (`_slot_weights`, used only by `_compute_loss`), so it "
+                  f"has no\neffect at inference: there is no loss to weight. "
+                  f"`w_k ∝ {lam}^(K-1-k)`, normalized to mean 1:\n")
                 A('\n| slot | ' + ' | '.join(str(j) for j in range(K)) + ' |')
                 A('|---|' + '---|' * K)
                 A('| weight | ' + ' | '.join(f'{v:.2f}' for v in w) + ' |')

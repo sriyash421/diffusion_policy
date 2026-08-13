@@ -1355,10 +1355,12 @@ argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
 search_context=`subgoal` selection=`final_pass` n=64 split=test episodes=20 success=0.25
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
 
-**Slot loss weighting λ=0.9** — `w_k ∝ 0.9^(K-1-k)`, normalized to mean 1:
+**Slot loss weighting λ=0.9 — TRAINING ONLY.** A per-slot factor on the
+loss terms (`_slot_weights`, used only by `_compute_loss`), so it has no
+effect at inference: there is no loss to weight. `w_k ∝ 0.9^(K-1-k)`, normalized to mean 1:
 
 
 | slot | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
@@ -1481,10 +1483,12 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=64 split=test episodes=20 success=0.20
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
 
-**Slot loss weighting λ=0.9** — `w_k ∝ 0.9^(K-1-k)`, normalized to mean 1:
+**Slot loss weighting λ=0.9 — TRAINING ONLY.** A per-slot factor on the
+loss terms (`_slot_weights`, used only by `_compute_loss`), so it has no
+effect at inference: there is no loss to weight. `w_k ∝ 0.9^(K-1-k)`, normalized to mean 1:
 
 
 | slot | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
@@ -1607,13 +1611,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.15
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=16 the oldest context entry still carries
+`0.9^15` = 0.206 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1673,13 +1692,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.20
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=16 the oldest context entry still carries
+`0.9^15` = 0.206 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1739,13 +1773,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.55
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=16 the oldest context entry still carries
+`0.9^15` = 0.206 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1805,13 +1854,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.40
 
 
-### Training weights (K=16)
+### Search weighting (K=16)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=16 the oldest context entry still carries
+`0.9^15` = 0.206 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1871,13 +1935,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.00
 
 
-### Training weights (K=4)
+### Search weighting (K=4)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=4 the oldest context entry still carries
+`0.9^3` = 0.729 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1925,13 +2004,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.15
 
 
-### Training weights (K=4)
+### Search weighting (K=4)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=4 the oldest context entry still carries
+`0.9^3` = 0.729 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -1979,13 +2073,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.35
 
 
-### Training weights (K=4)
+### Search weighting (K=4)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=4 the oldest context entry still carries
+`0.9^3` = 0.729 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -2033,13 +2142,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.30
 
 
-### Training weights (K=4)
+### Search weighting (K=4)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=4 the oldest context entry still carries
+`0.9^3` = 0.729 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -2087,13 +2211,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.10
 
 
-### Training weights (K=8)
+### Search weighting (K=8)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=8 the oldest context entry still carries
+`0.9^7` = 0.478 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -2145,13 +2284,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.35
 
 
-### Training weights (K=8)
+### Search weighting (K=8)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=8 the oldest context entry still carries
+`0.9^7` = 0.478 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -2203,13 +2357,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.35
 
 
-### Training weights (K=8)
+### Search weighting (K=8)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=8 the oldest context entry still carries
+`0.9^7` = 0.478 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
@@ -2261,13 +2430,28 @@ all the candidates in the row, not one of them.
 search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.30
 
 
-### Training weights (K=8)
+### Search weighting (K=8)
 
-**Context recency decay λ=0.9.** For a candidate generated against `m`
-context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
-1, the previous 0.9, the one before 0.81. Depends only on
+**Context recency decay λ=0.9 — ACTIVE AT INFERENCE.** This is not a
+loss weight. It is an additive attention bias inside the forward pass
+(`_build_memory_masks`): `(m-1-j)·log(0.9)` on the pre-softmax logit,
+which multiplies the attention weight on entry `j` by `0.9^(m-1-j)`.
+So it shapes what this policy attends to every time it runs, deployment
+included — unlike `slot_weight_decay`, which vanishes once there is no
+loss.
+
+
+For a candidate generated against `m` context entries the latest counts
+1, the previous 0.9, the one before 0.81. It depends only on
 distance-from-latest — never on absolute index, K, or n — so the profile
 is identical in every loop at every search width.
+
+
+**It never reaches zero.** The bias is a *relative* reweighting that
+softmax renormalizes, not an absolute attenuation, and only invalid
+entries are masked out — the obs tokens keep bias 0 and are never
+decayed. At K=8 the oldest context entry still carries
+`0.9^7` = 0.478 of the latest entry's weight.
 
 
 | entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
