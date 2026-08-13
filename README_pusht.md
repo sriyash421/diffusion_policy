@@ -572,6 +572,65 @@ python bon_video.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
 # -> bon_grid_5x8.mp4  (--reset-idxs 47,12,2,22,6 to pick specific resets)
 ```
 
+### 8.1 Selection-criteria sweep (fixed n, six read-out rules)
+
+The sweep above varies `n`. This one holds `n` FIXED at 16 and varies how the executed
+candidate is picked out of the 16 that were generated and scored. All six are pure read-outs
+on trained weights — generation is byte-identical across them — so this isolates selection
+from everything else.
+
+Candidate order carries meaning: candidate *k* is conditioned on candidates 0..*k*-1, so the
+trailing candidates are the deeply-conditioned ones. That is what the six criteria separate:
+
+| criterion | rule | pool |
+|---|---|---|
+| `cand-last` | fixed index -1 | — |
+| `cand-8th-from-last` | fixed index -8 | — |
+| `argmax-all` | argmax verifier value | all 16 |
+| `argmax-last8` | argmax verifier value | last 8 |
+| `softmax-all` | softmax(z/T) | all 16 |
+| `softmax-last8` | softmax(z/T) | last 8 |
+
+The `cand-*` pair ignores the verifier entirely, so `(argmax-all − cand-last)` is what the
+ranking contributes on top of conditioning depth, and `(argmax-last8 − argmax-all)` says
+whether restricting the oracle to well-conditioned candidates helps or merely removes
+options.
+
+```bash
+python eval_search_pusht.py -c <run>/checkpoints/step_0020000.ckpt \
+  --criteria-sweep --criteria-n 16 --n-envs 50 --skip-val
+# -> <run>/criteria_search/step_0020000/<criterion>.json
+#    <run>/criteria_search/step_0020000/traces/<criterion>.npz
+#    <run>/criteria_search/criteria_curves.jsonl   (run-level index, one row per step+criterion)
+```
+
+Results go to `criteria_search/`, **not** `bon_search/`: these rows are keyed by criterion at
+fixed n rather than by n, so merging them would put two different experiments in one file.
+
+**Traces.** Each `.npz` holds the per-control-step search state — `scores` (n_episodes, T,
+16) for *every* candidate, `chosen_idx` (n_episodes, T) for the one executed, `step_reward`,
+and `valid_len` (episodes are padded to the longest in their chunk, with NaN, since every env
+keeps being stepped until all are done). `chosen_idx` is `-1` under `final_pass` (the executed
+action is not a candidate) and `-2` where the episode had already ended.
+
+The verifier value is **negative mean per-keypoint distance to the goal**, so it is ≤ 0 and
+*higher is better*. It is stored exactly as produced; label plot axes accordingly rather than
+flipping the sign, so the stored array keeps agreeing with the `action_value*` series in the
+training logs.
+
+Validate a trace with `python scripts/check_criteria_traces.py <.../step_XXXXXXX>` — the
+load-bearing assertion is that `argmax-all`'s recorded `chosen_idx` equals
+`scores.argmax(-1)` at every step, which is the cheapest proof that the trace and the action
+actually executed correspond.
+
+On SLURM, one job per (run, checkpoint) runs all six criteria — they share a policy load and
+an env pool:
+
+```bash
+bash scripts/slurm/submit_criteria_sweep.sh          # safe to re-run as checkpoints appear
+DRY=1 bash scripts/slurm/submit_criteria_sweep.sh    # list what would be submitted
+```
+
 ---
 
 ## 9. SLURM

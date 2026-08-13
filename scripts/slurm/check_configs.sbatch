@@ -19,12 +19,18 @@ set +u; conda activate robodiff; set -u
 # train_pusht_diffusion_search plus three overrides (config/archive/README.md), so what has
 # to be checked is the OVERRIDE LINE, which is the thing a launcher can now get wrong.
 # Commas separate overrides; they are split on whitespace below.
+# slot_weight_decay is part of the run IDENTITY (it changes the objective and is a component
+# of run_name), so both values of it must appear here -- the uniqueness check below is the
+# thing that would have caught the two swd variants of an arm resolving to one directory.
 CONFIGS="
-value_clean|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False
+value_clean_swd1.0|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False,slot_weight_decay=1.0
+value_clean_swd0.9|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False,slot_weight_decay=0.9
+subgoalval_clean_swd1.0|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=False,slot_weight_decay=1.0
+subgoalval_clean_swd0.9|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=False,slot_weight_decay=0.9
+subgoal_clean_swd1.0|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False,slot_weight_decay=1.0
+subgoal_clean_swd0.9|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False,slot_weight_decay=0.9
 value_corrupt|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=True
-subgoal_clean|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False
 subgoal_corrupt|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=True
-subgoalval_clean|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=False
 subgoalval_corrupt|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=True
 r8_value_clean|train_pusht_diffusion_search_29|search_context=value,arm=value,corrupt_obs=False
 r8_subgoal_clean|train_pusht_diffusion_search_29|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False
@@ -46,8 +52,11 @@ import sys, yaml
 c = yaml.safe_load(sys.stdin.read())
 d = c['task']['dataset']
 print(f\"demos={c['n_demos']:>3} ctx={c['search_context']:<13} corrupt={str(c['corrupt_obs']):<5} \"
+      f\"swd={c['slot_weight_decay']:<4} \"
       f\"max_actions={c['policy']['max_actions']:<3} n_search={c['task']['env_runner']['n_search_actions']:<2} \"
       f\"steps={c['training']['max_gradient_steps']}\")
+print(f\"{'':52} wandb_name={c['logging']['name']} group={c['logging']['group']} \"
+      f\"ckpt_every={c['training']['checkpoint_every']} extra={c['training'].get('checkpoint_steps')}\")
 print(f\"{'':52} manifest={d['split_file'].split('/')[-1]} n_train={d['n_train_episodes']} \"
       f\"n_val={d['n_val_episodes']} n_test={d['n_test_episodes']}\")
 print(f\"{'':52} run_name={c['run_name']}\")

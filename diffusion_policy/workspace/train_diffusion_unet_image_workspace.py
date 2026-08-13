@@ -7,6 +7,8 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+import contextlib
+import math
 import os
 import hydra
 import torch
@@ -83,8 +85,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
+                payload = self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+                # Refuse a pre-EMA payload resumed into a use_ema run. This workspace ships
+                # the EMA copy and rolls it out, so without this a resume from a pre-EMA
+                # checkpoint would evaluate a randomly-initialized average. See
+                # BaseWorkspace.assert_ema_payload.
+                self.assert_ema_payload(payload, lastest_ckpt_path)
 
         # configure dataset
         dataset: BaseImageDataset
@@ -144,9 +151,15 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
+            # optimizer steps, not batches, and ceil-then-multiply rather than
+            # multiply-then-floor: the epoch's final partial accumulation window is still
+            # flushed, so there are ceil(len/accum) steps per epoch. Floor-dividing left the
+            # schedule short by up to one step per epoch. Inert while lr_scheduler is
+            # decay_then_constant (which ignores num_training_steps) -- it matters the moment
+            # anything switches back to plain `cosine`, whose horizon this is.
+            num_training_steps=math.ceil(
+                len(train_dataloader) / cfg.training.gradient_accumulate_every
+                ) * cfg.training.num_epochs,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
             last_epoch=self.global_step-1,
@@ -159,6 +172,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             ema = hydra.utils.instantiate(
                 cfg.ema,
                 model=self.ema_model)
+            # EMAModel exposes no state_dict, so save_checkpoint never persists this counter
+            # (it only serializes attributes having state_dict AND load_state_dict). Left at
+            # 0 on resume, get_decay returns 0.0 for step <= 0 and the update degenerates to
+            # ema_param.copy_(param) -- silently destroying the restored average on the first
+            # post-resume steps and shipping the live weights as the EMA copy. Both other
+            # workspaces already do this; this one did not.
+            ema.optimization_step = self.global_step
 
         # configure env
         env_runner: BaseImageRunner
@@ -219,13 +239,22 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
-        with JsonLogger(log_path) as json_logger:
+        with contextlib.ExitStack() as stack:
+            json_logger = stack.enter_context(JsonLogger(log_path))
+            # The env runner holds a pool of worker SUBPROCESSES which garbage collection
+            # will not reap. Register its shutdown so it is released on normal exit and on
+            # exceptions alike, as the other two workspaces already do.
+            stack.callback(self._close_worker_pools, env_runner)
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 if cfg.training.freeze_encoder:
-                    self.model.obs_encoder.eval()
-                    self.model.obs_encoder.requires_grad_(False)
+                    # unwrap first: accelerate's DDP wrapper does not forward attribute
+                    # access, so `self.model.obs_encoder` would raise once prepare() wraps
+                    # the model. Inert at freeze_encoder: False, which is what the PushT
+                    # UNet configs set.
+                    self.accelerator.unwrap_model(self.model).obs_encoder.eval()
+                    self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
 
                 train_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
@@ -233,14 +262,31 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        if train_sampling_batch is None:
-                            train_sampling_batch = batch
+                        # Refreshed every batch, NOT frozen at epoch 0. The old
+                        # `if train_sampling_batch is None` guard pinned the FIRST batch of
+                        # the FIRST epoch and reused that same GPU tensor for every
+                        # sample_every evaluation for the rest of the run -- so
+                        # train_action_mse_error measured fit on 32 windows the model re-saw
+                        # every epoch, not anything that moved with training. Matching
+                        # TrainMLPImageWorkspace here is what actually makes the two
+                        # workspaces' series comparable; b487ec0 aligned only the slicing.
+                        train_sampling_batch = batch
 
                         # compute loss
                         raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         self.accelerator.backward(loss)
-                        if self.global_step % cfg.training.gradient_accumulate_every == 0:
+                        # Accumulation windows are delimited by the BATCH INDEX WITHIN THE
+                        # EPOCH, which is the only thing that can delimit them. global_step
+                        # is a running counter that deliberately skips each epoch's last
+                        # batch (see `if not is_last_batch` below), so windows keyed on it
+                        # drift out of phase with the epoch by one every epoch. The epoch's
+                        # final partial window is flushed here, so a partial window's
+                        # gradients never leak into the next epoch. Identical to the old
+                        # condition at gradient_accumulate_every: 1, which every PushT
+                        # config sets.
+                        if ((batch_idx + 1) % cfg.training.gradient_accumulate_every == 0) \
+                            or (batch_idx == len(train_dataloader) - 1):
                             # Honors training.gradient_clip_norm when set, as
                             # TrainMLPImageWorkspace does. Previously this workspace had no
                             # clip call at all, so the key was silently dead here -- a
@@ -275,6 +321,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                # Update the cadence anchor BEFORE writing, so the value that
+                                # lands in the checkpoint is the step this checkpoint was
+                                # taken at. Setting it afterwards persists the PREVIOUS
+                                # anchor, so a resumed run believes it is overdue and fires
+                                # an extra checkpoint on its very first step. (Fixed in
+                                # TrainSearchOuterInnerWorkspace._save; back-ported here.)
+                                self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:
@@ -290,9 +343,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                     self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
-                                # Update last checkpoint step
-                                self.last_checkpoint_step = self.global_step
-
                             # rollout eval on a gradient-step schedule, so evals land
                             # on exact step multiples rather than epoch boundaries
                             if (rollout_every_steps is not None) \
@@ -301,6 +351,11 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                 if cfg.training.use_ema:
                                     eval_policy = self.ema_model
                                 eval_policy.eval()
+                                # Seed before the rollout so its success rate is reproducible
+                                # from the checkpoint: the env is deterministic given a reset
+                                # state, but conditional_sample draws from the global RNG.
+                                torch.manual_seed(cfg.training.seed)
+                                np.random.seed(cfg.training.seed)
                                 eval_log = dict(env_runner.run(eval_policy))
                                 if self.accelerator.is_main_process:
                                     wandb_run.log(eval_log, step=self.global_step)
@@ -334,6 +389,9 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 # run rollout (epoch schedule; null when rollout_every_steps is used)
                 if (cfg.training.rollout_every is not None) \
                     and (self.epoch % cfg.training.rollout_every) == 0:
+                    # seeded for the same reason as the step-cadence rollout above
+                    torch.manual_seed(cfg.training.seed)
+                    np.random.seed(cfg.training.seed)
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)
@@ -395,13 +453,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         self.save_checkpoint()
                     if cfg.checkpoint.save_last_snapshot:
                         self.save_snapshot()
-
-                    # sanitize metric names
-                    metric_dict = dict()
-                    for key, value in step_log.items():
-                        new_key = key.replace('/', '_')
-                        metric_dict[new_key] = value
-                    
                     self.model = model_ddp
 
                 # Restore train mode on the ONLINE model. With use_ema=False `policy` is

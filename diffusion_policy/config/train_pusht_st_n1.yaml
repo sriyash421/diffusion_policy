@@ -102,9 +102,9 @@ training:
   #
   # Now set far above any epoch count that could reach 300k steps (2,728 at the smallest
   # budget in this family), so it never binds and never needs recomputing. Kept rather than
-  # removed because the loop is `range(num_epochs)` and `self.epoch` feeds the topk
-  # `format_str`. `decay_then_constant` ignores num_training_steps, so the LR curve does not
-  # depend on this either.
+  # removed because the loop is `range(num_epochs)` and `self.epoch` is the counter every
+  # end-of-epoch eval block is logged against. `decay_then_constant` ignores
+  # num_training_steps, so the LR curve does not depend on this either.
   num_epochs: 100000
   # no outer_batch_size / inner_batch_size / inner_epochs / drift_every here: those are
   # TrainSearchOuterInnerWorkspace knobs and this run uses the offline loop (see header).

@@ -112,7 +112,17 @@ n_candidates: 16
 # final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
 # The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
 # by running jobs still resolve; drop those symlinks once nothing reads through them.
-run_name: ${arm}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+#
+# `swd-` ADDED 2026-08-13, and it is load-bearing rather than cosmetic. slot_weight_decay
+# changes the training objective but was absent from run_name, so two runs of the same arm
+# at different slot_weight_decay resolved to the SAME hydra.run.dir -- and with
+# `training.resume: True` the second launch would have found the first's latest.ckpt and
+# silently continued it instead of starting a new run. Any key that changes what is being
+# trained belongs here; the run directory is the only thing that keeps two experiments apart.
+#
+# Existing directories predate this component and keep their old names. They were all
+# trained at slot_weight_decay: 1.0 and are simply not resumed by anything launched now.
+run_name: ${arm}_corrupt-${corrupt_obs}_swd-${slot_weight_decay}_demos-${n_demos}_seed-${training.seed}
 
 # Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
 # run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
@@ -276,7 +286,8 @@ training:
   # that could reach the budget: an epoch is ceil(n_windows/batch_size) steps, so at 29 demos
   # it is ~110 steps and the old `num_epochs: 1000` was only ~110k -- close enough to bind
   # first and silently become the real limit. Kept rather than removed because the loop is
-  # `range(num_epochs)` and self.epoch feeds the topk format_str.
+  # `range(num_epochs)` in the offline trainer, and self.epoch is logged as the outer-step
+  # counter here.
   num_epochs: 100000
   # 100k. The old 20k cap dates from the pre-augmentation runs that overfit by ~3k steps;
   # with crop augmentation and EMA in place val_loss keeps improving much longer. Matches
@@ -330,6 +341,18 @@ training:
   # evaluated; on the 4.4 GB UNet checkpoints that same cadence filled a 1.9 TB disk at step
   # 115k. A search-policy checkpoint is ~261 MB, so 10 x 261 MB per 100k run.
   checkpoint_every: 10000
+  # EXTRA checkpoints off the regular cadence, for the early part of the curve where the
+  # policy changes fastest and a 10k grid has no resolution at all. Together with
+  # checkpoint_every this gives the eval grid 1k, 5k, 10k, 20k ... 100k = 12 checkpoints.
+  #
+  # An extra list rather than dropping checkpoint_every to 1000: at a 1k cadence a 100k run
+  # writes 100 checkpoints (~26 GB/run at ~261 MB each) of which only 12 are ever scored.
+  #
+  # These saves deliberately do NOT move the cadence anchor (_save(advance_anchor=False)).
+  # If they did, a save at 1000 would put the next cadence checkpoint at 11000 rather than
+  # 10000 and shift every later one by 1000 -- a grid no eval sweep expects, produced
+  # silently.
+  checkpoint_steps: [1000, 5000]
   val_every: 10
   sample_every: 10
   # Bound the (verifier-driven) normalized-RMSE eval. These batches are now drawn as a
@@ -346,26 +369,41 @@ logging:
   project: pushT_diffusion_search
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
-  tags: ["${name}", "${task_name}", "${exp_name}"]
+  # The wandb run is named for the RUN IDENTITY, not the wall clock. The arms are CLI
+  # overrides on this file, so `${name}` is `train_pusht_diffusion_search` for every one of
+  # them -- the old `${now:...}_${name}_${task_name}` therefore gave a whole sweep the same
+  # wandb name and the same tags, separated only by submission timestamp, which makes the
+  # curves unattributable. `${run_name}` is exactly the output directory's basename, so a
+  # wandb curve and a checkpoint on disk can always be matched up.
+  name: ${run_name}
+  # the three feedback arms group together; slot_weight_decay is the within-group axis
+  group: ${arm}
+  tags: ["${name}", "${task_name}", "${exp_name}", "${arm}",
+         "swd-${slot_weight_decay}", "demos-${n_demos}", "n${n_candidates}"]
+  # null -> wandb auto-resume, which keys off the run files under `dir=` (the output dir on
+  # /gscratch, stable across resubmits because hydra.run.dir is identity-derived). If a
+  # preempted run turns out to fork a NEW wandb run instead of continuing, set this to a
+  # sanitized run_name -- wandb ids allow only alphanumerics, `-` and `_`, so the `.` in
+  # e.g. `swd-0.9` cannot be used raw.
   id: null
-  group: null
 
 checkpoint:
-  # Keep the k best-by-val_loss checkpoints. This is a SAFETY NET, not the final selector:
-  # the previous run's val_loss bottomed at step ~3k and then rose 3x while training
-  # continued to 100k, and because nothing tracked it the good model was overwritten and
-  # every evaluated checkpoint came from the overfit regime.
+  # NO `topk`. Deliberate, and do not add it back without deciding to.
   #
-  # Any checkpoint choice should come from real eval, not from val_loss -- eval_search_pusht.py
-  # --watch evaluates each checkpoints/step_*.ckpt into bon_search/success_curves.jsonl, and
-  # you pick from that curve. topk just guarantees the low-val_loss weights still exist by the
-  # time that runs.
-  topk:
-    monitor_key: val_loss
-    mode: min
-    k: 5
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.4f}.ckpt'
+  # `topk` retains the k best checkpoints by a monitored metric, which means a val_loss
+  # ranking silently decides which weights survive -- that is tooling nominating a
+  # checkpoint, which is exactly what this project does not do (SUCCESS_RATES.md: "These
+  # tables report measurements; they mark no winner"). It also stored a second, separately
+  # named copy of weights already on the step grid.
+  #
+  # It was also INERT here regardless: TrainSearchOuterInnerWorkspace has no
+  # TopKCheckpointManager, so this block was read by nothing and quietly did nothing --
+  # only TrainMLPImageWorkspace honors it, and only for the non-PushT configs that still
+  # set it.
+  #
+  # Checkpoint choice comes from real eval: eval_search_pusht.py evaluates each
+  # checkpoints/step_*.ckpt into bon_search/success_curves.jsonl and you pick from that
+  # curve, saying which rule you used. Every consumer globs step_*.ckpt only.
   save_last_ckpt: True
   save_last_snapshot: False
 

@@ -2194,7 +2194,7 @@ Continuous, so it separates "nearly solved" from "never moved", which the binary
 
 ## 2. 29 demos
 
-Two generations, trained on the **identical 29 episodes**, marked inline in every table below. Read side by side without the markers the legacy rows look like a weaker version of the same policy; they are a different one.
+Three generations, trained on the **identical 29 episodes**, marked inline in every table below. Read side by side without the markers the legacy rows look like a weaker version of the same policy; they are a different one.
 
 
 **Naming.** Everything trained before Round 8 is the **legacy 29** generation — the rows carrying `[no-EMA]` `[split-crop]` and an `obs` of `legacy clean` / `legacy corrupt`, in run directories `<arm>_corrupt-<c>_demos-29_seed-42`. The Round-8 re-runs are marked **(r8)** with `obs` `r8 clean` / `r8 corrupt`, in `<arm>_corrupt-<c>_demos-29-r8_seed-42`. Two defects and two budget differences separate them:
@@ -2210,6 +2210,12 @@ Legacy runs also use **val = 10** (SE ~9.5pp at p=0.9 — three of them tied at 
 
 
 The 29 training episodes themselves are **exactly reproducible** — `downsample_mask` over `get_split_masks_3way` at `train_ratio: 0.2`, seed 42, recorded verbatim in `pusht_seed42_legacy_val10_train29.json` and verified index-for-index against the runs' own saved config. (They cannot be reproduced with `n_train_episodes: 29`, which takes a prefix of the permuted pool and overlaps in only **4 of 29**.) What the legacy directories lack is provenance: they predate `splits.json`, so nothing *on disk* ties those checkpoints to those episodes. The r8 runs train on the same 29 via a committed manifest, so old-vs-new isolates the four changes above.
+
+
+**The `(oi)` rows are a THIRD generation, and the one thing that differs is the training LOOP.** Same policy class, same 29 episodes (the r8 manifest, val = 30), same EMA and shared crop offset as `(r8)`, same 20k budget — but trained by `TrainSearchOuterInnerWorkspace` instead of `TrainMLPImageWorkspace`, so they live under `outer_inner/<arm>_corrupt-<c>_demos-29_seed-42` rather than `offline/`. The offline loop regenerates the whole search context from the *current* weights on every gradient step; the outer/inner loop generates it once for a pool of 256 windows and reuses it for 4 inner epochs — about 4x cheaper per update (480 -> 120 verifier sims), paid for with a context drawn from weights up to 32 updates stale. That staleness is measured, not assumed: `train_drift_mse_eps` in each run's `logs.json.txt` is the epsilon-space MSE against a frozen snapshot of the policy that filled the buffer, which is proportional to the per-denoising-step KL.
+
+
+So `(oi)` vs `(r8)` at the same arm isolates the loop, and nothing else. Note the `(r8)` rows run to 100k steps while `(oi)` stops at 20k, so compare them at a matched step rather than at each row's end.
 
 
 **The r8 runs have no val curve at all.** Their eval watchers were launched `--skip-val` (`scripts/slurm/launch_round8_29demo.sh`) so the whole budget went to the 50 test episodes. Any checkpoint picked from these rows is therefore picked on TEST, and a test number read at a step chosen on test is not a held-out estimate. Read the r8 rows as a curve; if you need a held-out number from them, re-evaluate on val first.
@@ -2542,6 +2548,7 @@ The r8 generation is also still **in progress** and covers only the three argmax
 |  |  | 44000 | 2% | 12% | 18% | 18% | 28% | 22% | 32% | — | — | — | — |
 |  |  | 46000 | 0% | 12% | 18% | 26% | 30% | 26% | 36% | — | — | — | — |
 |  |  | 48000 | 2% | 16% | 24% | 32% | 34% | 42% | 46% | — | — | — | — |
+|  |  | 50000 | 2% | 16% | 22% | 16% | 34% | 40% | 44% | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | 0% | 0% | 10% | 30% | 50% | 66% | 72% | — | — | — | — |
 |  |  | 4000 | 0% | 10% | 8% | 24% | 30% | 34% | 66% | — | — | — | — |
 |  |  | 6000 | 0% | 8% | 24% | 30% | 36% | 36% | 46% | — | — | — | — |
@@ -2630,35 +2637,10 @@ The r8 generation is also still **in progress** and covers only the three argmax
 |  |  | 78000 | 8% | 26% | 12% | 34% | 36% | 42% | 54% | — | — | — | — |
 |  |  | 80000 | 4% | 24% | 20% | 36% | 22% | 40% | 42% | — | — | — | — |
 |  |  | 82000 | 6% | 14% | 38% | 22% | 30% | 36% | 38% | — | — | — | — |
-|  |  | 84000 | 6% | 10% | 20% | 30% | 34% | — | — | — | — | — | — |
-| value **(oi)** | oi clean | 1000 | 0% | 0% | 0% | 14% | 36% | 56% | 78% | — | — | — | — |
-|  |  | 2000 | 0% | 0% | 4% | 26% | 34% | 66% | 72% | — | — | — | — |
-|  |  | 5000 | 0% | 0% | 14% | 14% | 26% | 22% | 34% | — | — | — | — |
-|  |  | 10000 | 0% | 10% | 12% | 30% | 18% | 34% | 32% | — | — | — | — |
-|  |  | 15000 | 0% | 10% | 18% | 18% | 36% | 26% | 40% | — | — | — | — |
-|  |  | 20000 | 4% | 6% | 14% | 28% | 26% | 24% | 26% | — | — | — | — |
-| none (BC) **(oi-baseline)** | r8 clean, n=1 only | 1000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 2000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 5000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 10000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 20000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 30000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 40000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 50000 | 2% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 60000 | 4% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 70000 | 2% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 80000 | 0% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 90000 | 4% | — | — | — | — | — | — | — | — | — | — |
-|  |  | 100000 | 6% | — | — | — | — | — | — | — | — | — | — |
-
-**About the `(oi)` and `(oi-baseline)` rows.** Both were trained locally on 2026-08-11 and are the only rows in this document not produced on the cluster; they were inserted into this table directly rather than by regenerating it (the local results mirror is incomplete, so a regeneration here would delete rows). `scripts/build_success_rates_doc.py` now discovers `outer_inner/` on its own, so the next regeneration from a complete tree reproduces them without hand-editing.
-
-- **`value (oi)`** — `arm=value` (verifier scalar as context, argmax selection), the same 29 r8 episodes as the `(r8)` rows, EMA on, shared crop offset, 20k steps. The only difference from `value (r8)` is the **training loop**: `TrainSearchOuterInnerWorkspace` generates the search context once per pool of 256 windows and reuses it for 4 inner epochs, instead of regenerating it from the current weights every gradient step. Measured staleness was negligible (`train_drift_mse_eps` mean 0.0062 across 5,000 readings, flat across the inner loop after the first ~4 updates). Compare against `value (r8)` **at a matched step** — those rows run to 100k, these stop at 20k.
-- **`none (BC) (oi-baseline)`** — the same policy class with `max_actions: 1`, so the context is always empty and no candidates or verifier sims are generated. It is slot 0 of the search model trained on its own, on the identical 29 r8 episodes, to 100k steps. Evaluated at **n=1 only**, which is why every other column is blank — not "not run", but "not applicable to the question it was run to answer".
-
-Both were evaluated `--skip-val`, so like the `(r8)` rows they have no val curve and any checkpoint picked from them is picked on test.
-
-**What these two rows say together.** `value (oi)` peaks almost immediately — 78% at n=64 by step 1000 and 72% by 2000 — then falls to 26–40% for the rest of the run, which matches `val_loss` bottoming at step 3k. Meanwhile n=1 never leaves the floor in either run: 0–4% for `(oi)` across all six checkpoints, and 0–6% for the BC baseline even at 100k steps and 5x the gradient budget. Nearly all the measured performance is coming from search width, and a large part of that from the verifier argmax being an oracle over a ground-truth simulator rather than from the model having learned to read its context — which is the concern `AUDIT.md` §2 raises and the `subgoal-only` arm exists to test.
+|  |  | 84000 | 6% | 10% | 20% | 30% | 34% | 42% | 52% | — | — | — | — |
+|  |  | 86000 | 6% | 12% | 18% | 34% | 44% | 28% | 36% | — | — | — | — |
+|  |  | 88000 | 8% | 10% | 26% | 42% | 42% | 38% | 56% | — | — | — | — |
+|  |  | 90000 | 2% | 16% | 28% | 34% | 34% | 42% | 38% | — | — | — | — |
 
 ### 2b. Binary success rate — VAL (10 episodes; this is the selector)
 
@@ -2986,6 +2968,7 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 44000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 46000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 48000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 50000 | — | — | — | — | — | — | — | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 4000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 6000 | — | — | — | — | — | — | — | — | — | — | — |
@@ -3075,6 +3058,9 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 80000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 82000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 84000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 86000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 88000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 90000 | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 2c. Mean reward — TEST
 
@@ -3400,6 +3386,7 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 44000 | 0.459 | 0.678 | 0.778 | 0.828 | 0.862 | 0.829 | 0.854 | — | — | — | — |
 |  |  | 46000 | 0.533 | 0.651 | 0.794 | 0.793 | 0.878 | 0.913 | 0.847 | — | — | — | — |
 |  |  | 48000 | 0.555 | 0.714 | 0.818 | 0.844 | 0.893 | 0.903 | 0.904 | — | — | — | — |
+|  |  | 50000 | 0.554 | 0.669 | 0.842 | 0.802 | 0.799 | 0.895 | 0.868 | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | 0.194 | 0.442 | 0.780 | 0.923 | 0.946 | 0.989 | 0.983 | — | — | — | — |
 |  |  | 4000 | 0.225 | 0.580 | 0.781 | 0.852 | 0.974 | 0.918 | 0.968 | — | — | — | — |
 |  |  | 6000 | 0.330 | 0.651 | 0.805 | 0.855 | 0.905 | 0.903 | 0.942 | — | — | — | — |
@@ -3488,7 +3475,10 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 78000 | 0.485 | 0.740 | 0.785 | 0.790 | 0.870 | 0.900 | 0.932 | — | — | — | — |
 |  |  | 80000 | 0.550 | 0.744 | 0.769 | 0.853 | 0.827 | 0.859 | 0.924 | — | — | — | — |
 |  |  | 82000 | 0.516 | 0.707 | 0.817 | 0.758 | 0.825 | 0.891 | 0.869 | — | — | — | — |
-|  |  | 84000 | 0.504 | 0.711 | 0.756 | 0.825 | 0.824 | — | — | — | — | — | — |
+|  |  | 84000 | 0.504 | 0.711 | 0.756 | 0.825 | 0.824 | 0.875 | 0.919 | — | — | — | — |
+|  |  | 86000 | 0.526 | 0.700 | 0.771 | 0.869 | 0.888 | 0.870 | 0.904 | — | — | — | — |
+|  |  | 88000 | 0.625 | 0.713 | 0.808 | 0.857 | 0.872 | 0.876 | 0.933 | — | — | — | — |
+|  |  | 90000 | 0.502 | 0.742 | 0.814 | 0.824 | 0.847 | 0.904 | 0.873 | — | — | — | — |
 
 ### 2d. Mean reward, FINAL step — TEST
 
@@ -3814,6 +3804,7 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 44000 | 0.240 | 0.607 | 0.708 | 0.792 | 0.813 | 0.792 | 0.830 | — | — | — | — |
 |  |  | 46000 | 0.324 | 0.533 | 0.730 | 0.752 | 0.836 | 0.887 | 0.811 | — | — | — | — |
 |  |  | 48000 | 0.387 | 0.624 | 0.751 | 0.806 | 0.857 | 0.879 | 0.882 | — | — | — | — |
+|  |  | 50000 | 0.278 | 0.566 | 0.787 | 0.749 | 0.740 | 0.872 | 0.843 | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | 0.000 | 0.158 | 0.662 | 0.902 | 0.936 | 0.986 | 0.982 | — | — | — | — |
 |  |  | 4000 | 0.025 | 0.386 | 0.716 | 0.822 | 0.967 | 0.907 | 0.961 | — | — | — | — |
 |  |  | 6000 | 0.077 | 0.521 | 0.746 | 0.831 | 0.894 | 0.887 | 0.938 | — | — | — | — |
@@ -3902,7 +3893,10 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 78000 | 0.328 | 0.628 | 0.685 | 0.744 | 0.838 | 0.884 | 0.915 | — | — | — | — |
 |  |  | 80000 | 0.383 | 0.651 | 0.708 | 0.804 | 0.788 | 0.830 | 0.905 | — | — | — | — |
 |  |  | 82000 | 0.316 | 0.619 | 0.763 | 0.681 | 0.787 | 0.872 | 0.841 | — | — | — | — |
-|  |  | 84000 | 0.356 | 0.607 | 0.674 | 0.796 | 0.788 | — | — | — | — | — | — |
+|  |  | 84000 | 0.356 | 0.607 | 0.674 | 0.796 | 0.788 | 0.819 | 0.891 | — | — | — | — |
+|  |  | 86000 | 0.372 | 0.574 | 0.705 | 0.815 | 0.857 | 0.841 | 0.874 | — | — | — | — |
+|  |  | 88000 | 0.421 | 0.607 | 0.760 | 0.816 | 0.826 | 0.832 | 0.908 | — | — | — | — |
+|  |  | 90000 | 0.283 | 0.601 | 0.736 | 0.791 | 0.819 | 0.869 | 0.844 | — | — | — | — |
 
 ### 2e. Mean reward, DISCOUNTED (gamma=0.99) — TEST
 
@@ -4228,6 +4222,7 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 44000 | 0.174 | 0.263 | 0.275 | 0.320 | 0.309 | 0.307 | 0.325 | — | — | — | — |
 |  |  | 46000 | 0.189 | 0.255 | 0.275 | 0.278 | 0.293 | 0.314 | 0.292 | — | — | — | — |
 |  |  | 48000 | 0.201 | 0.241 | 0.283 | 0.270 | 0.313 | 0.279 | 0.312 | — | — | — | — |
+|  |  | 50000 | 0.190 | 0.231 | 0.280 | 0.278 | 0.281 | 0.300 | 0.266 | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | 0.039 | 0.137 | 0.258 | 0.308 | 0.322 | 0.327 | 0.332 | — | — | — | — |
 |  |  | 4000 | 0.059 | 0.157 | 0.265 | 0.299 | 0.358 | 0.345 | 0.338 | — | — | — | — |
 |  |  | 6000 | 0.100 | 0.197 | 0.263 | 0.276 | 0.313 | 0.306 | 0.323 | — | — | — | — |
@@ -4316,7 +4311,10 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 78000 | 0.165 | 0.269 | 0.289 | 0.279 | 0.297 | 0.281 | 0.294 | — | — | — | — |
 |  |  | 80000 | 0.181 | 0.270 | 0.273 | 0.278 | 0.305 | 0.283 | 0.316 | — | — | — | — |
 |  |  | 82000 | 0.182 | 0.276 | 0.262 | 0.282 | 0.302 | 0.307 | 0.297 | — | — | — | — |
-|  |  | 84000 | 0.178 | 0.263 | 0.267 | 0.289 | 0.281 | — | — | — | — | — | — |
+|  |  | 84000 | 0.178 | 0.263 | 0.267 | 0.289 | 0.281 | 0.291 | 0.312 | — | — | — | — |
+|  |  | 86000 | 0.182 | 0.263 | 0.283 | 0.299 | 0.300 | 0.316 | 0.316 | — | — | — | — |
+|  |  | 88000 | 0.187 | 0.269 | 0.272 | 0.293 | 0.294 | 0.305 | 0.284 | — | — | — | — |
+|  |  | 90000 | 0.177 | 0.254 | 0.286 | 0.276 | 0.295 | 0.294 | 0.318 | — | — | — | — |
 
 ### 2f. Mean reward, episode max — VAL (the selector's tie-break)
 
@@ -4642,6 +4640,7 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 44000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 46000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 48000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 50000 | — | — | — | — | — | — | — | — | — | — | — |
 | subgoal-value **(r8)** | r8 clean | 2000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 4000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 6000 | — | — | — | — | — | — | — | — | — | — | — |
@@ -4731,6 +4730,9 @@ Only 10 episodes, so each cell moves in 10pp steps and SE is ~9.5pp at p=0.9. Th
 |  |  | 80000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 82000 | — | — | — | — | — | — | — | — | — | — | — |
 |  |  | 84000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 86000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 88000 | — | — | — | — | — | — | — | — | — | — | — |
+|  |  | 90000 | — | — | — | — | — | — | — | — | — | — | — |
 
 ### What differs between the 29- and 100-demo generations, besides the demo count
 
@@ -5070,6 +5072,14 @@ Both rules run on the **same trained weights** — selection is a pure readout o
 |  |  |  | `softmax` | 0% | 4% | 10% | 14% | 20% | 20% | 18% | — | — | — | — |
 |  |  |  | `final_pass` | — | — | — | — | 0% | — | — | — | — | — | — |
 
+<!-- HAND-WRITTEN after: ## 4. Where the raw results are -->
+<!-- Section 5 is NOT generated. build_success_rates_doc.py discovers offline/ and
+     outer_inner/ only; the UNet arms live under unet_bc/ and have no root there, so these
+     tables are maintained by hand. The builder re-inserts everything between these two
+     sentinels immediately before the anchor heading named above -- without them, running
+     `python scripts/build_success_rates_doc.py` deletes this section outright. If you
+     rename section 4, re-point the `after:` anchor. -->
+
 ## 5. Architecture at search width 1 — transformer vs diffusion UNet
 
 
@@ -5218,6 +5228,7 @@ Note what this ablation does **not** control: the UNet has no token projection a
 
 **Caveats.** (1) The UNet's denoiser is 48x larger (282M vs 5.9M) — the one axis that could not be equalised without turning one architecture into the other. (2) These runs use `num_inference_steps: 100` for sampler parity with DDPM, while every search arm in sections 1-3 uses 8. (3) UNet @29's `val_loss` bottoms at step ~7k, before the first eval point at 20k, so its true peak may be unmeasured; its 10k checkpoint is on disk if that gap needs closing.
 
+<!-- END HAND-WRITTEN -->
 
 ## 4. Where the raw results are
 

@@ -15,6 +15,7 @@ checkpoint appears. Selection is never done on test.
 import json
 import os
 import pathlib
+import re
 
 import numpy as np
 
@@ -635,7 +636,72 @@ L += ['\n---\n', '\n# A. Archive\n',
 arch = demo_table([(m, t, bon) for m, t, bon in ARCHIVE], 'test')
 L += ['\n### Archive \u2014 binary success rate (TEST)\n'] + arch
 
+# ---------------------------------------------------------------------------
+# HAND-WRITTEN SECTIONS. This builder does not own the whole document.
+#
+# It discovers offline/ and outer_inner/ only -- there is no unet_bc/ root here -- so the
+# architecture 2x2 (section 5) is maintained by hand. It sits BETWEEN generated sections,
+# and this script used to end with a bare write_text() that replaced the file wholesale, so
+# running the regenerate command this very document advertises silently deleted it.
+#
+# Fix: hand-written regions are fenced with sentinels in SUCCESS_RATES.md,
+#
+#   <!-- HAND-WRITTEN after: ## 3. Selection rule ... -->
+#   ...prose and tables this script knows nothing about...
+#   <!-- END HAND-WRITTEN -->
+#
+# and are re-inserted immediately before the heading named in `after:`. Sentinels rather
+# than diffing the heading set, because the generated headings themselves change between
+# revisions and a diff would then treat a renamed section as hand-written.
+#
+# A block whose anchor no longer exists is APPENDED with a warning rather than dropped --
+# losing content silently is the exact failure this is here to prevent.
+# ---------------------------------------------------------------------------
+HW_OPEN = re.compile(r'^<!--\s*HAND-WRITTEN\s+after:\s*(.+?)\s*-->\s*$')
+HW_CLOSE = '<!-- END HAND-WRITTEN -->'
+
+
+def extract_hand_written(text):
+    """[(anchor_heading, block_lines)] for every sentinel-fenced region in `text`."""
+    blocks, lines, i = [], text.split('\n'), 0
+    while i < len(lines):
+        m = HW_OPEN.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        anchor, start = m.group(1), i
+        j = i + 1
+        while j < len(lines) and lines[j].strip() != HW_CLOSE:
+            j += 1
+        if j >= len(lines):
+            print(f'WARNING: unclosed HAND-WRITTEN block at line {start + 1} '
+                  f'(anchor {anchor!r}); it will NOT be preserved. Add {HW_CLOSE}.')
+            break
+        blocks.append((anchor, lines[start:j + 1]))
+        i = j + 1
+    return blocks
+
+
+def splice_hand_written(generated, blocks):
+    """Re-insert each block immediately before its anchor heading."""
+    lines = '\n'.join(generated).split('\n')
+    for anchor, block in blocks:
+        try:
+            at = next(k for k, ln in enumerate(lines) if ln.strip() == anchor.strip())
+        except StopIteration:
+            print(f'WARNING: anchor {anchor!r} is no longer generated; appending the '
+                  f'hand-written block at the end so it is not lost. Re-point its '
+                  f'`after:` sentinel at a heading that still exists.')
+            lines += [''] + block
+            continue
+        lines[at:at] = block + ['']
+    return '\n'.join(lines)
+
+
 out = pathlib.Path(__file__).resolve().parent.parent / 'SUCCESS_RATES.md'
-out.write_text('\n'.join(L) + '\n')
+preserved = extract_hand_written(out.read_text()) if out.is_file() else []
+out.write_text(splice_hand_written(L, preserved).rstrip('\n') + '\n')
 n_ck = sum(len(rows_for(b)) for _, _, b in D100 + D29 + ARCHIVE)
+kept = ', '.join(a for a, _ in preserved) or 'none'
 print(f'wrote {out} ({out.stat().st_size} bytes, {n_ck} checkpoints across all sections)')
+print(f'hand-written blocks preserved: {kept}')

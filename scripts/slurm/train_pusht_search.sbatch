@@ -69,6 +69,46 @@ conda activate robodiff
 set -u
 cd /mmfs1/home/harine/diffusion_policy_standalone
 
+# ---------------------------------------------------------------------------
+# STORAGE. Home is a 10G hard quota; a single run's checkpoints exceed it on their own.
+# Everything a run writes must land on /gscratch.
+# ---------------------------------------------------------------------------
+GSCRATCH_ROOT=/gscratch/robotics/harine
+
+# The config already defaults output_root to $GSCRATCH_ROOT/diffusion_policy_outputs, but
+# DP_OUTPUT_ROOT overrides it -- and README_pusht/build_success_rates_doc tell you to point
+# that at a LOCAL COPY of the results tree for off-cluster work. A training job that
+# inherited such a value would write the entire run there, silently, and blow the quota.
+# So: default it explicitly, and refuse to start if it points anywhere but /gscratch.
+export DP_OUTPUT_ROOT="${DP_OUTPUT_ROOT:-$GSCRATCH_ROOT/diffusion_policy_outputs}"
+case "$DP_OUTPUT_ROOT" in
+  /gscratch/*) ;;
+  *) echo "FATAL: DP_OUTPUT_ROOT=$DP_OUTPUT_ROOT is not on /gscratch. A training run writes"
+     echo "       tens of GB; on home that hits the 10G quota mid-run. Unset it or point it"
+     echo "       at /gscratch/..." >&2
+     exit 1 ;;
+esac
+
+# wandb writes its RUN files to `dir=` (the hydra output dir, already on /gscratch) but its
+# cache, artifacts and config default to $HOME. Redirect all four.
+export WANDB_DIR="${WANDB_DIR:-$GSCRATCH_ROOT/wandb}"
+export WANDB_CACHE_DIR="${WANDB_CACHE_DIR:-$GSCRATCH_ROOT/wandb/cache}"
+export WANDB_ARTIFACT_DIR="${WANDB_ARTIFACT_DIR:-$GSCRATCH_ROOT/wandb/artifacts}"
+export WANDB_CONFIG_DIR="${WANDB_CONFIG_DIR:-$GSCRATCH_ROOT/wandb/config}"
+mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_ARTIFACT_DIR" "$WANDB_CONFIG_DIR"
+
+# Preflight free space. /gscratch and home are the SAME gpfs filesystem (/mmfs1), so this is
+# not a formality -- the UNet arms already died once with "No space left on device" at step
+# 115k. A 100k-step search run writes ~3 GB of checkpoints; refuse to start under 50G so a
+# doomed job fails in the first second rather than at step 90k.
+avail_g=$(df -BG --output=avail "$DP_OUTPUT_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')
+if [ -n "${avail_g:-}" ] && [ "$avail_g" -lt 50 ]; then
+  echo "FATAL: only ${avail_g}G free on the filesystem holding $DP_OUTPUT_ROOT (need >=50G)." >&2
+  exit 1
+fi
+echo "output root : $DP_OUTPUT_ROOT (${avail_g:-?}G free)"
+echo "wandb dir   : $WANDB_DIR"
+
 python train.py \
   --config-name="$CONFIG_NAME" \
   training.device=cuda:0 \

@@ -19,6 +19,30 @@ All runs below were trained after the fixes in `b487ec0`, each of which silently
 | `train_action_mse_error` over all 16 horizon steps | not comparable to the search workspace, which scores the 8 executed steps |
 | eval harness required `predict_action_best` | could not score a policy without a search interface at all |
 
+## A second round of the same class (2026-08-13)
+
+Auditing whether each `b487ec0` fix had reached **all three** training workspaces turned up
+eight more places where a fix landed in one arm and not another. The ones that change
+recorded numbers:
+
+| fix | what it silently did before | arms affected |
+|---|---|---|
+| `train_sampling_batch` pinned to the first batch of the first epoch | `train_action_mse_error*` measured fit on 32 windows the model re-saw constantly, not anything that moved with training — so `b487ec0`'s slice alignment was necessary but not sufficient, and the series still were not comparable across arms | outer/inner, UNet |
+| in-training rollouts not seeded | `conditional_sample` drew from whatever RNG state training left behind, so an in-training success number was not reproducible from its checkpoint | outer/inner, UNet |
+| EMA step counter not restored on resume | `get_decay` returns 0.0 at step 0, so the first post-resume update overwrote the running average with the live weights | UNet |
+| no guard on resuming a pre-EMA payload into `use_ema` | `ema_model` stayed randomly initialized while `model` got trained weights — and the EMA copy is what is rolled out and shipped | outer/inner, UNet |
+| `last_checkpoint_step` anchored after the write | a resumed run believed it was overdue and fired an extra checkpoint on its first step | offline, UNet |
+| `checkpoint.topk` configured but unimplemented | the two configs asked for the 5 best-by-`val_loss` checkpoints and silently got none | outer/inner, UNet |
+
+**Consequence for older numbers.** `train_action_mse_error*` and in-training rollout success
+from runs before this date are not comparable with anything produced after it. The
+`bon_search/` eval curves are unaffected — they come from `eval_search_pusht.py`, which was
+already seeded per `(split, n)`.
+
+`topk` was resolved by REMOVAL rather than by implementing it: a `val_loss` ranking deciding
+which weights survive is tooling nominating a checkpoint, which is what this project
+deliberately does not do. Nothing read those files — every consumer globs `step_*.ckpt`.
+
 ## The runs
 
 | | search transformer (ST n=1) | diffusion UNet (BC) |

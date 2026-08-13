@@ -257,11 +257,66 @@ class BaseWorkspace:
         else:
             path = pathlib.Path(path)
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
-        self.load_payload(payload, 
-            exclude_keys=exclude_keys, 
+        self.load_payload(payload,
+            exclude_keys=exclude_keys,
             include_keys=include_keys)
         return payload
-    
+
+    def assert_ema_payload(self, payload, path):
+        """Refuse to resume a pre-EMA checkpoint into a run with ``use_ema: True``.
+
+        ``load_payload`` only restores keys the PAYLOAD actually has, so resuming a
+        checkpoint written before EMA existed leaves ``ema_model`` at its RANDOM
+        initialization while ``model`` receives the trained weights. Since the EMA copy is
+        what gets rolled out, validated and shipped in the checkpoint, every metric until
+        the average converges (~200 steps at decay 0.995) would be silently wrong -- and the
+        checkpoints written in that window ship a partly-random policy.
+
+        Called from every workspace's resume block. It lives here rather than in one
+        workspace because each of the three overrides ``run()`` and so has its own resume
+        path; the guard existed only in TrainMLPImageWorkspace, which meant the search arms
+        (TrainSearchOuterInnerWorkspace, the default search trainer since 5294c31) and the
+        diffusion-UNet arm ran without it.
+
+        No-op when the workspace has no ``ema_model`` (``use_ema: False``).
+        """
+        if getattr(self, 'ema_model', None) is None:
+            return
+        if 'ema_model' in payload.get('state_dicts', {}):
+            return
+        raise RuntimeError(
+            f'{path} predates EMA (no ema_model in the payload) but training.use_ema is '
+            f'True. Resuming would evaluate and ship a randomly-initialized EMA copy. '
+            f'Start a new run directory, or set use_ema: False to continue this one.')
+
+    def _close_worker_pools(self, env_runner=None):
+        """Release the subprocess pools held by the policy's verifier and the env runner.
+
+        Both the search verifier and the env runner hold pools of worker SUBPROCESSES that
+        garbage collection will not reap, so they must be closed explicitly -- register this
+        on an ExitStack so it runs on normal exit and on exceptions alike.
+
+        Best-effort: this runs during teardown (including after an exception), so a failure
+        to close must not mask the original error.
+        """
+        owners = [getattr(self, 'model', None)]
+        accelerator = getattr(self, 'accelerator', None)
+        if accelerator is not None and owners[0] is not None:
+            owners[0] = accelerator.unwrap_model(owners[0])
+        if env_runner is not None:
+            owners.append(env_runner)
+        for owner in owners:
+            if owner is None:
+                continue
+            close = getattr(owner, 'close', None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception as e:
+                print(f'warning: failed to close {type(owner).__name__}: {e}')
+
+
     @classmethod
     def create_from_checkpoint(cls, path, 
             exclude_keys=None, 

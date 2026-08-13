@@ -212,7 +212,7 @@ training:
   # larger than any epoch count that could reach 300k steps (at batch 32 and 29 demos, the
   # smallest budget here, 300k steps is 2,728 epochs), so it never binds first and never
   # needs recomputing. Kept rather than removed because the loop is `range(num_epochs)` and
-  # `self.epoch` feeds `checkpoint.topk.format_str`.
+  # `self.epoch` is the epoch counter it logs against.
   #
   # NOTE this also feeds the scheduler's `num_training_steps`, which `decay_then_constant`
   # ignores. Switching `lr_scheduler` back to plain `cosine` would make that horizon
@@ -247,11 +247,11 @@ logging:
   group: null
 
 checkpoint:
-  topk:
-    monitor_key: val_loss
-    mode: min
-    k: 5
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.4f}.ckpt'
+  # NO `topk` -- see train_pusht_diffusion_search.yaml for why. Two reasons here: a val_loss
+  # ranking deciding which weights survive is tooling nominating a checkpoint, and this
+  # workspace has no TopKCheckpointManager at all, so the block was silently ignored.
+  # It was also the most expensive place to have it: a UNet checkpoint is ~4.4 GB, so k=5
+  # meant ~22 GB per run of duplicated weights on a filesystem that has already hit ENOSPC.
   save_last_ckpt: True
   save_last_snapshot: False
 

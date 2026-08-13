@@ -21,7 +21,7 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 
 # How predict_action_best picks the action it returns. See
 # DiffusionTransformerSearchPolicy.__init__ for what each one means.
-SELECTION_MODES = ('argmax', 'softmax', 'final_pass')
+SELECTION_MODES = ('argmax', 'softmax', 'final_pass', 'index')
 
 
 def _stack_subgoals(per_candidate):
@@ -530,6 +530,26 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         self.selection_temperature = float(
             kwargs.get('selection_temperature', 1.0) or 1.0)
         assert self.selection_temperature > 0, 'selection_temperature must be > 0'
+        # Restrict the pool that 'argmax'/'softmax' rank over to the LAST W candidates.
+        # None == all of them.
+        #
+        # This is a selection knob only: all n candidates are still generated and still
+        # scored, so it costs nothing extra and every candidate's score is still available
+        # to a caller that wants to log it. It exists because candidate order is meaningful
+        # here -- candidate k is conditioned on candidates 0..k-1, so the trailing ones are
+        # the deeply-conditioned ones. "argmax over the last 8 of 16" asks whether the
+        # oracle pick is better when it may only choose among well-conditioned candidates,
+        # which is a different question from "argmax over all 16".
+        window = kwargs.get('selection_window', None)
+        self.selection_window = None if window is None else int(window)
+        assert self.selection_window is None or self.selection_window > 0, \
+            f'selection_window must be positive or None, got {self.selection_window!r}'
+        # For selection == 'index': WHICH candidate to execute, as a plain index into the n
+        # generated candidates. Negative counts from the end, so -1 is the last (most
+        # conditioned) candidate and -8 the eighth from last. The verifier score takes no
+        # part in selection at all in this mode -- it is the control that says how much of
+        # any best-of-n gain is the ranking rather than the conditioning depth.
+        self.selection_index = int(kwargs.get('selection_index', -1) or -1)
         # Geometric decay of the per-candidate-slot loss weight, counting BACK from the
         # last slot: w_k ∝ decay^(K-1-k), so the full-context slot carries the most weight
         # and each earlier slot a factor `decay` less (see _slot_weights / _compute_loss).
@@ -605,6 +625,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
     # ablation arm ends up secretly identical to its sibling.
     _KNOWN_KWARGS = frozenset({
         'max_actions', 'search_context', 'selection', 'slot_weight_decay', 'context_decay',
+        'selection_temperature', 'selection_window', 'selection_index',
         'scheduler_step_kwargs',
         # PushT verifier
         'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
@@ -1069,11 +1090,20 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
         WHICH chunk depends on ``self.selection``:
           * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
+          * 'softmax'    -- sampled from softmax(z / T) over the standardized scores.
+          * 'index'      -- a FIXED slot (``self.selection_index``, negative counts from the
+            end), ignoring the scores entirely. The control for the two above: it isolates
+            how much of a best-of-n gain comes from the ranking rather than from candidate
+            k simply being conditioned on candidates 0..k-1.
           * 'final_pass' -- one MORE sample, conditioned on all n scored candidates, is
             drawn and returned. It is not simulated and not compared to anything, so the
             verifier scalar never touches selection; it reaches the model only as search
             context. ``scores`` still describes the n context candidates (so the caller can
             log the spread), but no longer describes the returned action.
+
+        ``self.selection_window`` narrows the pool 'argmax'/'softmax' rank over to the last
+        W candidates. It does not change generation: all n are still sampled and scored, so
+        ``scores`` is always the full (B, n) and ``pick`` is always a full-candidate index.
 
         Cost at width n: 'argmax' is n samples + n sims, 'final_pass' is n+1 samples + n
         sims. Consumers that compare arms should compare at equal SAMPLES, not equal n --
@@ -1092,22 +1122,43 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
                 obs_dict, verifier=self.verifier, n_actions=n,
                 return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
 
-            if self.selection in ('argmax', 'softmax'):
+            if self.selection == 'index':
+                # Fixed slot, no ranking. Resolved against the candidates ACTUALLY
+                # generated (n, which may be below max_actions), and clamped so a request
+                # for the 8th-from-last at n=4 takes candidate 0 rather than wrapping round
+                # to a silently different slot.
+                B = actions.shape[0]
+                idx = self.selection_index
+                if idx < 0:
+                    idx = n + idx
+                idx = max(0, min(n - 1, idx))
+                pick = torch.full((B,), idx, dtype=torch.long, device=actions.device)
+                action_pred = actions[:, idx]                           # (B, H, Da)
+            elif self.selection in ('argmax', 'softmax'):
                 B = actions.shape[0]
                 arange = torch.arange(B, device=actions.device)
+                # Rank over the last `selection_window` candidates only, when set. `lo` is
+                # the offset of that window in the full candidate axis, so `pick` is
+                # returned in FULL-candidate coordinates -- callers logging it alongside
+                # `scores` (which is always all n) would otherwise be off by `lo`.
+                lo = 0 if self.selection_window is None \
+                    else max(0, n - self.selection_window)
+                pool = scores[:, lo:]                                   # (B, n-lo)
                 if self.selection == 'argmax':
-                    pick = scores.argmax(dim=1)                         # (B,)
+                    pick = pool.argmax(dim=1) + lo                      # (B,)
                 else:
-                    # z-score across the n candidates, then sample. unbiased=False so a
+                    # z-score across the pooled candidates, then sample. unbiased=False so a
                     # single candidate (n=1) gives std 0 rather than NaN; the eps then
                     # leaves z==0, i.e. a uniform draw over one option -- the same action
                     # argmax would have taken, so the n=1 column is comparable by
-                    # construction rather than by luck.
-                    mu = scores.mean(dim=1, keepdim=True)
-                    sd = scores.std(dim=1, unbiased=False, keepdim=True)
-                    z = (scores - mu) / (sd + 1e-6)
+                    # construction rather than by luck. Standardizing over the POOL, not
+                    # over all n, keeps T in units of "sd of the candidates being chosen
+                    # among" in both the windowed and unwindowed cases.
+                    mu = pool.mean(dim=1, keepdim=True)
+                    sd = pool.std(dim=1, unbiased=False, keepdim=True)
+                    z = (pool - mu) / (sd + 1e-6)
                     logits = z / self.selection_temperature
-                    pick = torch.distributions.Categorical(logits=logits).sample()
+                    pick = torch.distributions.Categorical(logits=logits).sample() + lo
                 action_pred = actions[arange, pick]                     # (B, H, Da)
             else:
                 # Condition on the last max_actions-1 candidates: that is the widest
@@ -1122,13 +1173,23 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
                     values=values[:, -keep:],
                     obs_features=obs_features,
                 )['action_pred']                                        # (B, H, Da)
+                # The executed action is a FURTHER sample, not one of the n candidates, so
+                # there is no candidate index to report. -1 marks "not a candidate" rather
+                # than pointing at an arbitrary slot the caller might plot as chosen.
+                pick = torch.full((actions.shape[0],), -1,
+                                  dtype=torch.long, device=actions.device)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
         return {
             'action': action_pred[:, start:end],            # (B, n_action_steps, Da)
             'action_pred': action_pred,
-            'scores': scores,
+            'scores': scores,                               # (B, n) -- ALWAYS all n
+            # Which candidate was executed, in full-candidate coordinates; -1 under
+            # 'final_pass'. Returned so a caller can record the selection actually made
+            # instead of re-deriving it (a re-derivation cannot reproduce a 'softmax' draw
+            # at all, and would silently disagree with what was executed).
+            'pick': pick,                                   # (B,)
         }
 
     def generate_search_context(self, obs_dict, obs_features=None):

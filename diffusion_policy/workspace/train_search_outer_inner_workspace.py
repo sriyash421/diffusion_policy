@@ -189,8 +189,14 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
+                payload = self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+                # Refuse a pre-EMA payload resumed into a use_ema run. This class overrides
+                # run(), so the parent's resume block never executes here -- the guard was
+                # simply absent on this path, which matters more than anywhere else now
+                # that outer/inner is the DEFAULT search trainer (5294c31) and every
+                # argmax arm runs through it. See BaseWorkspace.assert_ema_payload.
+                self.assert_ema_payload(payload, lastest_ckpt_path)
             else:
                 # Hydra mints a NEW timestamped output dir per launch, so a plain re-submit
                 # looks for latest.ckpt somewhere that cannot contain it and starts over.
@@ -244,6 +250,11 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         val_every_steps = cfg.training.val_every_steps
         sample_every_steps = cfg.training.sample_every_steps
         buffer_chunk = cfg.dataloader.batch_size
+        # Extra checkpoints off the `checkpoint_every` cadence, for the early steps where a
+        # 10k grid has no resolution. Absolute step numbers, so a resumed run past them does
+        # not re-fire (the membership test is on the exact post-increment step).
+        extra_ckpt_steps = set(
+            int(s) for s in (cfg.training.get('checkpoint_steps', None) or []))
 
         if cfg.training.debug:
             max_steps = 6
@@ -347,8 +358,15 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         sel = order[start:start + inner_bs]
                         batch = collate([dataset[int(pool[p])] for p in sel])
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        if train_sampling_batch is None:
-                            train_sampling_batch = batch
+                        # Refreshed every inner step, NOT frozen at the first one. The old
+                        # `if train_sampling_batch is None` guard pinned the FIRST batch of
+                        # the FIRST outer step and reused that same GPU tensor for every
+                        # _sample_log for the rest of the run -- so train_action_* measured
+                        # fit on 32 windows the model re-saw constantly, not anything that
+                        # moved with training. TrainMLPImageWorkspace was fixed; this path
+                        # was not, which left the two workspaces' train_action_mse_error*
+                        # series not comparable even after b487ec0 aligned their slicing.
+                        train_sampling_batch = batch
                         sel_t = torch.as_tensor(sel, dtype=torch.long, device=buf_actions.device)
 
                         want_aux = (inner_idx % drift_every) == 0
@@ -404,8 +422,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             json_logger.log(step_log)
 
                         next_ckpt = self.last_checkpoint_step + cfg.training.checkpoint_every
-                        if self.global_step >= next_ckpt and self.accelerator.is_main_process:
-                            self._save(cfg)
+                        if self.accelerator.is_main_process:
+                            if self.global_step >= next_ckpt:
+                                self._save(cfg)
+                            elif self.global_step in extra_ckpt_steps:
+                                # off-cadence checkpoint; does NOT move the cadence anchor
+                                self._save(cfg, advance_anchor=False)
 
                         inner_idx += 1
                     if self.global_step >= max_steps:
@@ -423,6 +445,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 eval_policy.eval()
 
                 if self.global_step - self.last_rollout_step >= rollout_every_steps:
+                    # Seed before the rollout so its success rate is reproducible from the
+                    # checkpoint. The env is deterministic given a reset state, but
+                    # conditional_sample draws from the global RNG, so without this the
+                    # number depended on whatever state the preceding training left behind.
+                    torch.manual_seed(cfg.training.seed)
+                    np.random.seed(cfg.training.seed)
                     step_log.update(env_runner.run(eval_policy))
                     self.last_rollout_step = self.global_step
 
@@ -472,14 +500,24 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
 
     # ------------------------------------------------------------------ helpers
 
-    def _save(self, cfg):
-        """Checkpoint on the gradient-step schedule, with plain (unwrapped) module keys."""
+    def _save(self, cfg, advance_anchor=True):
+        """Checkpoint on the gradient-step schedule, with plain (unwrapped) module keys.
+
+        ``advance_anchor=False`` writes the checkpoint WITHOUT moving the cadence anchor.
+        That is what off-cadence saves (``training.checkpoint_steps``) use: anchoring on
+        them would reschedule the regular grid off them, so a save at 1000 with
+        ``checkpoint_every: 10000`` would put the next cadence checkpoint at 11000 instead
+        of 10000 and every subsequent one 1000 late -- silently producing a grid that no
+        eval sweep expects.
+        """
         print(f"Saving checkpoint at step {self.global_step}")
         # Update the cadence anchor BEFORE writing, so the value that lands in the
-        # checkpoint is the step this checkpoint was taken at. Setting it afterwards (as
-        # the parent workspace does) persists the PREVIOUS anchor, so a resumed run
-        # believes it is overdue and fires an extra checkpoint on its very first step.
-        self.last_checkpoint_step = self.global_step
+        # checkpoint is the step this checkpoint was taken at. Setting it afterwards
+        # persists the PREVIOUS anchor, so a resumed run believes it is overdue and fires an
+        # extra checkpoint on its very first step. (The parent workspace and the UNet one
+        # both had it after the write; both now match this.)
+        if advance_anchor:
+            self.last_checkpoint_step = self.global_step
         model_ddp = self.model
         self.model = self.accelerator.unwrap_model(self.model)
         if cfg.checkpoint.save_last_ckpt:

@@ -165,22 +165,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
 
-    def _close_worker_pools(self, env_runner):
-        """Release the subprocess pools held by the policy's verifier and the env runner.
-
-        Best-effort: this runs during teardown (including after an exception), so a
-        failure to close must not mask the original error.
-        """
-        for owner in (self.accelerator.unwrap_model(self.model), env_runner):
-            close = getattr(owner, 'close', None)
-            if close is None:
-                continue
-            try:
-                close()
-            except Exception as e:
-                print(f'warning: failed to close {type(owner).__name__}: {e}')
-
-
     def _make_nrmse_loader(self, split_dataset, cfg, collate_fn, seed=0):
         """Loader for the search-quality metrics: a FIXED, episode-spanning window subset.
 
@@ -305,18 +289,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 payload = self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
-                # load_payload only restores keys the PAYLOAD has, so resuming a
-                # pre-EMA checkpoint into a use_ema run leaves ema_model at its random
-                # initialization while `model` gets the trained weights. The average would
-                # then start from garbage and converge over ~200 steps, and since only the
-                # EMA weights are rolled out and shipped, every metric in that window would
-                # be silently wrong. Fail instead.
-                if self.ema_model is not None and 'ema_model' not in payload['state_dicts']:
-                    raise RuntimeError(
-                        f'{lastest_ckpt_path} predates EMA (no ema_model in the payload) '
-                        f'but training.use_ema is True. Resuming would evaluate and ship a '
-                        f'randomly-initialized EMA copy. Start a new run directory, or set '
-                        f'use_ema: False to continue this one.')
+                # Refuse a pre-EMA payload resumed into a use_ema run -- see
+                # BaseWorkspace.assert_ema_payload. Shared with the outer/inner and
+                # diffusion-UNet workspaces, which each override run() and so need the
+                # same guard on their own resume paths.
+                self.assert_ema_payload(payload, lastest_ckpt_path)
 
         # Pretrained weights are the INITIALIZATION for a fresh finetune run only. If we
         # just resumed, the resumed weights are strictly newer -- loading the pretrained
@@ -580,6 +557,12 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                # Anchor BEFORE writing, so the value that lands in the
+                                # checkpoint is the step it was taken at. Setting it
+                                # afterwards persists the PREVIOUS anchor, so a resumed run
+                                # believes it is overdue and fires an extra checkpoint on
+                                # its very first step.
+                                self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:
@@ -592,9 +575,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
                                 self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
-
-                                # Update last checkpoint step
-                                self.last_checkpoint_step = self.global_step
 
                         # Stop on the EXACT step. The epoch-level check above only fires
                         # between epochs, so on its own it overshoots by up to a full epoch
