@@ -86,6 +86,18 @@ last). `cand 0` is the empty-context baseline, `best` the argmax over all n.
 | verifier scalar | argmax | corrupt | 15000 | 16 | **-44.6** | -48.3 | -44.7 | -38.4 | 0.74 @64 |
 | subgoal image | final pass | clean | 14000 | 16 | **-73.9** | -78.3 | -74.3 | -67.4 | 0.24 @64 |
 | subgoal image | final pass | corrupt | 12000 | 16 | **-82.9** | -85.4 | -82.5 | -72.7 | 0.18 @64 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 10000 | 16 | **-71.0** | -73.9 | -71.5 | -65.2 | 0.12 @16 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 20000 | 16 | **-66.1** | -69.3 | -66.3 | -60.9 | 0.16 @16 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 60000 | 16 | **-73.1** | -75.8 | -73.3 | -70.0 | 0.48 @16 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 76000 | 16 | **-75.9** | -78.5 | -76.1 | -73.0 | — |
+| subgoal-only k4 cd0.9 | final_pass | clean | 10000 | 4 | **-146.4** | -145.8 | -146.3 | -141.0 | 0.04 @4 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 20000 | 4 | **-100.2** | -101.4 | -100.7 | -96.6 | 0.08 @4 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 60000 | 4 | **-71.1** | -72.0 | -71.5 | -68.8 | 0.26 @4 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 100000 | 4 | **-73.8** | -74.7 | -74.2 | -71.8 | 0.30 @4 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 10000 | 8 | **-87.2** | -89.9 | -87.8 | -82.0 | 0.04 @8 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 20000 | 8 | **-71.0** | -73.8 | -71.6 | -66.9 | 0.22 @8 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 60000 | 8 | **-48.7** | -51.3 | -49.3 | -46.8 | 0.40 @8 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 100000 | 8 | **-53.1** | -55.4 | -53.5 | -51.3 | 0.34 @8 |
 
 For `final pass` the `last loop` value is the executed sample, simulated for logging
 only — the deployed policy never scores it. Compare it against `best` on the same row:
@@ -124,6 +136,18 @@ sets `done` the instant coverage clears the threshold. Two consequences the usua
 | verifier scalar | argmax | corrupt | 0.70 | 0.996 | **0.994** | **0.138** | 0.001 | 211 | 171 | 0.20 | 34.2 |
 | subgoal image | final pass | clean | 0.25 | 0.767 | **0.684** | **0.044** | 0.000 | 275 | 199 | 0.50 | 20.4 |
 | subgoal image | final pass | corrupt | 0.20 | 0.784 | **0.621** | **0.018** | 0.000 | 289 | 246 | 0.65 | 18.6 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 0.15 | 0.820 | **0.474** | **0.037** | 0.000 | 278 | 154 | 0.80 | 22.0 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 0.20 | 0.839 | **0.557** | **0.037** | 0.000 | 277 | 183 | 0.70 | 25.1 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 0.55 | 0.828 | **0.735** | **0.095** | 0.001 | 244 | 196 | 0.30 | 25.4 |
+| subgoal-only k16 cd0.9 | final_pass | clean | 0.40 | 0.817 | **0.708** | **0.093** | 0.001 | 241 | 151 | 0.50 | 25.1 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 0.00 | 0.327 | **0.080** | **0.000** | 0.000 | 300 | — | 0.75 | 8.8 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 0.15 | 0.698 | **0.494** | **0.010** | 0.000 | 296 | 271 | 0.70 | 14.9 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 0.35 | 0.812 | **0.665** | **0.057** | 0.000 | 260 | 186 | 0.45 | 24.6 |
+| subgoal-only k4 cd0.9 | final_pass | clean | 0.30 | 0.794 | **0.609** | **0.062** | 0.001 | 263 | 177 | 0.60 | 23.5 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 0.10 | 0.754 | **0.528** | **0.012** | 0.000 | 292 | 219 | 0.85 | 17.9 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 0.35 | 0.835 | **0.657** | **0.039** | 0.000 | 275 | 227 | 0.55 | 24.8 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 0.35 | 0.966 | **0.878** | **0.061** | 0.000 | 260 | 185 | 0.40 | 28.1 |
+| subgoal-only k8 cd0.9 | final_pass | clean | 0.30 | 0.971 | **0.875** | **0.058** | 0.000 | 262 | 172 | 0.55 | 28.9 |
 
 `steps→succ` is env steps to the first full-coverage frame, averaged over the
 episodes that got there. **`disc succ` is the column to quote** when time matters:
@@ -225,6 +249,126 @@ n=1 → n=64: mean **+4.0 px**, max **+10.8 px**.
 n=1 → n=64: mean **+2.8 px**, max **+12.7 px**.
 
 
+**subgoal-only k16 cd0.9 · final_pass · clean · step 10000 · K=16**
+
+| | n=1 | n=2 | n=4 | n=8 | ‖ n=16 |
+|---|---|---|---|---|---|
+| mean | -73.9 | -73.1 | -72.5 | -71.8 | -71.5 |
+| max  | -73.9 | -69.1 | -67.2 | -66.0 | -65.2 |
+
+n=1 → n=16: mean **+2.4 px**, max **+8.7 px**.
+
+
+**subgoal-only k16 cd0.9 · final_pass · clean · step 20000 · K=16**
+
+| | n=1 | n=2 | n=4 | n=8 | ‖ n=16 |
+|---|---|---|---|---|---|
+| mean | -69.3 | -68.2 | -67.4 | -66.7 | -66.3 |
+| max  | -69.3 | -64.7 | -62.7 | -61.7 | -60.9 |
+
+n=1 → n=16: mean **+3.0 px**, max **+8.4 px**.
+
+
+**subgoal-only k16 cd0.9 · final_pass · clean · step 60000 · K=16**
+
+| | n=1 | n=2 | n=4 | n=8 | ‖ n=16 |
+|---|---|---|---|---|---|
+| mean | -75.8 | -74.8 | -74.2 | -73.6 | -73.3 |
+| max  | -75.8 | -72.6 | -71.2 | -70.4 | -70.0 |
+
+n=1 → n=16: mean **+2.4 px**, max **+5.8 px**.
+
+
+**subgoal-only k16 cd0.9 · final_pass · clean · step 76000 · K=16**
+
+| | n=1 | n=2 | n=4 | n=8 | ‖ n=16 |
+|---|---|---|---|---|---|
+| mean | -78.5 | -77.6 | -76.9 | -76.3 | -76.1 |
+| max  | -78.5 | -75.2 | -74.0 | -73.3 | -73.0 |
+
+n=1 → n=16: mean **+2.4 px**, max **+5.5 px**.
+
+
+**subgoal-only k4 cd0.9 · final_pass · clean · step 10000 · K=4**
+
+| | n=1 | n=2 | ‖ n=4 |
+|---|---|---|---|
+| mean | -145.8 | -146.2 | -146.3 |
+| max  | -145.8 | -143.1 | -141.0 |
+
+n=1 → n=4: mean **-0.5 px**, max **+4.8 px**.
+
+
+**subgoal-only k4 cd0.9 · final_pass · clean · step 20000 · K=4**
+
+| | n=1 | n=2 | ‖ n=4 |
+|---|---|---|---|
+| mean | -101.4 | -101.1 | -100.7 |
+| max  | -101.4 | -98.5 | -96.6 |
+
+n=1 → n=4: mean **+0.7 px**, max **+4.8 px**.
+
+
+**subgoal-only k4 cd0.9 · final_pass · clean · step 60000 · K=4**
+
+| | n=1 | n=2 | ‖ n=4 |
+|---|---|---|---|
+| mean | -72.0 | -71.9 | -71.5 |
+| max  | -72.0 | -70.1 | -68.8 |
+
+n=1 → n=4: mean **+0.5 px**, max **+3.3 px**.
+
+
+**subgoal-only k4 cd0.9 · final_pass · clean · step 100000 · K=4**
+
+| | n=1 | n=2 | ‖ n=4 |
+|---|---|---|---|
+| mean | -74.7 | -74.4 | -74.2 |
+| max  | -74.7 | -72.9 | -71.8 |
+
+n=1 → n=4: mean **+0.5 px**, max **+2.9 px**.
+
+
+**subgoal-only k8 cd0.9 · final_pass · clean · step 10000 · K=8**
+
+| | n=1 | n=2 | n=4 | ‖ n=8 |
+|---|---|---|---|---|
+| mean | -89.9 | -89.0 | -88.2 | -87.8 |
+| max  | -89.9 | -85.5 | -83.2 | -82.0 |
+
+n=1 → n=8: mean **+2.0 px**, max **+7.9 px**.
+
+
+**subgoal-only k8 cd0.9 · final_pass · clean · step 20000 · K=8**
+
+| | n=1 | n=2 | n=4 | ‖ n=8 |
+|---|---|---|---|---|
+| mean | -73.8 | -72.7 | -71.9 | -71.6 |
+| max  | -73.8 | -69.6 | -67.9 | -66.9 |
+
+n=1 → n=8: mean **+2.2 px**, max **+6.9 px**.
+
+
+**subgoal-only k8 cd0.9 · final_pass · clean · step 60000 · K=8**
+
+| | n=1 | n=2 | n=4 | ‖ n=8 |
+|---|---|---|---|---|
+| mean | -51.3 | -50.4 | -49.7 | -49.3 |
+| max  | -51.3 | -48.5 | -47.3 | -46.8 |
+
+n=1 → n=8: mean **+2.0 px**, max **+4.6 px**.
+
+
+**subgoal-only k8 cd0.9 · final_pass · clean · step 100000 · K=8**
+
+| | n=1 | n=2 | n=4 | ‖ n=8 |
+|---|---|---|---|---|
+| mean | -55.4 | -54.6 | -54.0 | -53.5 |
+| max  | -55.4 | -53.1 | -52.0 | -51.3 |
+
+n=1 → n=8: mean **+1.9 px**, max **+4.1 px**.
+
+
 ## 3. The deployed sample (final-pass arms)
 
 Where the executed sample lands among the n candidates it was conditioned on.
@@ -243,6 +387,18 @@ mostly is not.
 |---|---|---|---|---|---|---|---|---|---|---|
 | subgoal-only | clean | 14000 | **19.8** | **20.8** | 32.0 | 0.121 | 0.130 | 0.006 | +0.35 | -6.45 |
 | subgoal-only | corrupt | 12000 | **25.8** | **23.9** | 32.0 | 0.094 | 0.105 | 0.014 | -0.34 | -10.19 |
+| subgoal-only k16 cd0.9 | clean | 10000 | **5.5** | **5.5** | 8.0 | 0.220 | 0.201 | 0.050 | +0.46 | -5.86 |
+| subgoal-only k16 cd0.9 | clean | 20000 | **5.4** | **5.3** | 8.0 | 0.241 | 0.239 | 0.044 | +0.21 | -5.12 |
+| subgoal-only k16 cd0.9 | clean | 60000 | **4.6** | **4.6** | 8.0 | 0.310 | 0.317 | 0.036 | +0.24 | -3.14 |
+| subgoal-only k16 cd0.9 | clean | 76000 | **4.7** | **4.7** | 8.0 | 0.325 | 0.327 | 0.031 | +0.15 | -2.92 |
+| subgoal-only k4 cd0.9 | clean | 10000 | **1.6** | **1.2** | 2.0 | 0.362 | 0.388 | 0.168 | -0.05 | -5.33 |
+| subgoal-only k4 cd0.9 | clean | 20000 | **1.4** | **1.2** | 2.0 | 0.394 | 0.414 | 0.171 | +0.54 | -3.58 |
+| subgoal-only k4 cd0.9 | clean | 60000 | **1.4** | **1.1** | 2.0 | 0.399 | 0.445 | 0.129 | +0.43 | -2.33 |
+| subgoal-only k4 cd0.9 | clean | 100000 | **1.2** | **1.0** | 2.0 | 0.440 | 0.487 | 0.126 | +0.41 | -2.06 |
+| subgoal-only k8 cd0.9 | clean | 10000 | **3.1** | **2.8** | 4.0 | 0.239 | 0.260 | 0.080 | +0.61 | -5.28 |
+| subgoal-only k8 cd0.9 | clean | 20000 | **2.6** | **2.5** | 4.0 | 0.283 | 0.290 | 0.082 | +0.55 | -4.10 |
+| subgoal-only k8 cd0.9 | clean | 60000 | **2.4** | **2.3** | 4.0 | 0.357 | 0.359 | 0.084 | +0.60 | -1.93 |
+| subgoal-only k8 cd0.9 | clean | 100000 | **2.4** | **2.3** | 4.0 | 0.362 | 0.376 | 0.066 | +0.40 | -1.85 |
 
 `P(beats argmax)` is the arm's thesis as a single number: how often the model's
 own synthesis beats the oracle pick it replaces.
@@ -259,6 +415,18 @@ is the width past which having a selector is worth more than having a better dra
 |---|---|---|---|---|---|---|---|---|
 | subgoal-only | clean | 0.508 | 0.314 | 0.166 | 0.073 | 0.033 | 0.014 | 0.006 |
 | subgoal-only | corrupt | 0.503 | 0.270 | 0.142 | 0.076 | 0.041 | 0.026 | 0.014 |
+| subgoal-only k16 cd0.9 | clean | 0.473 | 0.296 | 0.177 | 0.096 | 0.050 |
+| subgoal-only k16 cd0.9 | clean | 0.483 | 0.293 | 0.164 | 0.080 | 0.044 |
+| subgoal-only k16 cd0.9 | clean | 0.462 | 0.294 | 0.176 | 0.087 | 0.036 |
+| subgoal-only k16 cd0.9 | clean | 0.423 | 0.258 | 0.152 | 0.069 | 0.031 |
+| subgoal-only k4 cd0.9 | clean | 0.399 | 0.271 | 0.168 |
+| subgoal-only k4 cd0.9 | clean | 0.433 | 0.301 | 0.171 |
+| subgoal-only k4 cd0.9 | clean | 0.386 | 0.247 | 0.129 |
+| subgoal-only k4 cd0.9 | clean | 0.381 | 0.234 | 0.126 |
+| subgoal-only k8 cd0.9 | clean | 0.492 | 0.295 | 0.174 | 0.080 |
+| subgoal-only k8 cd0.9 | clean | 0.472 | 0.308 | 0.176 | 0.082 |
+| subgoal-only k8 cd0.9 | clean | 0.473 | 0.275 | 0.153 | 0.084 |
+| subgoal-only k8 cd0.9 | clean | 0.471 | 0.303 | 0.148 | 0.066 |
 
 and the same in pixels — how far the deployed sample sits below best-of-n:
 
@@ -267,6 +435,18 @@ and the same in pixels — how far the deployed sample sits below best-of-n:
 |---|---|---|---|---|---|---|---|---|
 | subgoal-only | clean | +4.4 | -1.7 | -3.9 | -4.9 | -5.4 | -5.9 | -6.4 |
 | subgoal-only | corrupt | +2.5 | -3.5 | -5.6 | -7.1 | -8.0 | -9.0 | -10.2 |
+| subgoal-only k16 cd0.9 | clean | +2.9 | -1.9 | -3.8 | -5.0 | -5.9 |
+| subgoal-only k16 cd0.9 | clean | +3.2 | -1.4 | -3.3 | -4.3 | -5.1 |
+| subgoal-only k16 cd0.9 | clean | +2.7 | -0.6 | -2.0 | -2.7 | -3.1 |
+| subgoal-only k16 cd0.9 | clean | +2.6 | -0.7 | -1.9 | -2.6 | -2.9 |
+| subgoal-only k4 cd0.9 | clean | -0.5 | -3.2 | -5.3 |
+| subgoal-only k4 cd0.9 | clean | +1.3 | -1.7 | -3.6 |
+| subgoal-only k4 cd0.9 | clean | +0.9 | -1.0 | -2.3 |
+| subgoal-only k4 cd0.9 | clean | +0.9 | -0.9 | -2.1 |
+| subgoal-only k8 cd0.9 | clean | +2.6 | -1.7 | -4.1 | -5.3 |
+| subgoal-only k8 cd0.9 | clean | +2.8 | -1.4 | -3.1 | -4.1 |
+| subgoal-only k8 cd0.9 | clean | +2.6 | -0.2 | -1.4 | -1.9 |
+| subgoal-only k8 cd0.9 | clean | +2.3 | -0.1 | -1.2 | -1.8 |
 
 ### Every candidate slot, analysed the same way
 
@@ -347,6 +527,102 @@ null in §0.
 | rank | 31.4 | 24.4 | 22.9 | 22.9 | 24.0 | 24.2 | 23.5 | 24.4 | 23.9 | **25.8** |
 | P(best) | 0.126 | 0.128 | 0.117 | 0.102 | 0.094 | 0.104 | 0.116 | 0.091 | 0.105 | **0.094** |
 
+**subgoal-only k16 cd0.9 · clean · step 10000** — baseline rank **5.5**, baseline P(best) **0.201** (naive uniform would say 7.5 / 0.062)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | 15 | **final** |
+|---|---|---|---|---|---|---|---|
+| rank | 7.5 | 6.2 | 6.1 | 5.8 | 5.0 | 5.2 | **5.5** |
+| P(best) | 0.232 | 0.191 | 0.187 | 0.194 | 0.212 | 0.218 | **0.220** |
+
+**subgoal-only k16 cd0.9 · clean · step 20000** — baseline rank **5.3**, baseline P(best) **0.239** (naive uniform would say 7.5 / 0.062)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | 15 | **final** |
+|---|---|---|---|---|---|---|---|
+| rank | 7.3 | 5.8 | 5.7 | 5.5 | 4.8 | 5.1 | **5.4** |
+| P(best) | 0.264 | 0.246 | 0.222 | 0.232 | 0.239 | 0.241 | **0.241** |
+
+**subgoal-only k16 cd0.9 · clean · step 60000** — baseline rank **4.6**, baseline P(best) **0.317** (naive uniform would say 7.5 / 0.062)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | 15 | **final** |
+|---|---|---|---|---|---|---|---|
+| rank | 6.6 | 5.2 | 5.1 | 4.6 | 4.1 | 4.2 | **4.6** |
+| P(best) | 0.396 | 0.326 | 0.297 | 0.307 | 0.317 | 0.320 | **0.310** |
+
+**subgoal-only k16 cd0.9 · clean · step 76000** — baseline rank **4.7**, baseline P(best) **0.327** (naive uniform would say 7.5 / 0.062)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | 15 | **final** |
+|---|---|---|---|---|---|---|---|
+| rank | 6.4 | 5.1 | 5.0 | 4.9 | 4.4 | 4.3 | **4.7** |
+| P(best) | 0.392 | 0.327 | 0.304 | 0.307 | 0.317 | 0.332 | **0.325** |
+
+**subgoal-only k4 cd0.9 · clean · step 10000** — baseline rank **1.2**, baseline P(best) **0.388** (naive uniform would say 1.5 / 0.250)
+
+
+| slot | 0 | 1 | 2 | 3 | **final** |
+|---|---|---|---|---|---|
+| rank | 1.2 | 1.2 | 1.2 | 1.2 | **1.6** |
+| P(best) | 0.383 | 0.397 | 0.384 | 0.387 | **0.362** |
+
+**subgoal-only k4 cd0.9 · clean · step 20000** — baseline rank **1.2**, baseline P(best) **0.414** (naive uniform would say 1.5 / 0.250)
+
+
+| slot | 0 | 1 | 2 | 3 | **final** |
+|---|---|---|---|---|---|
+| rank | 1.3 | 1.2 | 1.1 | 1.1 | **1.4** |
+| P(best) | 0.374 | 0.422 | 0.424 | 0.434 | **0.394** |
+
+**subgoal-only k4 cd0.9 · clean · step 60000** — baseline rank **1.1**, baseline P(best) **0.445** (naive uniform would say 1.5 / 0.250)
+
+
+| slot | 0 | 1 | 2 | 3 | **final** |
+|---|---|---|---|---|---|
+| rank | 1.1 | 1.1 | 1.0 | 1.0 | **1.4** |
+| P(best) | 0.436 | 0.430 | 0.442 | 0.474 | **0.399** |
+
+**subgoal-only k4 cd0.9 · clean · step 100000** — baseline rank **1.0**, baseline P(best) **0.487** (naive uniform would say 1.5 / 0.250)
+
+
+| slot | 0 | 1 | 2 | 3 | **final** |
+|---|---|---|---|---|---|
+| rank | 1.1 | 0.9 | 1.0 | 0.9 | **1.2** |
+| P(best) | 0.474 | 0.489 | 0.480 | 0.503 | **0.440** |
+
+**subgoal-only k8 cd0.9 · clean · step 10000** — baseline rank **2.8**, baseline P(best) **0.260** (naive uniform would say 3.5 / 0.125)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | **final** |
+|---|---|---|---|---|---|---|
+| rank | 3.4 | 2.8 | 2.6 | 2.7 | 2.6 | **3.1** |
+| P(best) | 0.247 | 0.269 | 0.272 | 0.247 | 0.278 | **0.239** |
+
+**subgoal-only k8 cd0.9 · clean · step 20000** — baseline rank **2.5**, baseline P(best) **0.290** (naive uniform would say 3.5 / 0.125)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | **final** |
+|---|---|---|---|---|---|---|
+| rank | 3.3 | 2.7 | 2.3 | 2.4 | 2.4 | **2.6** |
+| P(best) | 0.278 | 0.269 | 0.322 | 0.282 | 0.298 | **0.283** |
+
+**subgoal-only k8 cd0.9 · clean · step 60000** — baseline rank **2.3**, baseline P(best) **0.359** (naive uniform would say 3.5 / 0.125)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | **final** |
+|---|---|---|---|---|---|---|
+| rank | 3.2 | 2.4 | 2.2 | 2.2 | 2.0 | **2.4** |
+| P(best) | 0.348 | 0.359 | 0.351 | 0.372 | 0.383 | **0.357** |
+
+**subgoal-only k8 cd0.9 · clean · step 100000** — baseline rank **2.3**, baseline P(best) **0.376** (naive uniform would say 3.5 / 0.125)
+
+
+| slot | 0 | 1 | 2 | 3 | 7 | **final** |
+|---|---|---|---|---|---|---|
+| rank | 3.2 | 2.5 | 2.3 | 2.2 | 2.0 | **2.4** |
+| P(best) | 0.362 | 0.359 | 0.371 | 0.379 | 0.379 | **0.362** |
+
 ## 4. Is the ordering informative? — permutation test
 
 | arm | obs | step | steps | **excess records** | (vs i.i.d.) | OLS slope px/idx | Spearman ρ | P(argmax ≥ n/2) |
@@ -359,6 +635,18 @@ null in §0.
 | value | corrupt | 15000 | 511 | **+0.09** | -1.46 | +0.007 ± 0.005 | +0.004 | 0.304 |
 | subgoal-only | clean | 14000 | 673 | **-0.10** | -1.04 | +0.009 ± 0.003 | -0.001 | 0.321 |
 | subgoal-only | corrupt | 12000 | 718 | **-0.07** | -0.82 | +0.002 ± 0.003 | -0.006 | 0.385 |
+| subgoal-only k16 cd0.9 | clean | 10000 | 660 | **+0.18** | -0.32 | +0.105 ± 0.026 | +0.068 | 0.347 |
+| subgoal-only k16 cd0.9 | clean | 20000 | 635 | **+0.17** | -0.33 | +0.123 ± 0.022 | +0.072 | 0.340 |
+| subgoal-only k16 cd0.9 | clean | 60000 | 490 | **+0.25** | -0.23 | +0.095 ± 0.017 | +0.067 | 0.281 |
+| subgoal-only k16 cd0.9 | clean | 76000 | 484 | **+0.14** | -0.35 | +0.082 ± 0.016 | +0.062 | 0.284 |
+| subgoal-only k4 cd0.9 | clean | 10000 | 674 | **+0.01** | -0.11 | -0.182 ± 0.224 | -0.028 | 0.380 |
+| subgoal-only k4 cd0.9 | clean | 20000 | 629 | **+0.12** | -0.00 | +0.356 ± 0.197 | +0.069 | 0.397 |
+| subgoal-only k4 cd0.9 | clean | 60000 | 520 | **+0.07** | -0.05 | +0.363 ± 0.137 | +0.064 | 0.377 |
+| subgoal-only k4 cd0.9 | clean | 100000 | 477 | **+0.07** | -0.02 | +0.226 ± 0.157 | +0.033 | 0.339 |
+| subgoal-only k8 cd0.9 | clean | 10000 | 683 | **+0.07** | -0.18 | +0.235 ± 0.076 | +0.055 | 0.373 |
+| subgoal-only k8 cd0.9 | clean | 20000 | 608 | **+0.22** | -0.06 | +0.254 ± 0.069 | +0.076 | 0.374 |
+| subgoal-only k8 cd0.9 | clean | 60000 | 529 | **+0.20** | -0.10 | +0.249 ± 0.041 | +0.113 | 0.319 |
+| subgoal-only k8 cd0.9 | clean | 100000 | 505 | **+0.21** | -0.02 | +0.252 ± 0.040 | +0.136 | 0.342 |
 
 `steps` counts control steps with non-zero spread; degenerate steps (every candidate
 identical) carry no ordering information and are excluded from the record test.
@@ -379,12 +667,48 @@ the discarded analytic comparison, kept only to show it flips the sign.
 | value | corrupt | 15000 | +0.08 px | +10.0 px | 13.6 → 8.2 |
 | subgoal-only | clean | 14000 | +0.08 px | +10.8 px | 14.2 → 5.4 |
 | subgoal-only | corrupt | 12000 | -0.12 px | +12.7 px | 13.5 → 6.7 |
+| subgoal-only k16 cd0.9 | clean | 10000 | +0.40 px | +8.7 px | 11.4 → 5.9 |
+| subgoal-only k16 cd0.9 | clean | 20000 | +0.18 px | +8.4 px | 10.8 → 5.0 |
+| subgoal-only k16 cd0.9 | clean | 60000 | +0.46 px | +5.8 px | 9.0 → 3.3 |
+| subgoal-only k16 cd0.9 | clean | 76000 | +0.17 px | +5.5 px | 9.4 → 3.2 |
+| subgoal-only k4 cd0.9 | clean | 10000 | -0.18 px | +4.8 px | 6.8 → 7.1 |
+| subgoal-only k4 cd0.9 | clean | 20000 | +0.32 px | +4.8 px | 6.4 → 6.2 |
+| subgoal-only k4 cd0.9 | clean | 60000 | +0.49 px | +3.3 px | 4.7 → 3.7 |
+| subgoal-only k4 cd0.9 | clean | 100000 | +0.31 px | +2.9 px | 5.4 → 4.8 |
+| subgoal-only k8 cd0.9 | clean | 10000 | +0.64 px | +7.9 px | 9.2 → 6.0 |
+| subgoal-only k8 cd0.9 | clean | 20000 | +0.53 px | +6.9 px | 9.7 → 5.2 |
+| subgoal-only k8 cd0.9 | clean | 60000 | +0.57 px | +4.6 px | 6.2 → 2.7 |
+| subgoal-only k8 cd0.9 | clean | 100000 | +0.63 px | +4.1 px | 6.3 → 2.9 |
 
 ### Did the weighting distinguish the deployed sample? — measured, no
 
 * **subgoal-only clean step 14000**: mean rank **19.8 of 64** against a tie-aware baseline of **20.8** — a difference of +1.0 ranks. It is a maximizer 12.1% of the time against 13.0% for a typical slot, and sits +0.35 px from the step mean.
 
 * **subgoal-only corrupt step 12000**: mean rank **25.8 of 64** against a tie-aware baseline of **23.9** — a difference of -1.9 ranks. It is a maximizer 9.4% of the time against 10.5% for a typical slot, and sits -0.34 px from the step mean.
+
+* **subgoal-only k16 cd0.9 clean step 10000**: mean rank **5.5 of 16** against a tie-aware baseline of **5.5** — a difference of -0.0 ranks. It is a maximizer 22.0% of the time against 20.1% for a typical slot, and sits +0.46 px from the step mean.
+
+* **subgoal-only k16 cd0.9 clean step 20000**: mean rank **5.4 of 16** against a tie-aware baseline of **5.3** — a difference of -0.1 ranks. It is a maximizer 24.1% of the time against 23.9% for a typical slot, and sits +0.21 px from the step mean.
+
+* **subgoal-only k16 cd0.9 clean step 60000**: mean rank **4.6 of 16** against a tie-aware baseline of **4.6** — a difference of -0.0 ranks. It is a maximizer 31.0% of the time against 31.7% for a typical slot, and sits +0.24 px from the step mean.
+
+* **subgoal-only k16 cd0.9 clean step 76000**: mean rank **4.7 of 16** against a tie-aware baseline of **4.7** — a difference of -0.0 ranks. It is a maximizer 32.5% of the time against 32.7% for a typical slot, and sits +0.15 px from the step mean.
+
+* **subgoal-only k4 cd0.9 clean step 10000**: mean rank **1.6 of 4** against a tie-aware baseline of **1.2** — a difference of -0.4 ranks. It is a maximizer 36.2% of the time against 38.8% for a typical slot, and sits -0.05 px from the step mean.
+
+* **subgoal-only k4 cd0.9 clean step 20000**: mean rank **1.4 of 4** against a tie-aware baseline of **1.2** — a difference of -0.3 ranks. It is a maximizer 39.4% of the time against 41.4% for a typical slot, and sits +0.54 px from the step mean.
+
+* **subgoal-only k4 cd0.9 clean step 60000**: mean rank **1.4 of 4** against a tie-aware baseline of **1.1** — a difference of -0.3 ranks. It is a maximizer 39.9% of the time against 44.5% for a typical slot, and sits +0.43 px from the step mean.
+
+* **subgoal-only k4 cd0.9 clean step 100000**: mean rank **1.2 of 4** against a tie-aware baseline of **1.0** — a difference of -0.2 ranks. It is a maximizer 44.0% of the time against 48.7% for a typical slot, and sits +0.41 px from the step mean.
+
+* **subgoal-only k8 cd0.9 clean step 10000**: mean rank **3.1 of 8** against a tie-aware baseline of **2.8** — a difference of -0.3 ranks. It is a maximizer 23.9% of the time against 26.0% for a typical slot, and sits +0.61 px from the step mean.
+
+* **subgoal-only k8 cd0.9 clean step 20000**: mean rank **2.6 of 8** against a tie-aware baseline of **2.5** — a difference of -0.1 ranks. It is a maximizer 28.3% of the time against 29.0% for a typical slot, and sits +0.55 px from the step mean.
+
+* **subgoal-only k8 cd0.9 clean step 60000**: mean rank **2.4 of 8** against a tie-aware baseline of **2.3** — a difference of -0.0 ranks. It is a maximizer 35.7% of the time against 35.9% for a typical slot, and sits +0.60 px from the step mean.
+
+* **subgoal-only k8 cd0.9 clean step 100000**: mean rank **2.4 of 8** against a tie-aware baseline of **2.3** — a difference of -0.1 ranks. It is a maximizer 36.2% of the time against 37.6% for a typical slot, and sits +0.40 px from the step mean.
 
 
 So the deployed sample is, to within a rank out of 64, **a typical candidate**.
@@ -402,6 +726,30 @@ training-time `action_value_final − action_value` metric sitting at ~0 through
 * **subgoal-only clean**: beats the oracle argmax **0.6%** of the time, and sits 6.4 px below it on average.
 
 * **subgoal-only corrupt**: beats the oracle argmax **1.4%** of the time, and sits 10.2 px below it on average.
+
+* **subgoal-only k16 cd0.9 clean**: beats the oracle argmax **5.0%** of the time, and sits 5.9 px below it on average.
+
+* **subgoal-only k16 cd0.9 clean**: beats the oracle argmax **4.4%** of the time, and sits 5.1 px below it on average.
+
+* **subgoal-only k16 cd0.9 clean**: beats the oracle argmax **3.6%** of the time, and sits 3.1 px below it on average.
+
+* **subgoal-only k16 cd0.9 clean**: beats the oracle argmax **3.1%** of the time, and sits 2.9 px below it on average.
+
+* **subgoal-only k4 cd0.9 clean**: beats the oracle argmax **16.8%** of the time, and sits 5.3 px below it on average.
+
+* **subgoal-only k4 cd0.9 clean**: beats the oracle argmax **17.1%** of the time, and sits 3.6 px below it on average.
+
+* **subgoal-only k4 cd0.9 clean**: beats the oracle argmax **12.9%** of the time, and sits 2.3 px below it on average.
+
+* **subgoal-only k4 cd0.9 clean**: beats the oracle argmax **12.6%** of the time, and sits 2.1 px below it on average.
+
+* **subgoal-only k8 cd0.9 clean**: beats the oracle argmax **8.0%** of the time, and sits 5.3 px below it on average.
+
+* **subgoal-only k8 cd0.9 clean**: beats the oracle argmax **8.2%** of the time, and sits 4.1 px below it on average.
+
+* **subgoal-only k8 cd0.9 clean**: beats the oracle argmax **8.4%** of the time, and sits 1.9 px below it on average.
+
+* **subgoal-only k8 cd0.9 clean**: beats the oracle argmax **6.6%** of the time, and sits 1.8 px below it on average.
 
 
 Being a good draw is not the same as being the best of n draws, and the gap does
@@ -1249,4 +1597,716 @@ all the candidates in the row, not one of them.
 | 63 | -82.6 | 4.57 | -0.12 | 0.49 | 6.7 | -72.7 | 0.019 | 0.014 | 0.016 | 0.019 |
 
 ![subgoal-only · corrupt=True · step 12000](subgoal-only_corrupt-True_step12000_n64/candidate_scores.png)
+
+
+---
+
+## subgoal-only k16 cd0.9 · corrupt=False · step 10000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k16_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0010000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.15
+
+
+### Training weights (K=16)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order (first 12 of 16, plus the last). `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 15 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -138.0\* | -146.4 | -146.3 | -141.4 | -141.7 | -140.8 | -148.3 | -148.7 | -141.2 | -152.2 | -142.5 | -142.8 | -144.4 | 0 | **-144.0** |
+| ep3 t=5 | -129.1 | -126.0 | -118.1 | -118.5 | -111.5\* | -126.3 | -118.9 | -111.7 | -116.8 | -112.1 | -119.0 | -112.3 | -114.8 | 4 | **-114.6** |
+| ep7 t=10 | -124.8\* | -135.0 | -135.0 | -135.0 | -135.0 | -135.0 | -135.0 | -135.0 | -135.0 | -131.5 | -135.0 | -135.0 | -135.0 | 0 | **-135.0** |
+| ep8 t=15 | -131.2 | -125.6 | -131.6 | -131.0 | -128.0 | -121.7 | -113.9 | -142.2 | -120.9 | -130.2 | -126.1 | -113.5 | -109.7\* | 15 | **-114.1** |
+| ep51 t=20 | -8.1 | -25.6 | -8.1 | -4.5 | -8.1 | -4.6 | -7.9 | -8.1 | -18.7 | -5.6 | -18.8 | -6.0 | -3.7\* | 15 | **-6.0** |
+| ep24 t=26 | -8.9\* | -14.5 | -14.5 | -14.5 | -11.6 | -14.5 | -16.6 | -14.5 | -14.5 | -14.5 | -14.5 | -14.5 | -14.5 | 0 | **-11.9** |
+| ep3 t=32 | -23.8\* | -131.0 | -35.8 | -101.6 | -28.0 | -23.8 | -100.2 | -23.8 | -83.6 | -38.0 | -91.3 | -23.8 | -23.8 | 0 | **-23.8** |
+| ep75 t=37 | -85.8 | -65.5 | -76.9 | -57.7 | -52.4 | -43.8\* | -46.8 | -57.1 | -94.6 | -82.9 | -53.9 | -82.9 | -45.2 | 5 | **-62.9** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -73.9 | 4.22 | -2.42 | 0.84 | 11.4 | -73.9 | 1.000 | 1.000 | 1.000 | 0.232 |
+| 1 | -72.3 | 4.33 | -0.81 | 0.59 | 8.1 | -69.1 | 0.524 | 0.393 | 0.500 | 0.102 |
+| 2 | -71.9 | 4.32 | -0.41 | 0.48 | 6.4 | -67.9 | 0.292 | 0.257 | 0.333 | 0.062 |
+| 3 | -71.8 | 4.36 | -0.33 | 0.47 | 6.3 | -67.2 | 0.226 | 0.194 | 0.250 | 0.061 |
+| 4 | -71.3 | 4.34 | +0.23 | 0.44 | 6.0 | -66.7 | 0.167 | 0.157 | 0.200 | 0.057 |
+| 5 | -71.4 | 4.36 | +0.12 | 0.40 | 5.4 | -66.4 | 0.133 | 0.132 | 0.167 | 0.048 |
+| 6 | -71.3 | 4.34 | +0.24 | 0.38 | 5.2 | -66.2 | 0.117 | 0.112 | 0.143 | 0.041 |
+| 7 | -70.6 | 4.35 | +0.93 | 0.41 | 5.5 | -66.0 | 0.092 | 0.099 | 0.125 | 0.050 |
+| 8 | -71.3 | 4.35 | +0.24 | 0.46 | 6.3 | -65.9 | 0.073 | 0.089 | 0.111 | 0.042 |
+| 9 | -71.3 | 4.38 | +0.23 | 0.47 | 6.4 | -65.7 | 0.100 | 0.081 | 0.100 | 0.051 |
+| 10 | -71.4 | 4.34 | +0.09 | 0.42 | 5.6 | -65.6 | 0.064 | 0.075 | 0.091 | 0.035 |
+| 11 | -70.8 | 4.35 | +0.74 | 0.42 | 5.7 | -65.5 | 0.064 | 0.069 | 0.083 | 0.045 |
+| 12 | -71.3 | 4.37 | +0.17 | 0.53 | 7.2 | -65.4 | 0.067 | 0.063 | 0.077 | 0.045 |
+| 13 | -70.9 | 4.33 | +0.60 | 0.40 | 5.4 | -65.3 | 0.059 | 0.058 | 0.071 | 0.050 |
+| 14 | -71.5 | 4.37 | -0.01 | 0.42 | 5.7 | -65.2 | 0.033 | 0.056 | 0.067 | 0.027 |
+| 15 | -71.1 | 4.34 | +0.40 | 0.43 | 5.9 | -65.2 | 0.055 | 0.052 | 0.062 | 0.051 |
+
+![subgoal-only k16 cd0.9 · corrupt=False · step 10000](subgoal-only_k16_cd0.9_corrupt-False_step10000_n16/candidate_scores.png)
+
+
+---
+
+## subgoal-only k16 cd0.9 · corrupt=False · step 20000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k16_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0020000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.20
+
+
+### Training weights (K=16)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order (first 12 of 16, plus the last). `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 15 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -138.7\* | -146.6 | -147.2 | -142.9 | -144.0 | -142.3 | -150.7 | -151.2 | -142.9 | -154.3 | -144.0 | -153.5 | -149.5 | 0 | **-145.2** |
+| ep3 t=5 | -127.8 | -129.4 | -128.7 | -128.7 | -125.5 | -136.1 | -129.8 | -124.8\* | -128.9 | -127.8 | -129.5 | -126.6 | -126.7 | 7 | **-126.1** |
+| ep3 t=10 | -76.1 | -70.7 | -71.1 | -66.7 | -70.1 | -69.8 | -70.2 | -65.9\* | -69.5 | -69.2 | -70.4 | -70.1 | -70.4 | 7 | **-67.7** |
+| ep3 t=15 | -51.8 | -51.8 | -51.8 | -51.8 | -51.8 | -51.8 | -51.8 | -51.3\* | -51.8 | -51.8 | -51.8 | -51.8 | -51.8 | 7 | **-51.8** |
+| ep29 t=20 | -163.8\* | -171.6 | -166.9 | -174.8 | -176.1 | -176.1 | -176.1 | -176.1 | -176.1 | -176.1 | -176.1 | -173.6 | -174.1 | 0 | **-176.1** |
+| ep70 t=25 | -125.9 | -125.6 | -125.8 | -124.9 | -124.7 | -125.3 | -125.3 | -125.7 | -125.5 | -125.6 | -125.2 | -125.9 | -124.4 | 12 | **-124.8** |
+| ep46 t=31 | -80.0 | -99.6 | -73.8 | -65.1 | -70.4 | -59.4 | -51.8 | -86.9 | -49.7 | -71.5 | -49.9 | -56.8 | -48.8 | 12 | **-50.2** |
+| ep70 t=37 | -94.4\* | -107.2 | -119.1 | -120.2 | -109.3 | -116.1 | -118.9 | -102.9 | -120.2 | -108.6 | -120.2 | -102.8 | -120.2 | 0 | **-120.2** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -69.3 | 4.27 | -3.03 | 0.80 | 10.8 | -69.3 | 1.000 | 1.000 | 1.000 | 0.264 |
+| 1 | -67.0 | 4.41 | -0.70 | 0.50 | 6.8 | -64.7 | 0.523 | 0.389 | 0.500 | 0.123 |
+| 2 | -66.7 | 4.42 | -0.38 | 0.44 | 5.9 | -63.4 | 0.285 | 0.255 | 0.333 | 0.056 |
+| 3 | -66.5 | 4.42 | -0.25 | 0.42 | 5.7 | -62.7 | 0.208 | 0.194 | 0.250 | 0.050 |
+| 4 | -66.2 | 4.43 | +0.13 | 0.37 | 5.0 | -62.4 | 0.175 | 0.158 | 0.200 | 0.057 |
+| 5 | -65.9 | 4.44 | +0.37 | 0.34 | 4.6 | -62.1 | 0.128 | 0.132 | 0.167 | 0.038 |
+| 6 | -66.3 | 4.42 | -0.04 | 0.36 | 4.8 | -61.9 | 0.107 | 0.113 | 0.143 | 0.034 |
+| 7 | -65.6 | 4.42 | +0.64 | 0.31 | 4.3 | -61.7 | 0.093 | 0.100 | 0.125 | 0.038 |
+| 8 | -66.1 | 4.45 | +0.20 | 0.41 | 5.6 | -61.6 | 0.109 | 0.089 | 0.111 | 0.056 |
+| 9 | -65.7 | 4.44 | +0.57 | 0.33 | 4.4 | -61.4 | 0.083 | 0.082 | 0.100 | 0.044 |
+| 10 | -66.0 | 4.43 | +0.31 | 0.34 | 4.6 | -61.4 | 0.058 | 0.074 | 0.091 | 0.034 |
+| 11 | -65.7 | 4.43 | +0.63 | 0.32 | 4.3 | -61.3 | 0.068 | 0.068 | 0.083 | 0.044 |
+| 12 | -65.8 | 4.44 | +0.52 | 0.32 | 4.3 | -61.2 | 0.055 | 0.063 | 0.077 | 0.036 |
+| 13 | -65.8 | 4.44 | +0.44 | 0.32 | 4.3 | -61.1 | 0.072 | 0.058 | 0.071 | 0.051 |
+| 14 | -65.9 | 4.43 | +0.42 | 0.36 | 4.8 | -61.0 | 0.043 | 0.056 | 0.067 | 0.037 |
+| 15 | -66.1 | 4.43 | +0.18 | 0.37 | 5.0 | -60.9 | 0.043 | 0.051 | 0.062 | 0.038 |
+
+![subgoal-only k16 cd0.9 · corrupt=False · step 20000](subgoal-only_k16_cd0.9_corrupt-False_step20000_n16/candidate_scores.png)
+
+
+---
+
+## subgoal-only k16 cd0.9 · corrupt=False · step 60000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k16_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0060000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.55
+
+
+### Training weights (K=16)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order (first 12 of 16, plus the last). `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 15 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -143.5\* | -148.4 | -148.7 | -146.2 | -147.0 | -144.2 | -151.4 | -149.6 | -146.2 | -153.8 | -146.5 | -146.8 | -147.6 | 0 | **-148.0** |
+| ep29 t=4 | -171.9\* | -178.1 | -173.6 | -178.0 | -178.1 | -178.1 | -178.1 | -178.1 | -178.1 | -178.1 | -178.1 | -178.1 | -176.5 | 0 | **-178.1** |
+| ep56 t=8 | -26.9\* | -27.3 | -27.0 | -27.0 | -28.5 | -27.2 | -27.2 | -27.5 | -27.2 | -27.1 | -26.9 | -27.0 | -27.0 | 0 | **-27.1** |
+| ep20 t=13 | -54.2 | -51.6\* | -53.6 | -55.0 | -55.0 | -52.6 | -54.5 | -51.8 | -53.5 | -55.4 | -55.8 | -55.0 | -52.4 | 1 | **-54.6** |
+| ep8 t=18 | -49.4\* | -50.3 | -50.3 | -50.4 | -50.1 | -50.2 | -49.5 | -49.9 | -50.2 | -50.3 | -50.1 | -50.2 | -49.9 | 0 | **-50.4** |
+| ep46 t=23 | -11.2\* | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | -11.2 | 0 | **-11.2** |
+| ep67 t=29 | -186.5\* | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | -186.5 | 0 | **-186.5** |
+| ep70 t=37 | -122.6 | -122.6 | -125.7 | -122.9 | -122.1 | -121.3\* | -121.6 | -121.3 | -121.3 | -121.3 | -123.3 | -121.3 | -121.3 | 5 | **-121.3** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -75.8 | 5.00 | -2.42 | 0.71 | 9.0 | -75.8 | 1.000 | 1.000 | 1.000 | 0.396 |
+| 1 | -73.9 | 5.12 | -0.57 | 0.38 | 4.8 | -72.6 | 0.531 | 0.389 | 0.500 | 0.102 |
+| 2 | -73.9 | 5.12 | -0.52 | 0.37 | 4.8 | -71.7 | 0.296 | 0.257 | 0.333 | 0.040 |
+| 3 | -73.3 | 5.13 | +0.01 | 0.30 | 3.8 | -71.2 | 0.251 | 0.192 | 0.250 | 0.042 |
+| 4 | -73.0 | 5.13 | +0.40 | 0.24 | 3.1 | -70.8 | 0.208 | 0.157 | 0.200 | 0.045 |
+| 5 | -73.3 | 5.15 | +0.09 | 0.31 | 4.0 | -70.6 | 0.129 | 0.134 | 0.167 | 0.019 |
+| 6 | -73.0 | 5.13 | +0.37 | 0.22 | 2.8 | -70.5 | 0.133 | 0.115 | 0.143 | 0.037 |
+| 7 | -73.0 | 5.12 | +0.40 | 0.20 | 2.6 | -70.4 | 0.090 | 0.101 | 0.125 | 0.037 |
+| 8 | -73.0 | 5.13 | +0.33 | 0.21 | 2.7 | -70.3 | 0.073 | 0.091 | 0.111 | 0.031 |
+| 9 | -73.2 | 5.13 | +0.16 | 0.23 | 2.9 | -70.2 | 0.090 | 0.082 | 0.100 | 0.042 |
+| 10 | -73.2 | 5.14 | +0.16 | 0.26 | 3.3 | -70.2 | 0.067 | 0.075 | 0.091 | 0.031 |
+| 11 | -73.1 | 5.13 | +0.26 | 0.22 | 2.8 | -70.1 | 0.069 | 0.070 | 0.083 | 0.032 |
+| 12 | -73.0 | 5.13 | +0.40 | 0.26 | 3.3 | -70.1 | 0.065 | 0.066 | 0.077 | 0.039 |
+| 13 | -73.1 | 5.14 | +0.22 | 0.25 | 3.2 | -70.0 | 0.041 | 0.061 | 0.071 | 0.024 |
+| 14 | -73.1 | 5.14 | +0.26 | 0.25 | 3.2 | -70.0 | 0.065 | 0.057 | 0.067 | 0.045 |
+| 15 | -72.9 | 5.13 | +0.46 | 0.26 | 3.3 | -70.0 | 0.047 | 0.055 | 0.062 | 0.037 |
+
+![subgoal-only k16 cd0.9 · corrupt=False · step 60000](subgoal-only_k16_cd0.9_corrupt-False_step60000_n16/candidate_scores.png)
+
+
+---
+
+## subgoal-only k16 cd0.9 · corrupt=False · step 76000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k16_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0076000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=16 split=test episodes=20 success=0.40
+
+
+### Training weights (K=16)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order (first 12 of 16, plus the last). `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 15 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -141.4\* | -145.2 | -145.6 | -143.7 | -144.5 | -142.5 | -148.1 | -147.0 | -143.5 | -150.2 | -144.3 | -145.1 | -145.5 | 0 | **-145.7** |
+| ep26 t=4 | -65.3 | -58.9 | -58.6 | -59.7 | -59.7 | -60.4 | -59.3 | -59.6 | -59.7 | -59.8 | -60.1 | -59.0 | -58.8 | 14 | **-59.5** |
+| ep51 t=8 | -2.7\* | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | -2.7 | 0 | **-2.7** |
+| ep7 t=13 | -67.1 | -65.8\* | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | -67.1 | 1 | **-67.1** |
+| ep70 t=17 | -132.6 | -131.5\* | -132.2 | -131.5 | -132.0 | -132.4 | -132.7 | -132.7 | -132.1 | -132.7 | -132.4 | -132.7 | -131.5 | 1 | **-132.8** |
+| ep38 t=23 | -99.5 | -97.9 | -99.2 | -97.3 | -97.9 | -95.0\* | -98.2 | -98.0 | -98.7 | -97.2 | -97.7 | -98.3 | -99.6 | 5 | **-98.3** |
+| ep38 t=30 | -84.7 | -93.0 | -79.7\* | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | -79.7 | 2 | **-79.7** |
+| ep70 t=37 | -125.3\* | -126.7 | -126.9 | -127.5 | -126.5 | -126.9 | -126.5 | -127.9 | -127.3 | -126.7 | -126.0 | -126.9 | -127.5 | 0 | **-126.9** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -78.5 | 5.00 | -2.43 | 0.75 | 9.4 | -78.5 | 1.000 | 1.000 | 1.000 | 0.392 |
+| 1 | -76.6 | 5.07 | -0.53 | 0.36 | 4.6 | -75.2 | 0.531 | 0.394 | 0.500 | 0.103 |
+| 2 | -76.3 | 5.06 | -0.24 | 0.27 | 3.4 | -74.4 | 0.291 | 0.258 | 0.333 | 0.044 |
+| 3 | -76.1 | 5.08 | -0.05 | 0.26 | 3.3 | -74.0 | 0.209 | 0.195 | 0.250 | 0.041 |
+| 4 | -75.6 | 5.08 | +0.46 | 0.22 | 2.8 | -73.7 | 0.194 | 0.159 | 0.200 | 0.051 |
+| 5 | -75.9 | 5.09 | +0.22 | 0.22 | 2.8 | -73.6 | 0.134 | 0.131 | 0.167 | 0.039 |
+| 6 | -76.0 | 5.08 | +0.07 | 0.25 | 3.1 | -73.4 | 0.093 | 0.113 | 0.143 | 0.023 |
+| 7 | -75.7 | 5.08 | +0.37 | 0.20 | 2.6 | -73.3 | 0.085 | 0.099 | 0.125 | 0.023 |
+| 8 | -75.6 | 5.10 | +0.49 | 0.20 | 2.5 | -73.3 | 0.081 | 0.089 | 0.111 | 0.034 |
+| 9 | -75.9 | 5.09 | +0.22 | 0.22 | 2.8 | -73.2 | 0.062 | 0.082 | 0.100 | 0.028 |
+| 10 | -75.7 | 5.10 | +0.39 | 0.22 | 2.8 | -73.2 | 0.074 | 0.073 | 0.091 | 0.034 |
+| 11 | -75.9 | 5.09 | +0.16 | 0.26 | 3.3 | -73.1 | 0.072 | 0.069 | 0.083 | 0.049 |
+| 12 | -75.8 | 5.10 | +0.30 | 0.18 | 2.3 | -73.1 | 0.041 | 0.062 | 0.077 | 0.025 |
+| 13 | -75.9 | 5.09 | +0.14 | 0.24 | 3.1 | -73.1 | 0.052 | 0.059 | 0.071 | 0.031 |
+| 14 | -75.8 | 5.10 | +0.26 | 0.21 | 2.7 | -73.0 | 0.064 | 0.058 | 0.067 | 0.046 |
+| 15 | -75.9 | 5.09 | +0.17 | 0.25 | 3.2 | -73.0 | 0.048 | 0.053 | 0.062 | 0.038 |
+
+![subgoal-only k16 cd0.9 · corrupt=False · step 76000](subgoal-only_k16_cd0.9_corrupt-False_step76000_n16/candidate_scores.png)
+
+
+---
+
+## subgoal-only k4 cd0.9 · corrupt=False · step 10000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k4_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0010000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.00
+
+
+### Training weights (K=4)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | argmax | **final** |
+|---|---|---|---|---|---|---|
+| ep3 t=0 | -140.9\* | -146.4 | -146.0 | -144.3 | 0 | **-141.0** |
+| ep29 t=5 | -203.4 | -208.1 | -203.1\* | -207.0 | 2 | **-205.5** |
+| ep56 t=10 | -93.3\* | -93.8 | -93.8 | -94.1 | 0 | **-82.3** |
+| ep24 t=16 | -79.8\* | -79.8 | -79.8 | -79.8 | 0 | **-79.8** |
+| ep50 t=21 | -152.1 | -151.9\* | -157.3 | -152.2 | 1 | **-159.2** |
+| ep8 t=27 | -92.5\* | -93.4 | -93.3 | -94.8 | 0 | **-93.4** |
+| ep37 t=32 | -99.2\* | -102.2 | -100.0 | -103.1 | 0 | **-100.1** |
+| ep75 t=37 | -276.5\* | -280.8 | -276.5 | -276.7 | 0 | **-286.5** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -145.8 | 4.61 | +0.48 | 0.48 | 6.8 | -145.8 | 1.000 | 1.000 | 1.000 | 0.383 |
+| 1 | -146.5 | 4.59 | -0.23 | 0.54 | 7.6 | -143.1 | 0.464 | 0.457 | 0.500 | 0.237 |
+| 2 | -146.4 | 4.61 | -0.06 | 0.47 | 6.6 | -142.0 | 0.291 | 0.290 | 0.333 | 0.188 |
+| 3 | -146.5 | 4.64 | -0.18 | 0.50 | 7.1 | -141.0 | 0.217 | 0.213 | 0.250 | 0.192 |
+
+![subgoal-only k4 cd0.9 · corrupt=False · step 10000](subgoal-only_k4_cd0.9_corrupt-False_step10000_n4/candidate_scores.png)
+
+
+---
+
+## subgoal-only k4 cd0.9 · corrupt=False · step 20000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k4_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0020000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.15
+
+
+### Training weights (K=4)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | argmax | **final** |
+|---|---|---|---|---|---|---|
+| ep3 t=0 | -139.6\* | -143.9 | -144.1 | -142.0 | 0 | **-140.3** |
+| ep25 t=5 | -160.8 | -153.1 | -140.2\* | -163.3 | 2 | **-168.6** |
+| ep50 t=10 | -229.5 | -233.4 | -230.9 | -227.8\* | 3 | **-232.9** |
+| ep3 t=16 | -106.0\* | -127.7 | -115.4 | -120.3 | 0 | **-105.5** |
+| ep25 t=21 | -117.6 | -119.4 | -116.1\* | -120.1 | 2 | **-119.4** |
+| ep50 t=26 | -73.0 | -72.9 | -72.1 | -71.9\* | 3 | **-71.8** |
+| ep8 t=32 | -226.9\* | -226.9 | -226.9 | -226.9 | 0 | **-226.9** |
+| ep75 t=37 | -22.7 | -21.9\* | -21.9 | -21.9 | 1 | **-21.9** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -101.4 | 4.71 | -0.71 | 0.46 | 6.4 | -101.4 | 1.000 | 1.000 | 1.000 | 0.374 |
+| 1 | -100.7 | 4.74 | -0.04 | 0.47 | 6.6 | -98.5 | 0.514 | 0.455 | 0.500 | 0.229 |
+| 2 | -100.3 | 4.73 | +0.42 | 0.38 | 5.4 | -97.3 | 0.328 | 0.290 | 0.333 | 0.195 |
+| 3 | -100.4 | 4.73 | +0.32 | 0.44 | 6.2 | -96.6 | 0.240 | 0.219 | 0.250 | 0.202 |
+
+![subgoal-only k4 cd0.9 · corrupt=False · step 20000](subgoal-only_k4_cd0.9_corrupt-False_step20000_n4/candidate_scores.png)
+
+
+---
+
+## subgoal-only k4 cd0.9 · corrupt=False · step 60000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k4_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0060000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.35
+
+
+### Training weights (K=4)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | argmax | **final** |
+|---|---|---|---|---|---|---|
+| ep3 t=0 | -141.2\* | -143.8 | -150.9 | -153.3 | 0 | **-149.2** |
+| ep51 t=4 | -142.6 | -147.3 | -140.5\* | -147.3 | 2 | **-145.0** |
+| ep29 t=9 | -171.1\* | -172.9 | -172.9 | -172.9 | 0 | **-172.9** |
+| ep8 t=14 | -34.6\* | -34.7 | -34.6 | -34.9 | 0 | **-34.7** |
+| ep75 t=18 | -4.3\* | -4.3 | -4.3 | -4.3 | 0 | **-8.5** |
+| ep20 t=24 | -36.5 | -29.2 | -24.0 | -5.8\* | 3 | **-5.8** |
+| ep50 t=30 | -11.6 | -10.9 | -10.9 | -8.1\* | 3 | **-10.9** |
+| ep70 t=37 | -42.4 | -36.2\* | -39.9 | -39.9 | 1 | **-40.8** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -72.0 | 4.74 | -0.52 | 0.36 | 4.7 | -72.0 | 1.000 | 1.000 | 1.000 | 0.436 |
+| 1 | -71.8 | 4.77 | -0.28 | 0.32 | 4.2 | -70.1 | 0.454 | 0.448 | 0.500 | 0.188 |
+| 2 | -71.2 | 4.77 | +0.32 | 0.26 | 3.4 | -69.4 | 0.325 | 0.294 | 0.333 | 0.175 |
+| 3 | -71.0 | 4.78 | +0.49 | 0.28 | 3.7 | -68.8 | 0.256 | 0.223 | 0.250 | 0.201 |
+
+![subgoal-only k4 cd0.9 · corrupt=False · step 60000](subgoal-only_k4_cd0.9_corrupt-False_step60000_n4/candidate_scores.png)
+
+
+---
+
+## subgoal-only k4 cd0.9 · corrupt=False · step 100000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k4_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0100000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=4 split=test episodes=20 success=0.30
+
+
+### Training weights (K=4)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | argmax | **final** |
+|---|---|---|---|---|---|---|
+| ep3 t=0 | -148.4\* | -152.5 | -154.7 | -155.4 | 0 | **-152.3** |
+| ep54 t=4 | -182.3\* | -190.1 | -183.2 | -187.0 | 0 | **-181.6** |
+| ep37 t=9 | -21.1 | -19.6 | -21.0 | -19.3\* | 3 | **-19.4** |
+| ep33 t=14 | -64.6 | -54.0 | -48.9 | -30.8\* | 3 | **-54.5** |
+| ep38 t=19 | -16.9\* | -16.9 | -16.9 | -16.9 | 0 | **-16.9** |
+| ep25 t=25 | -7.0 | -6.7\* | -10.0 | -6.9 | 1 | **-10.0** |
+| ep26 t=31 | -12.2 | -5.1\* | -8.3 | -6.1 | 1 | **-13.0** |
+| ep75 t=37 | -50.0\* | -50.0 | -50.0 | -50.0 | 0 | **-50.0** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -74.7 | 4.71 | -0.46 | 0.41 | 5.4 | -74.7 | 1.000 | 1.000 | 1.000 | 0.474 |
+| 1 | -74.1 | 4.73 | +0.10 | 0.32 | 4.2 | -72.9 | 0.516 | 0.455 | 0.500 | 0.186 |
+| 2 | -74.2 | 4.72 | +0.05 | 0.30 | 3.9 | -72.3 | 0.302 | 0.304 | 0.333 | 0.165 |
+| 3 | -73.9 | 4.74 | +0.31 | 0.36 | 4.8 | -71.8 | 0.243 | 0.228 | 0.250 | 0.174 |
+
+![subgoal-only k4 cd0.9 · corrupt=False · step 100000](subgoal-only_k4_cd0.9_corrupt-False_step100000_n4/candidate_scores.png)
+
+
+---
+
+## subgoal-only k8 cd0.9 · corrupt=False · step 10000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k8_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0010000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.10
+
+
+### Training weights (K=8)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -138.6\* | -144.9 | -143.3 | -141.3 | -143.4 | -147.2 | -150.0 | -152.0 | 0 | **-141.5** |
+| ep24 t=5 | -85.3 | -82.9 | -77.3\* | -89.6 | -85.6 | -78.6 | -77.5 | -79.1 | 2 | **-84.2** |
+| ep38 t=10 | -42.5\* | -42.6 | -42.5 | -42.5 | -42.5 | -42.5 | -42.5 | -42.5 | 0 | **-47.3** |
+| ep56 t=15 | -37.8 | -38.5 | -38.5 | -38.5 | -37.4 | -34.2\* | -38.5 | -38.5 | 5 | **-36.9** |
+| ep8 t=21 | -71.2 | -71.2 | -71.2 | -71.2 | -71.0\* | -71.2 | -71.2 | -71.1 | 4 | **-71.2** |
+| ep38 t=26 | -5.9\* | -7.4 | -9.5 | -16.9 | -9.5 | -9.5 | -9.5 | -9.5 | 0 | **-9.5** |
+| ep8 t=32 | -32.0 | -31.3 | -25.9 | -24.4 | -3.6\* | -13.6 | -21.1 | -43.6 | 4 | **-19.9** |
+| ep75 t=37 | -6.9\* | -10.0 | -13.6 | -16.8 | -9.7 | -16.8 | -16.8 | -9.9 | 0 | **-16.6** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -89.9 | 4.93 | -2.01 | 0.66 | 9.2 | -89.9 | 1.000 | 1.000 | 1.000 | 0.247 |
+| 1 | -88.1 | 4.90 | -0.28 | 0.56 | 7.7 | -85.5 | 0.498 | 0.433 | 0.500 | 0.161 |
+| 2 | -87.3 | 4.95 | +0.57 | 0.49 | 6.8 | -83.8 | 0.328 | 0.281 | 0.333 | 0.118 |
+| 3 | -87.5 | 4.95 | +0.39 | 0.41 | 5.6 | -83.2 | 0.211 | 0.211 | 0.250 | 0.101 |
+| 4 | -87.5 | 4.96 | +0.34 | 0.45 | 6.3 | -82.7 | 0.160 | 0.169 | 0.200 | 0.099 |
+| 5 | -87.8 | 4.95 | +0.06 | 0.45 | 6.3 | -82.3 | 0.127 | 0.140 | 0.167 | 0.091 |
+| 6 | -87.6 | 4.92 | +0.28 | 0.43 | 6.0 | -82.2 | 0.094 | 0.121 | 0.143 | 0.074 |
+| 7 | -87.2 | 4.96 | +0.64 | 0.43 | 6.0 | -82.0 | 0.119 | 0.106 | 0.125 | 0.109 |
+
+![subgoal-only k8 cd0.9 · corrupt=False · step 10000](subgoal-only_k8_cd0.9_corrupt-False_step10000_n8/candidate_scores.png)
+
+
+---
+
+## subgoal-only k8 cd0.9 · corrupt=False · step 20000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k8_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0020000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.35
+
+
+### Training weights (K=8)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -139.0\* | -144.9 | -144.5 | -141.5 | -142.1 | -146.8 | -149.5 | -152.3 | 0 | **-141.6** |
+| ep75 t=4 | -122.4\* | -122.4 | -122.4 | -122.4 | -122.4 | -122.4 | -122.4 | -122.4 | 0 | **-122.4** |
+| ep70 t=9 | -131.5 | -131.0\* | -133.5 | -135.7 | -134.3 | -136.8 | -136.8 | -135.1 | 1 | **-132.5** |
+| ep67 t=14 | -10.6 | -20.0 | -11.3 | -9.8 | -14.6 | -9.8 | -9.3\* | -14.3 | 6 | **-12.4** |
+| ep56 t=19 | -87.3 | -13.8 | -10.8 | -10.8 | -23.9 | -10.5\* | -45.5 | -10.8 | 5 | **-10.8** |
+| ep75 t=24 | -25.4\* | -25.8 | -25.8 | -25.8 | -25.8 | -25.8 | -25.8 | -25.8 | 0 | **-25.8** |
+| ep75 t=30 | -33.7 | -22.2\* | -22.3 | -22.2 | -22.2 | -22.2 | -22.2 | -22.2 | 1 | **-22.2** |
+| ep75 t=37 | -20.3 | -9.7\* | -11.3 | -10.4 | -10.3 | -15.3 | -12.1 | -9.7 | 1 | **-9.9** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -73.8 | 5.31 | -2.22 | 0.72 | 9.7 | -73.8 | 1.000 | 1.000 | 1.000 | 0.278 |
+| 1 | -71.6 | 5.40 | -0.05 | 0.43 | 5.8 | -69.6 | 0.507 | 0.415 | 0.500 | 0.124 |
+| 2 | -71.3 | 5.47 | +0.25 | 0.41 | 5.5 | -68.5 | 0.372 | 0.272 | 0.333 | 0.141 |
+| 3 | -71.1 | 5.43 | +0.50 | 0.37 | 5.0 | -67.9 | 0.212 | 0.205 | 0.250 | 0.083 |
+| 4 | -71.2 | 5.46 | +0.35 | 0.35 | 4.8 | -67.5 | 0.176 | 0.168 | 0.200 | 0.083 |
+| 5 | -71.3 | 5.45 | +0.24 | 0.37 | 4.9 | -67.3 | 0.148 | 0.142 | 0.167 | 0.095 |
+| 6 | -71.2 | 5.48 | +0.41 | 0.37 | 5.0 | -67.1 | 0.128 | 0.123 | 0.143 | 0.099 |
+| 7 | -71.0 | 5.46 | +0.53 | 0.39 | 5.2 | -66.9 | 0.110 | 0.110 | 0.125 | 0.096 |
+
+![subgoal-only k8 cd0.9 · corrupt=False · step 20000](subgoal-only_k8_cd0.9_corrupt-False_step20000_n8/candidate_scores.png)
+
+
+---
+
+## subgoal-only k8 cd0.9 · corrupt=False · step 60000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k8_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0060000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.35
+
+
+### Training weights (K=8)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -140.9\* | -147.0 | -145.8 | -143.4 | -146.0 | -147.4 | -148.9 | -149.2 | 0 | **-141.9** |
+| ep50 t=4 | -18.6 | -20.8 | -18.4 | -18.3\* | -18.9 | -18.7 | -18.5 | -19.1 | 3 | **-17.7** |
+| ep26 t=9 | -42.9 | -47.2 | -30.0\* | -40.4 | -38.2 | -43.0 | -32.4 | -42.0 | 2 | **-38.1** |
+| ep9 t=14 | -12.1 | -14.3 | -9.2 | -11.6 | -9.0 | -7.9 | -5.9\* | -8.6 | 6 | **-9.9** |
+| ep8 t=19 | -3.6 | -3.6 | -3.6 | -3.6 | -3.6 | -3.6 | -3.6 | -3.3\* | 7 | **-2.5** |
+| ep26 t=24 | -4.9 | -4.9 | -4.9 | -4.9 | -4.9 | -4.9 | -4.9\* | -4.9 | 6 | **-4.9** |
+| ep46 t=30 | -11.9 | -8.4 | -9.9 | -11.9 | -8.9 | -11.6 | -8.1\* | -8.7 | 6 | **-10.8** |
+| ep70 t=37 | -2.9 | -3.3 | -3.3 | -3.3 | -2.2\* | -3.3 | -3.3 | -3.3 | 4 | **-3.3** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -51.3 | 3.93 | -2.03 | 0.48 | 6.2 | -51.3 | 1.000 | 1.000 | 1.000 | 0.348 |
+| 1 | -49.5 | 3.93 | -0.18 | 0.25 | 3.2 | -48.5 | 0.509 | 0.413 | 0.500 | 0.150 |
+| 2 | -49.1 | 3.96 | +0.26 | 0.23 | 3.0 | -47.7 | 0.327 | 0.268 | 0.333 | 0.088 |
+| 3 | -49.0 | 3.94 | +0.35 | 0.20 | 2.6 | -47.3 | 0.229 | 0.204 | 0.250 | 0.094 |
+| 4 | -48.9 | 3.96 | +0.37 | 0.19 | 2.5 | -47.1 | 0.176 | 0.163 | 0.200 | 0.078 |
+| 5 | -49.0 | 3.95 | +0.35 | 0.22 | 2.9 | -47.0 | 0.149 | 0.140 | 0.167 | 0.073 |
+| 6 | -49.0 | 3.96 | +0.31 | 0.19 | 2.5 | -46.9 | 0.102 | 0.122 | 0.143 | 0.068 |
+| 7 | -48.7 | 3.94 | +0.57 | 0.21 | 2.7 | -46.8 | 0.125 | 0.106 | 0.125 | 0.100 |
+
+![subgoal-only k8 cd0.9 · corrupt=False · step 60000](subgoal-only_k8_cd0.9_corrupt-False_step60000_n8/candidate_scores.png)
+
+
+---
+
+## subgoal-only k8 cd0.9 · corrupt=False · step 100000
+
+`/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/subgoal-only_k8_cd0.9_corrupt-False_demos-100_seed-42/checkpoints/step_0100000.ckpt`  
+search_context=`subgoal` selection=`final_pass` n=8 split=test episodes=20 success=0.30
+
+
+### Training weights (K=8)
+
+**Context recency decay λ=0.9.** For a candidate generated against `m`
+context entries, entry `j` is weighted `0.9^(m-1-j)`: the latest counts
+1, the previous 0.9, the one before 0.81. Depends only on
+distance-from-latest — never on absolute index, K, or n — so the profile
+is identical in every loop at every search width.
+
+
+| entries back | 0 (latest) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| weight | 1.000 | 0.900 | 0.810 | 0.729 | 0.656 | 0.590 |
+
+### Candidates and their verifier values
+
+One row per control step, columns = candidates in generation order. `*` marks the
+argmax. `Δ0` is `best - candidate 0`, the best-of-n gain at that step.
+
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | argmax | **final** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ep3 t=0 | -143.6 | -146.5 | -145.9 | -144.2 | -144.8 | -142.6\* | -147.7 | -147.3 | 5 | **-143.4** |
+| ep51 t=4 | -76.2 | -63.9 | -67.6 | -60.9 | -55.1\* | -61.3 | -64.8 | -64.7 | 4 | **-65.9** |
+| ep33 t=9 | -131.3\* | -131.3 | -131.3 | -131.3 | -131.3 | -131.3 | -131.3 | -131.3 | 0 | **-131.3** |
+| ep24 t=14 | -83.4 | -78.9\* | -88.1 | -84.6 | -84.8 | -84.8 | -87.2 | -88.9 | 1 | **-88.3** |
+| ep24 t=19 | -74.8 | -73.3\* | -73.9 | -74.0 | -73.7 | -74.0 | -73.6 | -74.0 | 1 | **-74.1** |
+| ep51 t=24 | -6.0\* | -6.0 | -6.0 | -6.0 | -6.0 | -6.0 | -6.0 | -6.0 | 0 | **-6.0** |
+| ep9 t=31 | -27.3 | -26.3 | -26.1 | -25.5\* | -27.4 | -26.1 | -26.0 | -26.2 | 3 | **-25.6** |
+| ep70 t=37 | -4.1\* | -4.1 | -4.1 | -4.1 | -4.1 | -4.1 | -4.1 | -4.1 | 0 | **-4.1** |
+
+**final** is the sample this arm actually executed — a further draw conditioned on
+all the candidates in the row, not one of them.
+
+
+### Aggregate by candidate index
+
+| index | mean | ±95% | step-centered | ±95% | within-step SD | E[running max] | P(record) | perm null | i.i.d. | P(executed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | -55.4 | 4.21 | -1.89 | 0.48 | 6.3 | -55.4 | 1.000 | 1.000 | 1.000 | 0.362 |
+| 1 | -53.8 | 4.23 | -0.26 | 0.23 | 3.0 | -53.1 | 0.539 | 0.433 | 0.500 | 0.110 |
+| 2 | -53.4 | 4.23 | +0.10 | 0.19 | 2.5 | -52.4 | 0.337 | 0.287 | 0.333 | 0.092 |
+| 3 | -53.2 | 4.23 | +0.35 | 0.17 | 2.3 | -52.0 | 0.250 | 0.218 | 0.250 | 0.094 |
+| 4 | -53.1 | 4.24 | +0.49 | 0.21 | 2.8 | -51.7 | 0.202 | 0.173 | 0.200 | 0.104 |
+| 5 | -53.3 | 4.24 | +0.28 | 0.18 | 2.4 | -51.5 | 0.150 | 0.146 | 0.167 | 0.081 |
+| 6 | -53.2 | 4.25 | +0.31 | 0.21 | 2.7 | -51.4 | 0.117 | 0.126 | 0.143 | 0.075 |
+| 7 | -52.9 | 4.23 | +0.63 | 0.22 | 2.9 | -51.3 | 0.107 | 0.111 | 0.125 | 0.081 |
+
+![subgoal-only k8 cd0.9 · corrupt=False · step 100000](subgoal-only_k8_cd0.9_corrupt-False_step100000_n8/candidate_scores.png)
 

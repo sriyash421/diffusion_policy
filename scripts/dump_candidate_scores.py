@@ -540,6 +540,32 @@ def _test_success(stats):
     return {}
 
 
+def _cfg_num(cfg, value, default):
+    """A hydra config value as a number, resolving a `${key}` interpolation if that is what
+    is stored.
+
+    `.hydra/config.yaml` is the RAW config, so a key written as `${n_candidates}` sits on
+    disk verbatim rather than resolved. Runs predating `n_candidates` stored a literal int
+    for `policy.max_actions`, which is why `int(...)` worked until the `k*_cd0.9` arms --
+    those store the interpolation and made this raise, taking the whole report down.
+    Dotted targets (`${a.b}`) resolve too; anything unresolvable falls back to `default`.
+    """
+    if isinstance(value, str):
+        s = value.strip()
+        if not (s.startswith('${') and s.endswith('}')):
+            return default
+        node = cfg
+        for part in s[2:-1].split('.'):
+            if not isinstance(node, dict) or part not in node:
+                return default
+            node = node[part]
+        value = node
+    try:
+        return type(default)(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _slot_weight_table(stats):
     """The loss/context weighting this checkpoint was TRAINED under, read off its config.
 
@@ -555,14 +581,21 @@ def _slot_weight_table(stats):
         cfg = yaml.safe_load(cfg_path.read_text())
     except Exception:
         return None
-    K = int(cfg.get('policy', {}).get('max_actions', 0) or 0)
+    K = _cfg_num(cfg, (cfg.get('policy') or {}).get('max_actions', 0), 0)
     if not K:
         return None
     return {
         'K': K,
-        'slot_weight_decay': float(cfg.get('slot_weight_decay', 1.0) or 1.0),
-        'context_decay': float(cfg.get('context_decay', 1.0) or 1.0),
+        'slot_weight_decay': _cfg_num(cfg, cfg.get('slot_weight_decay', 1.0), 1.0),
+        'context_decay': _cfg_num(cfg, cfg.get('context_decay', 1.0), 1.0),
     }
+
+
+# Stats keys the report tables index directly. A dump lacking any of them predates the
+# statistic and cannot be rendered; build_report skips it by name instead of raising.
+_REPORT_KEYS = frozenset((
+    'prefix_mean', 'prefix_max', 'rank_baseline', 'p_is_best_baseline', 'reward_max',
+))
 
 
 def build_report(dirs, out_path, n_example_steps=8):
@@ -575,6 +608,15 @@ def build_report(dirs, out_path, n_example_steps=8):
             print(f'skip (no stats): {d}')
             continue
         st = json.loads(sf.read_text())
+        # Dumps written before the prefix/rank/reward statistics existed carry none of the
+        # fields the tables below index, and the report used to die on the first one with a
+        # bare KeyError -- taking every OTHER section down with it. Skip them by name so a
+        # stale dump costs its own section and says so, rather than the whole document.
+        # Each of these has an `_n64` sibling at the same step that supersedes it.
+        stale = _REPORT_KEYS - st.keys()
+        if stale:
+            print(f'skip (pre-{min(stale)} dump schema, re-dump to include): {d.name}')
+            continue
         npz = np.load(d / 'candidate_scores.npz')
         entries.append((d, st, npz))
     if not entries:
