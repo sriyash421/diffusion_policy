@@ -8,7 +8,16 @@ Partial coverage is the failure mode that matters here. A missing row is invisib
 rendered table -- it looks like a blank cell, indistinguishable from a run that has not got
 there yet -- so this reports MISSING and PARTIAL separately from NOT-YET-TRAINED.
 
-Usage: python scripts/audit_criteria_coverage.py
+Usage:
+  python scripts/audit_criteria_coverage.py           # full, including trace validation
+  python scripts/audit_criteria_coverage.py --fast    # coverage only, no trace opens
+
+``--fast`` skips opening the per-criterion npz files. Those checks answer a question that
+only changes when a NEW result lands -- a trace already validated cannot silently become
+malformed -- so re-opening all of them on a polling loop costs minutes of GPFS reads to
+re-confirm what was true last time. At 222 traces and rising, under load from the training
+and eval jobs themselves, the full pass exceeded 400s. Use --fast for status polling and
+the full pass when new results have landed.
 """
 import json
 import pathlib
@@ -32,7 +41,7 @@ TRACE_KEYS = ('scores', 'chosen_idx', 'step_reward', 'valid_len', 'episode_idxs'
 ROW_KEYS = ('success_rate', 'mean_reward', 'n', 'n_episodes', 'criterion', 'step')
 
 
-def main():
+def main(fast=False):
     runs = sorted(ROOT.glob('*_swd-*_demos-100_seed-42'))
     if not runs:
         print('no sweep runs found under', ROOT)
@@ -92,6 +101,8 @@ def main():
             if not t.is_file():
                 problems.append(f'{name} @ {step}/{crit}: trace npz missing')
                 continue
+            if fast:
+                continue      # existence checked above; contents only change when new
             z = np.load(t)
             for k in TRACE_KEYS:
                 if k not in z:
@@ -114,6 +125,10 @@ def main():
             print('  -', p)
         if len(problems) > 40:
             print(f'  ... and {len(problems) - 40} more')
+    elif fast:
+        print('\nNo problems: every result present is at n=16 over 50 episodes, carries '
+              'success_rate and mean_reward, and has a trace file beside it. '
+              '(--fast: trace CONTENTS not opened; run without it after new results land.)')
     else:
         print('\nNo problems: every result present is at n=16 over 50 episodes, carries '
               'success_rate and mean_reward, and has a (50, T, 16) trace beside it.')
@@ -121,4 +136,4 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(main(fast='--fast' in sys.argv[1:]))
