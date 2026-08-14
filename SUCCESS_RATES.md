@@ -436,6 +436,12 @@ The per-checkpoint tables below carry every measurement; read them as curves.
 |  |  | 96000 | 24% | 40% | 40% | 42% | 48% | 40% | 34% | — | — | — | — |
 |  |  | 98000 | 32% | 26% | 38% | 44% | 40% | 34% | 46% | — | — | — | — |
 |  |  | 100000 | 38% | 38% | 36% | 34% | 34% | 38% | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 1b. Binary success rate — VAL (30 episodes)
 
@@ -786,6 +792,12 @@ The per-checkpoint tables below carry every measurement; read them as curves.
 |  |  | 96000 | 40% | 30% | 33% | 40% | 37% | 47% | 43% | — | — | — | — |
 |  |  | 98000 | 33% | 37% | 43% | 10% | 50% | 30% | 37% | — | — | — | — |
 |  |  | 100000 | 33% | 33% | 27% | 27% | 47% | 37% | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 1c. Mean reward, episode max — TEST
 
@@ -1141,6 +1153,12 @@ Continuous, so it separates "nearly solved" from "never moved", which the binary
 |  |  | 96000 | 0.912 | 0.939 | 0.959 | 0.933 | 0.933 | 0.941 | 0.926 | — | — | — | — |
 |  |  | 98000 | 0.874 | 0.916 | 0.934 | 0.887 | 0.936 | 0.947 | 0.923 | — | — | — | — |
 |  |  | 100000 | 0.878 | 0.918 | 0.962 | 0.901 | 0.933 | 0.898 | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 1d. Mean reward, FINAL step — TEST
 
@@ -1491,6 +1509,12 @@ Continuous, so it separates "nearly solved" from "never moved", which the binary
 |  |  | 96000 | 0.687 | 0.799 | 0.846 | 0.804 | 0.837 | 0.811 | 0.826 | — | — | — | — |
 |  |  | 98000 | 0.710 | 0.792 | 0.780 | 0.814 | 0.832 | 0.836 | 0.814 | — | — | — | — |
 |  |  | 100000 | 0.777 | 0.760 | 0.854 | 0.748 | 0.831 | 0.800 | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 1e. Mean reward, DISCOUNTED (gamma=0.99) — TEST
 
@@ -1841,6 +1865,12 @@ Continuous, so it separates "nearly solved" from "never moved", which the binary
 |  |  | 96000 | 0.253 | 0.259 | 0.283 | 0.292 | 0.267 | 0.287 | 0.274 | — | — | — | — |
 |  |  | 98000 | 0.240 | 0.280 | 0.254 | 0.266 | 0.285 | 0.303 | 0.289 | — | — | — | — |
 |  |  | 100000 | 0.236 | 0.250 | 0.285 | 0.278 | 0.273 | 0.275 | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ### 1f. Mean reward, episode max — VAL (the selector's tie-break)
 
@@ -2191,6 +2221,12 @@ Continuous, so it separates "nearly solved" from "never moved", which the binary
 |  |  | 96000 | 0.929 | 0.867 | 0.897 | 0.904 | 0.905 | 0.916 | 0.903 | — | — | — | — |
 |  |  | 98000 | 0.915 | 0.881 | 0.921 | 0.884 | 0.928 | 0.892 | 0.936 | — | — | — | — |
 |  |  | 100000 | 0.915 | 0.930 | 0.864 | 0.902 | 0.943 | 0.845 | — | — | — | — | — |
+| subgoal-chosen4value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-chosen4value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| subgoal-value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-0.9] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
+| value [swd-1.0] **(oi)** | oi clean | _n-sweep pending; see §6_ | — | — | — | — | — | — | — | — | — | — | — |
 
 ## 2. 29 demos
 
@@ -5071,6 +5107,185 @@ Both rules run on the **same trained weights** — selection is a pure readout o
 |  |  | 20000 | `argmax` | 4% | 10% | 18% | 16% | 24% | 28% | 42% | — | — | — | — |
 |  |  |  | `softmax` | 0% | 4% | 10% | 14% | 20% | 20% | 18% | — | — | — | — |
 |  |  |  | `final_pass` | — | — | — | — | 0% | — | — | — | — | — | — |
+
+## 6. Selection rule at fixed search width (n=16)
+
+A different experiment from sections 1-3, which is why it is a separate section rather than extra columns: there `n` is the axis and selection is held at `argmax`; here `n` is pinned at **16** and the READ-OUT RULE is the axis. Every criterion scores the SAME 16 generated-and-scored candidates, so generation is identical across a row and only the choice of which candidate to execute differs. No retraining is involved.
+
+
+Candidate *k* is conditioned on candidates 0..*k*-1, so the trailing candidates are the deeply-conditioned ones. That is what the pairs separate:
+
+
+| column | what it executes |
+|---|---|
+| `cand-last` | candidate 15 (most conditioned). Verifier IGNORED. |
+| `cand-8th-from-last` | candidate 8. Verifier IGNORED. |
+| `argmax-all` | highest verifier value of all 16 |
+| `argmax-last8` | highest verifier value among candidates 8-15 |
+| `softmax-all` | sampled from softmax(z/T) over all 16 |
+| `softmax-last8` | sampled from softmax(z/T) over candidates 8-15 |
+
+
+`argmax-all` minus `cand-last` is the verifier ranking's contribution on top of conditioning depth; `cand-last` minus `cand-8th-from-last` is what the extra conditioning alone buys. `*-last8` minus `*-all` says whether restricting the oracle to well-conditioned candidates helps or merely removes options.
+
+
+**TEST split, 50 episodes, `--skip-val`.** With no val curve, a checkpoint picked off these tables is picked on test and is NOT a held-out estimate -- read whole curves, and say which rule you used if you quote a single step. At 50 episodes SE is ~7pp near 50%, so gaps under ~14pp are not resolvable.
+
+
+Per-step traces (every candidate's verifier value and the executed index) sit in `criteria_search/step_*/traces/<criterion>.npz`; validate one with `python scripts/check_criteria_traces.py <step dir>`.
+
+
+### 6.1 subgoal-chosen4value_swd-0.9
+
+
+#### 6.1a `subgoal-chosen4value_swd-0.9` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 22% | 8% | 0% | 0% |
+| 5000 | 0% | 0% | 40% | 36% | 0% | 4% |
+| 10000 | 8% | 2% | 68% | 64% | 16% | 34% |
+| 20000 | 26% | 38% | 56% | 50% | 42% | 42% |
+| 30000 | 34% | 32% | 80% | 64% | 60% | 56% |
+| 40000 | 54% | 46% | 74% | 82% | 54% | 58% |
+| 50000 | 58% | 54% | 68% | 68% | 64% | 60% |
+| 60000 | 44% | 52% | 70% | 84% | 74% | 72% |
+
+#### 6.1b `subgoal-chosen4value_swd-0.9` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.131 | 0.125 | 0.920 | 0.741 | 0.234 | 0.239 |
+| 5000 | 0.370 | 0.327 | 0.960 | 0.929 | 0.577 | 0.580 |
+| 10000 | 0.708 | 0.604 | 0.961 | 0.977 | 0.863 | 0.877 |
+| 20000 | 0.943 | 0.862 | 0.940 | 0.950 | 0.954 | 0.901 |
+| 30000 | 0.911 | 0.915 | 0.976 | 0.924 | 0.987 | 0.953 |
+| 40000 | 0.930 | 0.898 | 0.978 | 0.941 | 0.949 | 0.935 |
+| 50000 | 0.954 | 0.946 | 0.943 | 0.951 | 0.956 | 0.927 |
+| 60000 | 0.917 | 0.953 | 0.956 | 0.939 | 0.961 | 0.945 |
+
+### 6.2 subgoal-chosen4value_swd-1.0
+
+
+#### 6.2a `subgoal-chosen4value_swd-1.0` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 30% | 4% | 0% | 0% |
+| 5000 | 0% | 0% | 42% | 46% | 4% | 4% |
+| 10000 | 4% | 0% | 58% | 54% | 24% | 24% |
+| 20000 | 40% | 26% | 66% | 54% | 60% | 50% |
+| 30000 | 48% | 46% | 76% | 78% | 62% | 68% |
+
+#### 6.2b `subgoal-chosen4value_swd-1.0` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.121 | 0.117 | 0.936 | 0.792 | 0.240 | 0.252 |
+| 5000 | 0.313 | 0.265 | 0.960 | 0.932 | 0.623 | 0.652 |
+| 10000 | 0.790 | 0.694 | 0.934 | 0.932 | 0.871 | 0.874 |
+| 20000 | 0.900 | 0.887 | 0.980 | 0.959 | 0.912 | 0.911 |
+| 30000 | 0.978 | 0.941 | 0.967 | 0.987 | 0.985 | 0.978 |
+
+### 6.3 subgoal-value_swd-0.9
+
+
+#### 6.3a `subgoal-value_swd-0.9` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 40% | 2% | 0% | 0% |
+| 5000 | 0% | 0% | 40% | 16% | 2% | 0% |
+| 10000 | 4% | 4% | 56% | 44% | 18% | 18% |
+| 20000 | 22% | 24% | 62% | 58% | 34% | 60% |
+| 30000 | 30% | 32% | 60% | 72% | 62% | 50% |
+| 40000 | 42% | 46% | 66% | 76% | 56% | 64% |
+| 50000 | 52% | 50% | 70% | 68% | 62% | 60% |
+| 60000 | 48% | 50% | 38% | 68% | 52% | 52% |
+| 70000 | 48% | 48% | 62% | 52% | 62% | 58% |
+| 80000 | 48% | 48% | 44% | 58% | 56% | 56% |
+
+#### 6.3b `subgoal-value_swd-0.9` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.136 | 0.137 | 0.972 | 0.757 | 0.278 | 0.240 |
+| 5000 | 0.404 | 0.323 | 0.970 | 0.929 | 0.596 | 0.610 |
+| 10000 | 0.682 | 0.645 | 0.924 | 0.935 | 0.819 | 0.865 |
+| 20000 | 0.800 | 0.887 | 0.962 | 0.971 | 0.956 | 0.946 |
+| 30000 | 0.888 | 0.895 | 0.976 | 0.976 | 0.953 | 0.966 |
+| 40000 | 0.900 | 0.913 | 0.950 | 0.995 | 0.967 | 0.960 |
+| 50000 | 0.958 | 0.969 | 0.931 | 0.951 | 0.955 | 0.973 |
+| 60000 | 0.938 | 0.931 | 0.927 | 0.953 | 0.956 | 0.926 |
+| 70000 | 0.940 | 0.929 | 0.914 | 0.906 | 0.925 | 0.935 |
+| 80000 | 0.940 | 0.919 | 0.960 | 0.937 | 0.952 | 0.902 |
+
+### 6.4 subgoal-value_swd-1.0
+
+
+#### 6.4a `subgoal-value_swd-1.0` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 38% | 6% | 0% | 0% |
+| 5000 | 0% | 0% | 44% | 42% | 2% | 4% |
+| 10000 | 6% | 10% | 54% | 62% | 22% | 30% |
+| 20000 | 26% | 34% | 70% | 64% | 50% | 42% |
+| 30000 | 40% | 38% | 78% | 74% | 54% | 58% |
+| 40000 | 44% | 42% | 68% | 64% | 60% | 60% |
+
+#### 6.4b `subgoal-value_swd-1.0` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.115 | 0.125 | 0.880 | 0.802 | 0.286 | 0.197 |
+| 5000 | 0.409 | 0.274 | 0.927 | 0.948 | 0.559 | 0.570 |
+| 10000 | 0.722 | 0.703 | 0.990 | 0.960 | 0.853 | 0.885 |
+| 20000 | 0.907 | 0.864 | 0.966 | 0.957 | 0.946 | 0.984 |
+| 30000 | 0.901 | 0.914 | 0.993 | 0.977 | 0.970 | 0.929 |
+| 40000 | 0.901 | 0.929 | 0.942 | 0.930 | 0.941 | 0.899 |
+
+### 6.5 value_swd-0.9
+
+
+#### 6.5a `value_swd-0.9` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 32% | 8% | 0% | 0% |
+| 5000 | 0% | 0% | 48% | 48% | 10% | 8% |
+
+#### 6.5b `value_swd-0.9` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.134 | 0.125 | 0.914 | 0.768 | 0.253 | 0.217 |
+| 5000 | 0.439 | 0.354 | 0.967 | 0.938 | 0.681 | 0.718 |
+
+### 6.6 value_swd-1.0
+
+
+#### 6.6a `value_swd-1.0` — binary success rate
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0% | 0% | 20% | 10% | 0% | 0% |
+| 5000 | 0% | 2% | 66% | 52% | 4% | 10% |
+| 10000 | 10% | 10% | 72% | 52% | 22% | 40% |
+| 20000 | 36% | 42% | 76% | 72% | 52% | 56% |
+| 30000 | 42% | 52% | 82% | 78% | 62% | 64% |
+| 40000 | 52% | 48% | 74% | 68% | 66% | 60% |
+
+#### 6.6b `value_swd-1.0` — mean reward, episode max
+
+| checkpoint | `cand-last` | `cand-8th-from-last` | `argmax-all` | `argmax-last8` | `softmax-all` | `softmax-last8` |
+|---|---|---|---|---|---|---|
+| 1000 | 0.141 | 0.119 | 0.911 | 0.821 | 0.258 | 0.264 |
+| 5000 | 0.412 | 0.381 | 0.964 | 0.948 | 0.711 | 0.733 |
+| 10000 | 0.766 | 0.743 | 0.992 | 0.972 | 0.921 | 0.899 |
+| 20000 | 0.851 | 0.882 | 0.975 | 0.934 | 0.951 | 0.918 |
+| 30000 | 0.917 | 0.930 | 0.958 | 0.923 | 0.899 | 0.904 |
+| 40000 | 0.880 | 0.871 | 0.921 | 0.859 | 0.927 | 0.893 |
 
 <!-- HAND-WRITTEN after: ## 4. Where the raw results are -->
 <!-- Section 5 is NOT generated. build_success_rates_doc.py discovers offline/ and

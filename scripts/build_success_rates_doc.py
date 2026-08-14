@@ -113,6 +113,20 @@ def oi_sources(n_demos):
     for run in sorted(OI.glob(f'*_demos-{n_demos}_seed-42')):
         arm = run.name.split('_corrupt-')[0]
         corrupt = 'corrupt' if '_corrupt-True' in run.name else 'clean'
+        # Carry slot_weight_decay into the LABEL, not just the directory name. It changes
+        # the training objective, and run_name gained a `swd-` component precisely so the
+        # two decay variants of an arm are different experiments -- but this label was
+        # derived by splitting on '_corrupt-', which drops everything after it. Both
+        # variants of an arm therefore rendered as the same row label: two different
+        # experiments, indistinguishable in the table, which is what _ARM_LABELS exists
+        # to prevent on the training side.
+        #
+        # Absent for runs predating the rename, which were all trained at swd 1.0; those
+        # keep their bare label so previously-published rows do not shift.
+        for part in run.name.split('_'):
+            if part.startswith('swd-'):
+                arm = f'{arm} [{part}]'
+                break
         out.append((arm + ' **(oi)**', 'oi ' + corrupt, run / 'bon_search'))
     return out
 
@@ -203,7 +217,12 @@ def demo_table(sources, which='test', fmt=None):
     for mech, obs, bon in sources:
         rs = rows_for(bon)
         if not rs:
-            L.append(f'| {mech} | {obs} | _pending_ | ' + ' | '.join(['—'] * len(NS)) + ' |')
+            # Distinguish "not evaluated" from "evaluated under the OTHER protocol". A run
+            # with a criteria sweep but no n-sweep has real numbers in section 6, and a bare
+            # `_pending_` here reads as though nothing has been measured for it at all.
+            has_criteria = (bon.parent / 'criteria_search' / 'criteria_curves.jsonl').is_file()
+            note = '_n-sweep pending; see §6_' if has_criteria else '_pending_'
+            L.append(f'| {mech} | {obs} | {note} | ' + ' | '.join(['—'] * len(NS)) + ' |')
             continue
         first = True
         for row in rs:
@@ -557,6 +576,102 @@ L += ["\n## 3. Selection rule: argmax vs softmax vs final_pass (TEST only)\n",
       '`AUDIT.md` P2-7, the one width nothing else evaluates. Note it costs n+1 samples to '
       "argmax's n, so compare at equal samples, not equal n.\n"]
 L += selection_table()
+
+# ---------------------------------------------------------------------------
+# SECTION 6 -- selection criteria at fixed width. A DIFFERENT EXPERIMENT from sections 1-3,
+# and it gets its own section rather than extra columns for that reason: there n is the
+# axis and selection is held at argmax, here n is pinned at 16 and the READ-OUT RULE is the
+# axis. The two do not belong on one x axis any more than eval_bon and eval_search do.
+#
+# Source is criteria_search/criteria_curves.jsonl, written by
+# `eval_search_pusht.py --criteria-sweep`, which is keyed on (step, criterion).
+# ---------------------------------------------------------------------------
+CRITERIA_ORDER = ['cand-last', 'cand-8th-from-last', 'argmax-all', 'argmax-last8',
+                  'softmax-all', 'softmax-last8']
+
+
+def criteria_rows(run_dir):
+    """{step: {criterion: row}} for one run, or {} if it has no criteria sweep."""
+    jl = run_dir / 'criteria_search' / 'criteria_curves.jsonl'
+    if not jl.is_file():
+        return {}
+    out = {}
+    for line in jl.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue      # torn final line from a preempted write
+        out.setdefault(r['step'], {})[r['criterion']] = r
+    return out
+
+
+def criteria_table(run_dir, key, fmt):
+    """One run's table: criterion across columns, checkpoint down rows."""
+    data = criteria_rows(run_dir)
+    if not data:
+        return []
+    L = ['| checkpoint | ' + ' | '.join(f'`{c}`' for c in CRITERIA_ORDER) + ' |',
+         '|---|' + '---|' * len(CRITERIA_ORDER)]
+    for step in sorted(data):
+        cells = []
+        for c in CRITERIA_ORDER:
+            r = data[step].get(c)
+            cells.append(fmt(r[key]) if r and r.get(key) is not None else '—')
+        L.append(f'| {step} | ' + ' | '.join(cells) + ' |')
+    return L
+
+
+CRIT_RUNS = sorted(OI.glob('*_swd-*_demos-100_seed-42'))
+if CRIT_RUNS:
+    L += ['\n## 6. Selection rule at fixed search width (n=16)\n',
+          'A different experiment from sections 1-3, which is why it is a separate section '
+          'rather than extra columns: there `n` is the axis and selection is held at '
+          '`argmax`; here `n` is pinned at **16** and the READ-OUT RULE is the axis. Every '
+          'criterion scores the SAME 16 generated-and-scored candidates, so generation is '
+          'identical across a row and only the choice of which candidate to execute '
+          'differs. No retraining is involved.\n',
+          '\nCandidate *k* is conditioned on candidates 0..*k*-1, so the trailing candidates '
+          'are the deeply-conditioned ones. That is what the pairs separate:\n',
+          '\n| column | what it executes |',
+          '|---|---|',
+          '| `cand-last` | candidate 15 (most conditioned). Verifier IGNORED. |',
+          '| `cand-8th-from-last` | candidate 8. Verifier IGNORED. |',
+          '| `argmax-all` | highest verifier value of all 16 |',
+          '| `argmax-last8` | highest verifier value among candidates 8-15 |',
+          '| `softmax-all` | sampled from softmax(z/T) over all 16 |',
+          '| `softmax-last8` | sampled from softmax(z/T) over candidates 8-15 |',
+          '',
+          '\n`argmax-all` minus `cand-last` is the verifier ranking\'s contribution on top '
+          'of conditioning depth; `cand-last` minus `cand-8th-from-last` is what the extra '
+          'conditioning alone buys. `*-last8` minus `*-all` says whether restricting the '
+          'oracle to well-conditioned candidates helps or merely removes options.\n',
+          '\n**TEST split, 50 episodes, `--skip-val`.** With no val curve, a checkpoint '
+          'picked off these tables is picked on test and is NOT a held-out estimate -- read '
+          'whole curves, and say which rule you used if you quote a single step. At 50 '
+          'episodes SE is ~7pp near 50%, so gaps under ~14pp are not resolvable.\n',
+          '\nPer-step traces (every candidate\'s verifier value and the executed index) sit '
+          'in `criteria_search/step_*/traces/<criterion>.npz`; validate one with '
+          '`python scripts/check_criteria_traces.py <step dir>`.\n']
+    n_shown = 0
+    for run in CRIT_RUNS:
+        name = run.name.replace('_corrupt-False', '').replace('_demos-100_seed-42', '')
+        blocks = []
+        for letter, label, key, fmt in (
+                ('a', 'binary success rate', 'success_rate', lambda v: f'{100*v:.0f}%'),
+                ('b', 'mean reward, episode max', 'mean_reward', lambda v: f'{v:.3f}'),
+        ):
+            tbl = criteria_table(run, key, fmt)
+            if tbl:
+                blocks += [f'\n#### 6.{n_shown + 1}{letter} `{name}` — {label}\n'] + tbl
+        if blocks:
+            n_shown += 1
+            L += [f'\n### 6.{n_shown} {name}\n'] + blocks
+    if n_shown == 0:
+        # every run globbed but none has a criteria sweep yet: say so rather than emit a
+        # section header with nothing under it
+        L += ['\n_No criteria sweeps have been evaluated yet._\n']
 
 L += ['\n## 4. Where the raw results are\n',
       'Everything in this file is DERIVED. The raw per-checkpoint eval output lives under '
