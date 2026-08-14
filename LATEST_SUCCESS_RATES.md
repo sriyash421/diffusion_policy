@@ -99,6 +99,51 @@ This run reached 300k before the budget was capped at 100k; the other three stop
 
 ---
 
+## Sampler ablation — UNet BC at 8 inference steps
+
+**Same weights, same 50 test episodes, eval-time only.** No retraining: both schedulers derive `alphas_cumprod` from the same betas, so `add_noise` — the only scheduler call `compute_loss` makes — is bit-identical between them (verified, `max|diff| = 0.0`). Only the reverse loop differs: DDPM injects noise at every step, DDIM is deterministic.
+
+Verified from the recorded `episode_idxs`: all three settings, both budgets, all five checkpoints each — the same 50 episodes, identical to the manifest test split.
+
+**n=1 success rate — TEST (50 episodes)**
+
+| checkpoint | @29 DDPM 100 | @29 DDPM 8 | @29 DDIM 8 | @100 DDPM 100 | @100 DDPM 8 | @100 DDIM 8 |
+|---|---|---|---|---|---|---|
+| 20000 | 16% | 0% | 16% | 36% | 0% | 30% |
+| 40000 | 12% | 0% | 14% | 56% | 0% | 52% |
+| 60000 | 18% | 0% | 22% | 62% | 0% | 58% |
+| 80000 | 18% | 0% | 8% | 56% | 0% | 42% |
+| 100000 | 20% | 0% | 20% | 62% | 0% | 46% |
+
+**Mean reward, episode max — TEST, n=1**
+
+| checkpoint | @29 DDPM 100 | @29 DDPM 8 | @29 DDIM 8 | @100 DDPM 100 | @100 DDPM 8 | @100 DDIM 8 |
+|---|---|---|---|---|---|---|
+| 20000 | 0.628 | 0.131 | 0.610 | 0.912 | 0.130 | 0.850 |
+| 40000 | 0.616 | 0.130 | 0.565 | 0.959 | 0.124 | 0.902 |
+| 60000 | 0.606 | 0.129 | 0.584 | 0.915 | 0.138 | 0.866 |
+| 80000 | 0.558 | 0.119 | 0.564 | 0.915 | 0.127 | 0.854 |
+| 100000 | 0.585 | 0.130 | 0.587 | 0.912 | 0.132 | 0.847 |
+
+**The collapse at 8 steps is the SCHEDULER, not the step count.** DDPM at 8 scores **0% at every checkpoint at both budgets** — final-step reward is exactly 0.000, i.e. the policy does not move the block toward the goal at all, and the ~0.13 max reward is incidental contact. Swapping to DDIM at the same 8 steps restores it.
+
+At **29 demos DDIM-8 is indistinguishable from DDPM-100** (16/14/22/8/20 against 16/12/18/18/20). At **100 demos it costs a real but modest amount** — 46–58% against 56–62%, and ~6% on mean reward.
+
+Mechanism: DDPM needs a dense trajectory to converge because it re-injects noise each reverse step, so truncating 100 → 8 leaves the sample unresolved. DDIM is built to subsample the trajectory, which is why the search transformer runs at 8 with no loss (the repo measured n=1 success identical at 8/16/32/100 on those weights).
+
+**Practical upshot.** The UNet BC can run at **8 DDIM steps for a 12.5x sampling speedup**, free at 29 demos and ~10 points at 100. 16 or 32 DDIM steps would likely close that gap and are cheap to check, since this is eval-only.
+
+It also means the headline tables above, which use the UNet's native DDPM at 100, are not penalising it for the sampler — a DDIM reading is at best equal and at 100 demos slightly worse.
+
+Reproduce (the `--noise-scheduler` flag is a sampling-time override; results go to a separate directory because `save_outputs` merges by step and would overwrite the 100-step rows):
+
+```bash
+python eval_search_pusht.py -c <run>/checkpoints/step_XXXXXXX.ckpt \
+    --min-n 1 --max-n 1 --skip-val --n-envs 50 --device cuda:0 \
+    --num-inference-steps 8 --noise-scheduler ddim \
+    -o <run>/bon_search_ddim8/step_XXXXXXX
+```
+
 ## Reading these
 
 **The UNet wins decisively at 100 demos** — 62% against 28%, and 0.959 against 0.796 on mean reward, on identical episodes with a matched schedule. It also learns much faster: 56% by step 40k, a level the transformer never reaches at any checkpoint.
