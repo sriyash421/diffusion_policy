@@ -27,7 +27,7 @@ import wandb.sdk.data_types.video as wv
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.env.pusht.feedback_util import N_KEYPOINTS
-from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
+from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import (
     VideoRecordingWrapper, VideoRecorder)
@@ -181,10 +181,12 @@ class PushTSearchImageRunner(PushTImageRunner):
     def close(self):
         """Shut down the rollout worker pool (one subprocess per env, held for the whole
         run so rollouts don't pay respawn cost). Called by the training workspace."""
+        # force_close, not env.close(): a plain close() drains whatever call is in flight
+        # with no timeout, so one dead worker wedges teardown permanently. See force_close.
         env = getattr(self, 'env', None)
         if env is not None:
-            env.close()
             self.env = None
+            force_close(env)
 
     def run(self, policy: BaseImagePolicy):
         device = policy.device

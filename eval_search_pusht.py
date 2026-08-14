@@ -58,7 +58,7 @@ from diffusion_policy.dataset.pusht_image_dataset import (
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
-from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
+from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
 
 SUCCESS_REWARD = 1.0
 N_LIST = [int(2 ** k) for k in range(7)]  # 1, 2, 4, 8, 16, 32, 64
@@ -489,7 +489,7 @@ def eval_criteria(checkpoint, device, n=16, n_envs=50, max_steps=300, seed=None,
             if on_criterion_done is not None:
                 on_criterion_done(label, row, _stack_trace(traces) if traces else None)
     finally:
-        env.close()
+        force_close(env)   # never block teardown on a dead worker (see force_close)
         close = getattr(policy, 'close', None)
         if close is not None:
             try:
@@ -643,7 +643,7 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             if on_n_done is not None:
                 on_n_done(_curve())
     finally:
-        env.close()
+        force_close(env)   # never block teardown on a dead worker (see force_close)
         # The policy's verifier lazily forks its own pool of sim workers, which garbage
         # collection will not reap. A fresh policy is built per checkpoint, so without
         # this --watch mode leaks a full pool for every checkpoint it evaluates.

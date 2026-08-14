@@ -36,7 +36,7 @@ from diffusion_policy.env.pusht.pusht_env import PushTEnv
 from diffusion_policy.env.pusht.feedback_util import (
     compute_feedback_from_pose, block_pose_from_feedback, keypoints_at_pose,
     T_VERTS, GOAL_POSE, N_KEYPOINTS)
-from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
+from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
 from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 
 
@@ -240,6 +240,11 @@ class PushTVerifier:
         return out
 
     def close(self):
+        # force_close, not _vec.close(): a plain close() first tries to drain whatever call
+        # is in flight, with no timeout, so a worker that died mid-reply hangs teardown
+        # forever. That happened -- a training run sat wedged inside this call for 13.5h
+        # holding a GPU, with SLURM still reporting it RUNNING and the original traceback
+        # swallowed by the stuck unwind. See force_close for the full account.
         if self._vec is not None:
-            self._vec.close()
-            self._vec = None
+            vec, self._vec = self._vec, None
+            force_close(vec)
