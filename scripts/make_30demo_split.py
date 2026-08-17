@@ -8,9 +8,12 @@ reuses its val (30) and test (50) verbatim, so 30-vs-100 isolates dataset size a
     python scripts/make_30demo_split.py [--n 30]
 """
 import argparse
-import hashlib
 import json
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from diffusion_policy.dataset.pusht_image_dataset import split_checksum
 
 SPLITS = pathlib.Path(__file__).resolve().parents[1] / 'diffusion_policy/config/splits'
 
@@ -48,8 +51,8 @@ def main():
         'val': parent['val'],
         'test': parent['test'],
     }
-    payload = json.dumps([out['train'], out['val'], out['test']], sort_keys=True)
-    out['checksum'] = hashlib.md5(payload.encode()).hexdigest()
+    # the loader's own function, not a re-implementation -- it validates against this
+    out['checksum'] = split_checksum(out['train'], out['val'], out['test'])
 
     # the invariants the whole point of this file rests on
     assert set(train) <= set(parent['train'])
