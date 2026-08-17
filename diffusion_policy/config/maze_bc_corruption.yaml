@@ -55,6 +55,8 @@ policy:
   time_as_cond: True # if false, use BERT like encoder only arch, time as input
   obs_as_cond: ${obs_as_cond}
   corrupt_obs: True
+  # corruption is a TRAINING augmentation only; eval rollouts see clean obs
+  corrupt_obs_eval: False
 
   # scheduler.step params
   # predict_epsilon: True

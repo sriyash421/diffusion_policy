@@ -1,101 +1,25 @@
-# DIFFUSION-UNET BC, 100 demos. The other half of the 2x2 against the search transformer
-# at width 1 (train_pusht_st_n1).
-#
-# This is a genuinely different ARCHITECTURE, not a reconfiguration: DiffusionUnetImagePolicy
-# is a conditional UNet over the action sequence with a DDPM scheduler, against
-# PushTDiffusionSearchPolicy's transformer with DDIM. The 2x2 is
-# {unet, transformer} x {29, 100} demos, all four at width 1, so the contrast is
-# architecture and data budget with search width held at 1 throughout.
-#
-# It inherits the SEARCH task (`task: pusht_image_search`), not `task: pusht_image`, so all
-# four runs share one dataset, one env runner and one set of split manifests. `pusht_image`
-# has no `split_file` at all -- it derives a 2-way split from the seed with
-# `train_ratio: 0.2` (~31 episodes), which would put this run on different episodes than
-# everything else in SUCCESS_RATES.md. PushTSearchImageRunner special-cases
-# `n_search_actions: 1` and calls `policy.predict_action`, which is the only rollout method
-# this policy has, so the search runner works here unmodified.
-#
-# OUTER/INNER DOES NOT APPLY HERE. TrainSearchOuterInnerWorkspace calls
-# generate_search_context / predict_epsilon / search_candidates / set_crop_step, and
-# DiffusionUnetImagePolicy has none of them -- it exposes only predict_action,
-# conditional_sample, compute_loss and set_normalizer. There is also nothing to amortize:
-# no candidates are generated at any width. This uses the standard UNet workspace.
-#
-# NOTE two deliberate departures from the upstream UNet recipe:
-#
-#   imagenet_norm: False, not True. The dataset's normalizer already maps images to [-1,1]
-#   (`normalizer['image'] = get_image_range_normalizer()`, scale 2 / offset -1), and both
-#   policies normalize BEFORE the encoder. ImageNet statistics assume [0,1], so leaving this
-#   True double-normalizes and the encoder sees roughly [-6.5, +2.25]. The search configs
-#   document this and set False; matching them is what makes the comparison about
-#   architecture rather than about one arm's inputs being mis-scaled.
-#
-#   num_inference_steps stays at the UNet's native 100. The search arms use 8 because a
-#   training step there samples max_actions-1 candidates and 100 would be 12.5x the dominant
-#   cost -- a constraint that does not exist here, and DDPM at 8 steps is not a fair setting
-#   for this sampler the way DDIM at 8 is for the other. Each architecture is run at its
-#   proper sampler setting; that asymmetry is real and belongs in any writeup.
-#
-# BUDGET / LR: 100k steps, 3k warmup, cosine decay from 1e-4 to a 1e-5 floor at step
-# 80,000, then held constant (`decay_then_constant`, decay_steps 77000).
-#
-# RUN LENGTH IS SET IN GRADIENT STEPS (`training.max_gradient_steps`), not in epochs.
-# `TrainDiffusionUnetImageWorkspace` had no step bound at all until 2026-08-12, so
-# `num_epochs` was the only thing ending a run -- and an epoch is
-# `ceil(n_windows / batch_size)` steps, so the epoch count had to be recomputed by hand
-# every time the demo budget or the batch size moved. That arithmetic lived in comments
-# here, and the comments drifted out of agreement with the values they described.
-# `num_epochs` is now only a safety bound; see the training block below.
-#
-# The LR schedule does not depend on either number: `decay_then_constant` is a pure function
-# of the step index, so run length and schedule are independent (they were coupled under
-# plain cosine, whose horizon is num_training_steps = len(dataloader) * num_epochs).
-#
-# NOTE this workspace did not forward `training.lr_scheduler_kwargs` to get_scheduler at all
-# until 2026-08-12; without that patch decay_steps silently fell back to its 10000 default.
-#
-# `task` FIRST, `_self_` LAST -- the opposite of the other base configs here, and
-# deliberate. Hydra merges defaults in order, so with `_self_` first the task group is
-# applied afterwards and silently overwrites anything this file sets under `task:` --
-# including `n_search_actions`, which must be 1 (see the task block below). The other base
-# configs get away with `_self_` first only because they set nothing under `task:` and
-# leave that to their children.
+# PushT UNet BC -- the second master. Scaffolding from pusht_base; this file is the UNet
+# policy plus the two keys that differ from the search default (workspace and trainer tag).
 defaults:
-  - task: pusht_image_search
+  - pusht_base
   - _self_
 
 name: train_pusht_unet_bc
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
-output_dir: null
+n_demos: 100
+obs_as_global_cond: True
 
-task_name: ${task.name}
-shape_meta: ${task.shape_meta}
-exp_name: pusht_search
+trainer: unet_bc
+run_name: unetbc_demos-${n_demos}_seed-${training.seed}
 
 task:
   env_runner:
-    # MUST be 1. PushTSearchImageRunner calls policy.predict_action_best whenever this is
-    # >1, and DiffusionUnetImagePolicy has no such method -- it has only predict_action, so
-    # the first in-training rollout dies with AttributeError. At 1 the runner special-cases
-    # the BC path and calls predict_action, which is also the correct semantics here: this
-    # policy has no verifier and cannot rank candidates, so best-of-n is undefined for it.
     n_search_actions: 1
 
-# Run identity. `trainer` is a path component of hydra.run.dir, so `unet_bc` keeps these out
-# of both offline/ and outer_inner/ and stops them resuming any search run's checkpoints.
-trainer: unet_bc
-n_demos: 100
-run_name: unetbc_demos-${n_demos}_seed-${training.seed}
-output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
-
-horizon: 16
-n_obs_steps: 2
-n_action_steps: 8
-n_latency_steps: 0
-dataset_obs_steps: ${n_obs_steps}
-past_action_visible: False
-keypoint_visible_rate: 1.0
-obs_as_global_cond: True
+dataloader:
+  num_workers: 4
+val_dataloader:
+  num_workers: 4
 
 policy:
   _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
@@ -159,105 +83,18 @@ ema:
   min_value: 0.995
   max_value: 0.995
 
-dataloader:
-  # 32, NOT the upstream UNet recipe's 64. Matched to the search line's batch size so the
-  # 2x2 varies architecture and demo budget only. Note this also changes steps/epoch, and
-  # therefore `training.num_epochs` below -- see the comment there.
-  batch_size: 32
-  num_workers: 4
-  shuffle: True
-  pin_memory: True
-  persistent_workers: True
-
-val_dataloader:
-  batch_size: 32
-  num_workers: 4
-  shuffle: False
-  pin_memory: True
-  persistent_workers: True
-
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 1.0e-4
-  betas: [0.95, 0.999]
-  eps: 1.0e-8
-  weight_decay: 1.0e-6
-
 training:
-  device: "cuda:0"
-  seed: 42
-  debug: False
-  resume: True
-  lr_scheduler: decay_then_constant
-  lr_warmup_steps: 3000
-  # Cosine from peak 1e-4 down to min_lr_ratio*lr = 1e-5, reaching the floor at step 80,000,
-  # then HELD constant at 1e-5 for the rest of the run.
-  #
-  # decay_steps is measured from the END of warmup (progress = (step - warmup)/decay_steps),
-  # so 3000 + 77000 = the floor lands exactly at step 80,000.
-  #
-  # Unlike plain `cosine` this schedule is EXTENDABLE and safe to resume: it is a pure
-  # function of the step index and holds its floor indefinitely, so training past 100k just
-  # continues at 1e-5. Plain cosine is periodic past its horizon -- it climbs back to peak --
-  # so a resumed run would silently start a second cycle.
-  lr_scheduler_kwargs:
-    decay_steps: 77000
-    min_lr_ratio: 0.1
-  # THE run length, in gradient steps. Enforced mid-epoch, so it is exact rather than
-  # rounded up to the next epoch boundary, and it does NOT move when the batch size or the
-  # demo budget changes -- which is the whole point of setting it here instead of deriving
-  # an epoch count. Matches train_pusht_st_n1.
-  max_gradient_steps: 100000
-  # SAFETY BOUND ONLY -- `max_gradient_steps` above is what ends the run. Deliberately far
-  # larger than any epoch count that could reach 300k steps (at batch 32 and 29 demos, the
-  # smallest budget here, 300k steps is 2,728 epochs), so it never binds first and never
-  # needs recomputing. Kept rather than removed because the loop is `range(num_epochs)` and
-  # `self.epoch` feeds `checkpoint.topk.format_str`.
-  #
-  # NOTE this also feeds the scheduler's `num_training_steps`, which `decay_then_constant`
-  # ignores. Switching `lr_scheduler` back to plain `cosine` would make that horizon
-  # 100000 * 382 steps and the LR would barely decay -- set it deliberately if you do.
-  num_epochs: 100000
-  gradient_accumulate_every: 1
-  use_ema: True
-  freeze_encoder: False
-  rollout_every: null
-  rollout_every_steps: 20000
-  # 10000, NOT 1000. A UNet checkpoint is ~4.4 GB -- 17x the search transformer's 261 MB,
-  # because this policy is ~278M params and the payload carries weights + the EMA copy +
-  # AdamW moments. At a 1k cadence a 300k run needs ~1.3 TB, and the two UNet arms together
-  # filled a 1.9 TB disk at step 115k with `OSError: [Errno 28] No space left on device`.
-  # 10k matches the eval grid exactly -- nothing is ever evaluated off it -- so this costs
-  # no measurement: 30 checkpoints x 4.4 GB = 132 GB for a 300k run.
-  checkpoint_every: 10000
+  # the UNet workspace validates and samples on an epoch cadence, not a step one
   val_every: 1
   sample_every: 5
-  max_train_steps: null
-  max_val_steps: null
-  tqdm_interval_sec: 1.0
+  rollout_every: null
+  # NOT inherited from pusht_base's 1.0: this arm has never clipped, and the workspace does
+  # read the key (train_diffusion_unet_image_workspace.py), so inheriting it would silently
+  # change UNet BC. The asymmetry vs the ST arm is a documented, deliberate difference.
+  gradient_clip_norm: null
+  # The remaining pusht_base training.* keys (outer/inner geometry, *_every_steps,
+  # nrmse_max_batches, ema_decay) are inert here -- this workspace reads none of them, and
+  # EMA is configured by the `ema:` block above.
 
 logging:
-  entity: l2sml
-  project: pushT_diffusion_search
-  resume: True
-  mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}", "unet-bc", "demos-${n_demos}"]
-  id: null
-  group: null
-
-checkpoint:
-  topk:
-    monitor_key: val_loss
-    mode: min
-    k: 5
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.4f}.ckpt'
-  save_last_ckpt: True
-  save_last_snapshot: False
-
-hydra:
-  run:
-    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
-  sweep:
-    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/_sweep_${now:%Y.%m.%d-%H.%M.%S}
-    subdir: ${hydra.job.num}

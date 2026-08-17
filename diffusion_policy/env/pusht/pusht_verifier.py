@@ -19,10 +19,9 @@ with ``render=True`` also the rendered subgoal observation ``(B, 3, 96, 96)``. A
 comes from the same simulation, so the extra signals cost no extra sim steps (``render``
 adds one render per chunk, not per step).
 
-These are what the search-context modes of ``PushTDiffusionSearchPolicy`` feed back into the
-search context instead of / alongside the scalar: ``state``/``state_value`` use the low-dim
-state, ``subgoal``/``subgoal_value`` use the rendered observation embedded through the
-policy's own obs encoder.
+The reached state also backs the search-context modes of ``PushTDiffusionSearchPolicy``:
+``value`` rescales the scalar from it, and ``subgoal``/``subgoal_value`` pair it with the
+rendered frame and embed the whole observation through the policy's own obs encoder.
 """
 from typing import Dict
 

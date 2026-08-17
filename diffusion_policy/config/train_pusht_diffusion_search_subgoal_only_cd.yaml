@@ -39,7 +39,7 @@ selection: final_pass
 corrupt_obs: False
 arm: subgoal-only
 
-slot_weight_decay: 1.0      # OFF -- superseded by context_decay
+slot_weight_decay: False      # OFF -- superseded by context_decay
 context_decay: 0.9
 
 # K and the decay are both part of the run identity: they change the objective, and

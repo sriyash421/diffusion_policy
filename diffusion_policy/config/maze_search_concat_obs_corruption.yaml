@@ -31,6 +31,8 @@ policy:
   hidden_dim: 512
   hidden_depth: 4
   corrupt_obs: True
+  # corruption is a TRAINING augmentation only; eval rollouts see clean obs
+  corrupt_obs_eval: False
   concat_obs: True
   max_actions: 16
   maze_path: data/maze.npy

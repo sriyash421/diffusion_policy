@@ -32,25 +32,86 @@
 # 13k and sit there for 87% of the run. That defect is recorded in
 # data/outputs/_discarded/bc_demos-29-r8_seed-42__BAD-lr-decay_steps-10000/WHY_DISCARDED.md.
 #
+# DENOISER CAPACITY, RAISED 2026-08-14 AND NOW THE DEFAULT. n_layer 4 -> 6, n_head 4 -> 8,
+# n_emb 256 -> 1024, p_drop_attn 0.2 -> 0.1. Measured at this task's obs_feature_dim 530 /
+# horizon 16 / action_dim 2:
+#
+#            denoiser   decoder   cond enc   whole policy   ckpt      vs UNet
+#   was         5.94M     4.21M      1.58M       17.12M     0.27 GB    0.021x
+#   NOW       126.58M   100.78M     25.19M      137.75M     2.20 GB    0.449x
+#   UNet BC   282.18M       --         --       293.36M     4.40 GB    1.000x
+#
+# WHY. At 100 demos the UNet BC arm reached 62% success against this architecture's 28%, and
+# the gap OPENED with data (at 29 demos they converge, 20% vs 18%). This arm had the BEST
+# held-out denoising loss of all four 2x2 arms and lost badly on the task, so it was neither
+# failing to learn the objective nor undertrained. train_pusht_st_n1_drop001 tests the
+# regularization explanation; this tests the other one its header names as the fallback,
+# "capacity and conditioning bandwidth (5.94M vs 278.10M denoiser ...)".
+#
+# Transformer parameters go as n_layer x 16 d^2 plus n_cond_layers x 12 d^2, so DEPTH IS
+# LINEAR AND WIDTH IS QUADRATIC: 4 -> 6 layers alone is 1.35x (8.06M); 256 -> 1024 is what
+# buys the 21x. The ResNet18 obs encoder is untouched at 11.18M.
+#
+# HEAD DIM CHANGES, 64 -> 128 (1024/8, where it was 256/4). This is therefore not a pure
+# widening -- each head attends in a 128-d subspace -- and the LR schedule below transfers
+# less cleanly than it would at n_head 16, which would hold head dim at 64 for the same
+# width and the SAME parameter count. n_head 16 is the first thing to try if this trains
+# badly.
+#
+# TWO VARIABLES MOVED TOGETHER: p_drop_attn also went 0.2 -> 0.1, on the usual argument that
+# a larger model is under-regularized less. That argument is WEAK here -- 126.58M parameters
+# against 12,199 training windows -- so if this arm regresses, check the train/val gap
+# before concluding anything about capacity. train_pusht_st_n1_drop001 (0.01 dropout at the
+# OLD capacity) is the other half of the pair and is what disambiguates.
+#
+# THE PARENT MOVED TOO, on the same day: `causal_attn: False -> True` and
+# `cond_encoder: gpt2`. So a run from here differs from the reported `stn1_demos-100_seed-42`
+# numbers in FOUR ways, not one, and no single result attributes among them. See
+# ARCH_2x2_PARITY.md.
+#
 # `_self_` LAST, or the parent overrides everything below it.
 defaults:
-  - train_pusht_diffusion_search
+  - train_pusht_diffusion_search_single
   - _self_
 
 name: train_pusht_st_n1
 
-trainer: offline
-_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 
 n_demos: 100
 # `ctx-`/`corrupt-` are dropped: neither applies to a policy whose context is always empty.
 # `stn1` distinguishes these from the `bc_demos-*` directories, which are a DIFFERENT
 # generation (decay_then_constant, offline trainer) that must not be resumed by these.
-run_name: stn1_demos-${n_demos}_seed-${training.seed}
+#
+# `gpt2big` MARKS A NEW GENERATION AND MUST NOT BE REVERTED TO PLAIN `stn1_`. Four things
+# changed on 2026-08-14 -- capacity, dropout, causal_attn and cond_encoder -- and
+# `offline/stn1_demos-100_seed-42` still holds the pre-change run that every number in
+# LATEST_SUCCESS_RATES.md is measured on. hydra.run.dir is derived from run_name with
+# training.resume: True, so keeping the old name would point this run at that directory:
+# n_emb 256 -> 1024 reshapes every tensor and causal_attn adds a `model.mask` key, so it
+# would die on load rather than silently continue -- but it would still be writing new
+# checkpoints into the directory the reported results came from. The rename is what keeps
+# the two generations separable.
+#
+# `stn1gpt2_demos-100_seed-42` is likewise taken: that is cond_encoder gpt2 + causal_attn at
+# the OLD capacity, stopped at step 110000.
+run_name: stn1gpt2big_demos-${n_demos}_seed-${training.seed}
 
 policy:
   # THE knob: 1 candidate == empty context.
   max_actions: 1
+
+  # Denoiser capacity -- see the header. n_emb feeds d_model on the decoder stack and on the
+  # conditioning trunk (GPT2Config n_embd, since the parent sets cond_encoder: gpt2), plus
+  # input_emb / obs_emb / action_value_emb / time_emb / pos_emb / ln_f / head. Nothing
+  # OUTSIDE SearchTransformerForDiffusion keys off it, so no other config value moves with it.
+  n_layer: 6
+  n_head: 8
+  n_emb: 1024
+
+  # The second knob -- see "TWO VARIABLES" in the header. Feeds `dropout=` on the decoder
+  # stack and, via _build_cond_encoder, GPT-2's resid_pdrop/attn_pdrop. p_drop_emb is 0.0 in
+  # the parent, so this is the only dropout in the model.
+  p_drop_attn: 0.1
 
   # 100, NOT the search line's 8. Set for PARITY with train_pusht_unet_bc, whose DDPM
   # sampler runs at its native 100 -- so the 2x2 varies architecture and demo budget with
@@ -74,47 +135,7 @@ task:
     # the runner special-cases 1 and calls predict_action, so no verifier pool is spawned
     n_search_actions: 1
 
-training:
-  max_gradient_steps: 100000
-  lr_scheduler: decay_then_constant
-  lr_warmup_steps: 3000
-  # Cosine from peak 1e-4 down to min_lr_ratio*lr = 1e-5, reaching the floor at step 80,000,
-  # then HELD constant at 1e-5 for the rest of the run.
-  #
-  # decay_steps is measured from the END of warmup (progress = (step - warmup)/decay_steps),
-  # so 3000 + 77000 = the floor lands exactly at step 80,000.
-  #
-  # Unlike plain `cosine` this schedule is EXTENDABLE and safe to resume: it is a pure
-  # function of the step index and holds its floor indefinitely, so training past 100k just
-  # continues at 1e-5. Plain cosine is periodic past its horizon -- it climbs back to peak --
-  # so a resumed run would silently start a second cycle.
-  lr_scheduler_kwargs:
-    decay_steps: 77000
-    min_lr_ratio: 0.1
-
-  # SAFETY BOUND ONLY -- `max_gradient_steps` above is what ends the run, and since
-  # 2026-08-12 it is enforced MID-EPOCH, so it stops on the exact step.
-  #
-  # It did not, before. The cap was only checked between epochs, and at 382 steps/epoch the
-  # 786th epoch began at step 299,870 -- under the cap, so it never fired and the run went
-  # to 300,252. `num_epochs` was the real bound, which meant recomputing it from
-  # `ceil(n_windows / batch_size)` whenever the demo budget or batch size moved.
-  #
-  # Now set far above any epoch count that could reach 300k steps (2,728 at the smallest
-  # budget in this family), so it never binds and never needs recomputing. Kept rather than
-  # removed because the loop is `range(num_epochs)` and `self.epoch` feeds the topk
-  # `format_str`. `decay_then_constant` ignores num_training_steps, so the LR curve does not
-  # depend on this either.
-  num_epochs: 100000
-  # no outer_batch_size / inner_batch_size / inner_epochs / drift_every here: those are
-  # TrainSearchOuterInnerWorkspace knobs and this run uses the offline loop (see header).
-  #
-  # 10000, matching the UNet arm and the eval grid exactly -- every checkpoint written is
-  # evaluated, and nothing is evaluated off-grid. At 1000 a 300k run wrote 300 checkpoints
-  # of which only 30 were ever scored; the other 270 were dead weight (78 GB here, and the
-  # same cadence on the 4.4 GB UNet checkpoints is what filled a 1.9 TB disk at step 115k).
-  checkpoint_every: 10000
-  rollout_every_steps: 20000
-
 logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "st-n1", "demos-${n_demos}"]
+  # `gpt2big` alongside `st-n1` so the new generation is filterable without losing the arm
+  # tag the older runs are grouped by.
+  tags: ["${name}", "${task_name}", "${exp_name}", "st-n1", "gpt2big", "demos-${n_demos}"]

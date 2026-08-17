@@ -20,7 +20,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_transformer_search_policy.DiffusionTransformerSearchPolicy
+  _target_: diffusion_policy.policy.maze_diffusion_search_policy.MazeDiffusionSearchPolicy
   shape_meta: ${shape_meta}
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder

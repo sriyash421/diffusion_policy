@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.obs_corruption import ObsCorruptionMixin
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -10,7 +11,7 @@ from torch.distributions import Normal
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-class MLPImagePolicy(BaseImagePolicy):
+class MLPImagePolicy(ObsCorruptionMixin, BaseImagePolicy):
     def __init__(self,
             shape_meta: dict[str, Any],
             obs_encoder: MultiImageObsEncoder,
@@ -52,7 +53,7 @@ class MLPImagePolicy(BaseImagePolicy):
         
         self.log_std_limits = (-5.0, 2.0)
 
-        self.corrupt_obs = corrupt_obs
+        self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))
         self.obs_noise_scheduler = DDPMScheduler(
             num_train_timesteps=100,
             beta_start=0.001,
@@ -61,20 +62,6 @@ class MLPImagePolicy(BaseImagePolicy):
         )
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
-
-    def corrupt_obs_features(self, obs_features):
-        if not self.corrupt_obs:
-            return obs_features
-
-        # Add noise to encoded obs features to simulate corrupted context.
-        obs_noise = torch.randn_like(obs_features)
-        bsz = obs_features.shape[0]
-        timesteps = torch.randint(
-            0, self.obs_noise_scheduler.config.num_train_timesteps, 
-            (bsz,), device=obs_features.device
-        ).long()
-        return self.obs_noise_scheduler.add_noise(
-            obs_features, obs_noise, timesteps)
     
     def forward(self, obs_features: torch.Tensor) -> Normal:
         """

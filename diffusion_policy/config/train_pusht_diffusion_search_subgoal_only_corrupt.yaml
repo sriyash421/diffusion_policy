@@ -19,6 +19,8 @@ name: train_pusht_diffusion_search_subgoal_only_corrupt
 search_context: subgoal
 selection: final_pass
 corrupt_obs: True
+# corruption is a TRAINING augmentation only; eval rollouts see clean obs
+corrupt_obs_eval: False
 arm: subgoal-only
 
 logging:
