@@ -50,6 +50,10 @@ trainer: outer_inner             # {offline, outer_inner} -- paired with _target
 search_context: value            # {value, subgoal, subgoal_value}
 
 corrupt_obs: False
+# Paired with corrupt_obs above and REQUIRED whenever it is True: whether eval rollouts
+# also see corrupted observations. null means "not answered", which the policy rejects --
+# it used to be answered implicitly (and inconsistently) at the call site.
+corrupt_obs_eval: null
 
 # How the executed action is picked. ORTHOGONAL to search_context, which only says what
 # each candidate reports back:
@@ -96,7 +100,7 @@ n_candidates: 16
 # final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
 # The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
 # by running jobs still resolve; drop those symlinks once nothing reads through them.
-run_name: ${arm}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
@@ -124,7 +128,7 @@ policy:
       # with a freshly-initialized GroupNorm, which discards exactly the normalization
       # statistics pretrained weights depend on. Pick one or the other; upstream PushT BC
       # pairs random init with group norm, and that is the configuration that works here.
-      weights: null
+      weights: IMAGENET1K_V1
     resize_shape: null
     # The CropRandomizer still lives here (so the encoder's declared input shape stays
     # 96x96 and its shape assertion keeps working), but the POLICY chooses the offsets and
@@ -221,6 +225,7 @@ policy:
   # interpolated from the top-level identity keys so the run dir and the policy can never
   # disagree about which ablation arm this is
   corrupt_obs: ${corrupt_obs}
+  corrupt_obs_eval: ${corrupt_obs_eval}
   search_context: ${search_context}
   selection: ${selection}
   slot_weight_decay: ${slot_weight_decay}

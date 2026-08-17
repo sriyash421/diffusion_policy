@@ -21,17 +21,19 @@ set +u; conda activate robodiff; set -u
 # Commas separate overrides; they are split on whitespace below.
 CONFIGS="
 value_clean|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False
-value_corrupt|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=True
+value_corrupt|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=True,corrupt_obs_eval=False
 subgoal_clean|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False
-subgoal_corrupt|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=True
+subgoal_corrupt|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=True,corrupt_obs_eval=False
 subgoalval_clean|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=False
-subgoalval_corrupt|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=True
-r8_value_clean|train_pusht_diffusion_search_29|search_context=value,arm=value,corrupt_obs=False
-r8_subgoal_clean|train_pusht_diffusion_search_29|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False
+subgoalval_corrupt|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=True,corrupt_obs_eval=False
+value_clean_30|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False,n_demos=30
+subgoal_clean_30|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False,n_demos=30
 subgoal_only|train_pusht_diffusion_search_subgoal_only|
-subgoal_only_cd_k4|train_pusht_diffusion_search_subgoal_only_cd_k4|
+subgoal_only_cd_k4|train_pusht_diffusion_search_subgoal_only_cd|n_candidates=4
 train_pusht_bc|train_pusht_bc|
-train_pusht_bc_25|train_pusht_bc_25|
+train_pusht_bc_30|train_pusht_bc|n_demos=30
+train_pusht_gaussian_search|train_pusht_gaussian_search|
+train_pusht_st_n1|train_pusht_st_n1|
 "
 fail=0
 for spec in $CONFIGS; do

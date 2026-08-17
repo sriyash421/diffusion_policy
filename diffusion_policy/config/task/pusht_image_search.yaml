@@ -34,7 +34,7 @@ env_runner:
   n_vis: 5
   # candidates generated per decision at eval time (best-value one is executed). Kept
   # modest so periodic in-training rollout stays affordable (verifier is physics-simulated).
-  n_search_actions: 8
+  n_search_actions: ${n_candidates}
   # must be False to reset exactly onto recorded states (see runner)
   legacy: False
   max_steps: 300

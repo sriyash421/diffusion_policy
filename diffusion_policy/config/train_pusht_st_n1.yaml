@@ -104,9 +104,9 @@ policy:
   # conditioning trunk (GPT2Config n_embd, since the parent sets cond_encoder: gpt2), plus
   # input_emb / obs_emb / action_value_emb / time_emb / pos_emb / ln_f / head. Nothing
   # OUTSIDE SearchTransformerForDiffusion keys off it, so no other config value moves with it.
-  n_layer: 6
-  n_head: 8
-  n_emb: 1024
+  n_layer: 4
+  n_head: 4
+  n_emb: 256
 
   # The second knob -- see "TWO VARIABLES" in the header. Feeds `dropout=` on the decoder
   # stack and, via _build_cond_encoder, GPT-2's resid_pdrop/attn_pdrop. p_drop_emb is 0.0 in

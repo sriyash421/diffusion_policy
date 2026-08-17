@@ -19,6 +19,10 @@ _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWork
 # Search-arm knobs, same meaning as on the diffusion master.
 search_context: value            # {value, subgoal, subgoal_value}
 corrupt_obs: False
+# Paired with corrupt_obs above and REQUIRED whenever it is True: whether eval rollouts
+# also see corrupted observations. null means "not answered", which the policy rejects --
+# it used to be answered implicitly (and inconsistently) at the call site.
+corrupt_obs_eval: null
 selection: argmax                # {argmax, softmax, final_pass}
 arm: gaussian
 n_candidates: 16
@@ -34,7 +38,7 @@ policy:
     rgb_model:
       _target_: diffusion_policy.model.vision.model_getter.get_resnet
       name: resnet18
-      weights: null
+      weights: IMAGENET1K_V1
     resize_shape: null
     crop_shape: [76, 76]
     random_crop: True
@@ -55,6 +59,7 @@ policy:
   mask_obs: False
   concat_obs: False
   corrupt_obs: ${corrupt_obs}
+  corrupt_obs_eval: ${corrupt_obs_eval}
   search_context: ${search_context}
   selection: ${selection}
   # policy-owned crop, so the obs and every subgoal share one offset
