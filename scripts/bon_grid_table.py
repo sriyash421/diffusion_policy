@@ -1,14 +1,15 @@
 """Render the policy x selection x n grid from the sweep log.
 
-Rows are (policy, selection, checkpoint); columns are n. Reads whatever has completed so
-far, so it is safe to run against an in-progress sweep.
+Rows are (policy, checkpoint, selection); columns are n. Checkpoint groups the selection
+rules so the three are read side by side -- in particular their n=1 cells, which must agree
+exactly. Reads whatever has completed so far, so it is safe against an in-progress sweep.
 
     python scripts/bon_grid_table.py [--metric reward|success] [--split test|val]
 """
 import argparse, re, sys
 
 NS = [1, 2, 4, 8, 16]
-ARMS = (('search', 'SEARCH'), ('bc', 'BC'))
+ARMS = (('search', 'ST-diffusion-n16'), ('bc', 'ST-diffusion-n1'))
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
 
@@ -37,25 +38,23 @@ def main():
         sys.exit('no completed cells yet')
 
     print(f'### {a.split.upper()}  --  {a.metric}\n')
-    print('| policy | selection | checkpoint | ' + ' | '.join(f'n={n}' for n in NS) + ' |')
+    print('| policy | checkpoint | selection | ' + ' | '.join(f'n={n}' for n in NS) + ' |')
     print('|---|---|---|' + '---|' * len(NS))
-    # Repeated policy/selection labels are blanked, so the eye tracks one block per rule
-    # rather than re-reading the same two words on all ten checkpoint rows.
+    # Repeated policy/checkpoint labels are blanked, so each checkpoint reads as one block
+    # of three selection rules rather than the same two words on every row.
     prev = (None, None)
     for arm, label in ARMS:
-        steps = sorted({s for (ar, s, _, _, _) in d if ar == arm})
-        for sel in SELECTIONS:
-            for st in steps:
+        for st in sorted({s for (ar, s, _, _, _) in d if ar == arm}):
+            ckpt = f'{int(st.split("_")[1]):,}'
+            for sel in SELECTIONS:
                 cells = [(lambda v: f'{v[idx]:.3f}' if v else '-')(
                     d.get((arm, st, sel, n, a.split))) for n in NS]
                 if set(cells) == {'-'}:
                     continue
                 pol_c = label if prev[0] != label else ''
-                sel_c = sel if prev != (label, sel) else ''
-                prev = (label, sel)
-                print(f'| {pol_c} | {sel_c} | {int(st.split("_")[1]):,} | '
-                      + ' | '.join(cells) + ' |')
-
+                ck_c = ckpt if prev != (label, ckpt) else ''
+                prev = (label, ckpt)
+                print(f'| {pol_c} | {ck_c} | {sel} | ' + ' | '.join(cells) + ' |')
 
 if __name__ == '__main__':
     main()

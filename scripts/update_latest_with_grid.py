@@ -31,7 +31,7 @@ def main():
     done = len(re.findall(r'^=== \S+ \w+ step_\d+ \w+ ===', LOG.read_text(), re.M))
     finished = 'grid done' in LOG.read_text()
 
-    parts = [START, '', '## 2. Best-of-n grid -- policy x selection x checkpoint', '']
+    parts = [START, '', '## 2. Best-of-n grid -- policy x checkpoint x selection', '']
     parts.append(
         f'Every `step_*.ckpt` on the 10k grid x {{argmax, softmax, final_pass}} x '
         f'n in {{1,2,4,8,16}}, both arms. **{done}/60 combos complete'
@@ -45,6 +45,11 @@ def main():
         'matched on compute. At n=1 there is nothing to select, so all three rules run the '
         'same empty-context conditional and their n=1 cells must agree exactly -- a '
         'disagreement there is a bug, not a result.\n')
+    parts.append(
+        'The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a '
+        'column heading is the eval width. `ST-diffusion-n1` read at n=16 is a BC '
+        'checkpoint sampled 16 times i.i.d., since at width 1 there is no context to '
+        'condition on.\n')
     # bon_grid_table.py emits its own "### SPLIT -- metric" heading per table
     for split in ('test', 'val'):
         for metric in ('reward', 'success'):

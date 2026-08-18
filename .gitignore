@@ -146,3 +146,5 @@ dmypy.json
 .pyre/
 data
 results
+# Cluster results copied off Hyak (see aug10_results2copy.md)
+hyak_results/
