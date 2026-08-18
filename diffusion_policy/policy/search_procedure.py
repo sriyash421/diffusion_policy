@@ -68,6 +68,13 @@ class SearchProcedureMixin:
         self.selection_temperature = float(
             kwargs.get('selection_temperature', 1.0) or 1.0)
         assert self.selection_temperature > 0, 'selection_temperature must be > 0'
+        # Selection draws from its OWN stream, not the global one the diffusion sampler
+        # uses, so turning softmax on does not perturb the trajectories themselves. Same
+        # reason CropScopeMixin owns _crop_generator. Not a buffer: it holds no learnable
+        # state and a checkpoint should not pin the eval noise.
+        self._selection_generator = torch.Generator()
+        self._selection_generator.manual_seed(
+            int(kwargs.get('selection_seed', 0) or 0) + 20250818)
 
     @contextlib.contextmanager
     def _crop_scope(self):
@@ -283,53 +290,77 @@ class SearchProcedureMixin:
         (Tensors only: the runners push this dict straight through ``dict_apply``, so a
         string mode tag here would crash them. Read the mode off ``policy.selection``.)
 
+        ``n_actions`` is the TOTAL number of generations, identically under every
+        selection rule, so curves from different rules share one x axis and one cost.
+
         WHICH chunk depends on ``self.selection``:
           * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
-          * 'final_pass' -- one MORE sample, conditioned on all n scored candidates, is
-            drawn and returned. It is not simulated and not compared to anything, so the
-            verifier scalar never touches selection; it reaches the model only as search
-            context. ``scores`` still describes the n context candidates (so the caller can
-            log the spread), but no longer describes the returned action.
+          * 'final_pass' -- only n-1 candidates are searched and scored; the n'th
+            generation is conditioned on them and returned. It is not simulated and not
+            compared to anything, so the verifier scalar never touches selection; it
+            reaches the model only as search context. ``scores`` describes the n-1 context
+            candidates (so the caller can log the spread), not the returned action, and is
+            absent entirely at n=1.
 
-        Cost at width n: 'argmax' is n samples + n sims, 'final_pass' is n+1 samples + n
-        sims. Consumers that compare arms should compare at equal SAMPLES, not equal n --
-        see the ``n_generations`` field eval_search_pusht.py records.
+        That split matches training exactly: ``generate_search_context`` runs at
+        ``max_actions - 1`` and the loss covers slot ``max_actions - 1``, i.e. K
+        generations in total. It also makes 'final_pass' at n=1 the empty-context
+        conditional -- the same action 'argmax' and 'softmax' return there, since with one
+        candidate there is nothing to select.
+
+        Cost at width n is n samples under every rule; 'argmax'/'softmax' additionally run
+        n verifier sims and 'final_pass' n-1.
         """
         n = n_actions if n_actions is not None else self.max_actions
+        final_pass = self.selection == 'final_pass'
+        # Under 'final_pass' the last of the n generations IS the returned action, so only
+        # n-1 of them are searched.
+        n_search = n - 1 if final_pass else n
+        assert n_search >= 0, f'n_actions must be >= 1, got {n}'
         # `scores` is the scalar verifier value in every search_context mode; `values` may
         # be a wider context (e.g. a subgoal state), which is not rankable.
         # The crop scope spans the whole search so the obs and every candidate's subgoal
         # share one offset, exactly as in training. (In eval mode that offset is the
         # deterministic center crop, so this is belt-and-braces rather than load-bearing.)
         with self._crop_scope():
-            # encoded once and shared by the search AND (in 'final_pass') the extra sample
+            # encoded once and shared by the search AND (in 'final_pass') the final sample
             obs_features = self._encode_obs_features(obs_dict)
-            actions, values, scores = self.predict_n_actions(
-                obs_dict, verifier=self.verifier, n_actions=n,
-                return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
+            actions = values = scores = None
+            if n_search > 0:
+                actions, values, scores = self.predict_n_actions(
+                    obs_dict, verifier=self.verifier, n_actions=n_search,
+                    return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
 
-            if self.selection in ('argmax', 'softmax'):
+            if not final_pass:
                 action_pred = select_candidate(                         # (B, H, Da)
-                    actions, scores, self.selection, self.selection_temperature)
+                    actions, scores, self.selection, self.selection_temperature,
+                    generator=self._selection_generator)
             else:
                 # Condition on the last max_actions-1 candidates: that is the widest
                 # context the model was ever trained at (the staircase memory mask tops out
                 # at max_context_actions), so a longer one would index past cond_pos_emb.
                 # `values`, not `scores` -- in the subgoal modes the context is the encoded
                 # subgoal observation and the bare scalar would be the wrong width.
-                keep = self.max_actions - 1
+                # keep may be 0 -- at n=1 (nothing generated yet) or at max_actions=1 (the
+                # BC arm, which has no context capacity at all). `actions[:, -0:]` is the
+                # WHOLE tensor, so the empty case must pass None rather than a slice.
+                keep = min(n_search, self.max_actions - 1)
                 action_pred = self.predict_action(
                     obs_dict,
-                    actions=actions[:, -keep:],
-                    values=values[:, -keep:],
+                    actions=actions[:, -keep:] if keep else None,
+                    values=values[:, -keep:] if keep else None,
                     obs_features=obs_features,
                 )['action_pred']                                        # (B, H, Da)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
-        return {
+        out = {
             'action': action_pred[:, start:end],            # (B, n_action_steps, Da)
             'action_pred': action_pred,
-            'scores': scores,
         }
+        # Omitted rather than None when nothing was scored: the env runners push this dict
+        # straight through dict_apply, which would call .detach() on a None.
+        if scores is not None:
+            out['scores'] = scores
+        return out
 

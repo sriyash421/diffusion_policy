@@ -12,10 +12,17 @@ import torch
 SELECTION_MODES = ('argmax', 'softmax', 'final_pass')
 
 
-def select_candidate(actions, scores, mode='argmax', temperature=1.0):
+def select_candidate(actions, scores, mode='argmax', temperature=1.0, generator=None):
     """Pick one chunk per batch row.
 
     actions (B, n, H, Da), scores (B, n) -> (B, H, Da).
+
+    ``generator``: a torch.Generator the softmax draw is taken from. Pass one -- the
+    policy owns a dedicated generator for exactly this. Selection and the diffusion
+    sampler otherwise share the global RNG stream, and since DDIM at eta=0 draws only the
+    initial `torch.randn` per generation, softmax's one extra draw shifts every subsequent
+    noise vector. That made 'argmax' and 'softmax' rollouts diverge at n=1, where they
+    take provably the same action -- an apparent selection effect that was only reseeding.
     """
     assert mode in ('argmax', 'softmax'), \
         f"select_candidate handles 'argmax'/'softmax'; got {mode!r} " \
@@ -32,5 +39,10 @@ def select_candidate(actions, scores, mode='argmax', temperature=1.0):
         mu = scores.mean(dim=1, keepdim=True)
         sd = scores.std(dim=1, unbiased=False, keepdim=True)
         z = (scores - mu) / (sd + 1e-6)
-        pick = torch.distributions.Categorical(logits=z / temperature).sample()
+        probs = torch.softmax(z / temperature, dim=1)
+        # Inverse-CDF rather than Categorical.sample(): torch.distributions takes no
+        # generator, so it can only draw from the global stream. Drawn on CPU so one
+        # generator serves every device.
+        u = torch.rand(B, 1, generator=generator).to(probs.device, probs.dtype)
+        pick = (probs.cumsum(dim=1) < u).sum(dim=1).clamp_(max=probs.shape[1] - 1)
     return actions[arange, pick]

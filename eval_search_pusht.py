@@ -402,13 +402,13 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     env = build_envs(n_envs, cfg.policy.n_obs_steps, cfg.policy.n_action_steps, max_steps)
     val_sr, val_ci, test_sr, test_ci, test_rewards, val_rewards = {}, {}, {}, {}, {}, {}
     done = []
-    # How the executed action is picked, and therefore what n COSTS. Under 'final_pass' the
-    # policy draws one further sample, conditioned on the n scored candidates, and executes
-    # that -- so a point at n is n+1 diffusion samples, not n. Recorded per curve because
-    # otherwise a `subgoal-only` curve and a `value` curve read off the same x axis are
-    # being compared at different compute, which flatters whichever one is doing more work.
+    # How the executed action is picked. n is the TOTAL generation count under every rule
+    # (predict_action_best searches at n-1 under 'final_pass' and returns the n'th sample),
+    # so n_generations == n and curves from different rules are directly comparable. Kept
+    # as an explicit field because it was NOT always equal: before 2026-08-18 'final_pass'
+    # cost n+1, so archived curves carry the old value and must be read off it, not off n.
     selection = getattr(policy, 'selection', 'argmax')
-    n_extra = 1 if selection == 'final_pass' else 0
+    n_extra = 0
     temperature = getattr(policy, 'selection_temperature', None)
 
     def _curve():

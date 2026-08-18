@@ -145,17 +145,22 @@ def main():
             cfg = compose(config_name='train_pusht_diffusion_search',
                           overrides=overrides)
             assert cfg.selection == 'argmax', f'{name} selection={cfg.selection}'
-            assert cfg.slot_weight_decay == 1.0, f'{name} decay={cfg.slot_weight_decay}'
+            # False, not 1.0: 'off' is explicit now (a no-op float is rejected), and the
+            # uniform path it selects is numerically what 1.0 always did.
+            assert cfg.slot_weight_decay is False, f'{name} decay={cfg.slot_weight_decay}'
             # Post-rename (AUDIT.md 9.9) the run dir is keyed on `arm`, not search_context.
             # Assert it resolves to THIS arm's label: a config whose directory disagreed with
             # its mechanism would file a whole column of SUCCESS_RATES.md under the wrong arm,
             # and `training.resume` would either resume the wrong run or start a fresh one.
             rn = OmegaConf.to_container(cfg, resolve=True)['run_name']
-            assert rn.startswith(f'{cfg.arm}_corrupt-{cfg.corrupt_obs}_'), \
+            # run_name also carries k{n_candidates} now, so two width overrides of one
+            # config cannot collide on a single checkpoint directory.
+            assert rn.startswith(
+                f'{cfg.arm}_k{cfg.n_candidates}_corrupt-{cfg.corrupt_obs}_'), \
                 f'{name}: run_name {rn!r} does not match arm {cfg.arm!r}'
             assert cfg.context_decay == 1.0, f'{name} context_decay={cfg.context_decay}'
         print(f'[ok] {len(ARGMAX_ARMS)} existing arms: selection=argmax, '
-              f'slot_weight_decay=1.0, context_decay=1.0, run_name keyed on arm')
+              f'slot_weight_decay=False, context_decay=1.0, run_name keyed on arm')
 
         cfg = _tiny(compose(config_name='train_pusht_diffusion_search_subgoal_only'))
         shape_meta = OmegaConf.to_container(cfg.shape_meta, resolve=True)
@@ -186,11 +191,13 @@ def main():
             obs_eval = {k: v[:, :policy.n_obs_steps] for k, v in batch['obs'].items()}
 
             # ---- 3. the executed action is a FRESH sample, not one of the candidates
+            # n is the TOTAL generation count, so final_pass searches at n-1 and the n'th
+            # sample is the one returned; `scores` therefore covers n-1 candidates.
             torch.manual_seed(1)
             out = policy.predict_action_best(obs_eval, n_actions=n)
             act, pred, scores = out['action'], out['action_pred'], out['scores']
             assert act.shape == (B, policy.n_action_steps, 2), act.shape
-            assert scores.shape == (B, n), scores.shape
+            assert scores.shape == (B, n - 1), scores.shape
             print(f'[ok] final_pass shapes: action={tuple(act.shape)} scores={tuple(scores.shape)}')
 
             # ---- 4. tensor-only dict (the runners dict_apply over it)
@@ -203,17 +210,55 @@ def main():
 
             torch.manual_seed(1)
             cands = policy.predict_n_actions(
-                obs_eval, verifier=policy.verifier, n_actions=n, return_scores=True)[0]
-            # same seed => the n candidates are reproduced; the deployed action is the
-            # (n+1)-th draw, so it must differ from every one of them
-            dists = [(pred - cands[:, k]).abs().max().item() for k in range(n)]
+                obs_eval, verifier=policy.verifier, n_actions=n - 1, return_scores=True)[0]
+            # same seed => the n-1 context candidates are reproduced; the deployed action
+            # is the n'th draw, so it must differ from every one of them
+            dists = [(pred - cands[:, k]).abs().max().item() for k in range(n - 1)]
             if min(dists) < 1e-6:
                 failures.append(
                     f'final_pass action coincides with candidate {int(np.argmin(dists))} '
                     f'-- it is not a fresh conditioned sample')
             else:
-                print(f'[ok] deployed action differs from all {n} candidates '
+                print(f'[ok] deployed action differs from all {n - 1} candidates '
                       f'(min |diff| = {min(dists):.3f} px)')
+
+            # ---- 3b. n counts GENERATIONS, so at n=1 there is nothing to search: every
+            # rule returns the empty-context conditional, and no scores are produced.
+            outs = {}
+            for mode in ('argmax', 'softmax', 'final_pass'):
+                policy.selection = mode
+                torch.manual_seed(7)
+                outs[mode] = policy.predict_action_best(obs_eval, n_actions=1)
+            policy.selection = 'final_pass'
+            if 'scores' in outs['final_pass']:
+                failures.append('final_pass at n=1 still returned scores -- it should '
+                                'search at n-1 = 0 and score nothing')
+            ref = outs['argmax']['action_pred']
+            for mode in ('softmax', 'final_pass'):
+                d = (outs[mode]['action_pred'] - ref).abs().max().item()
+                if d > 1e-6:
+                    failures.append(
+                        f'{mode} at n=1 differs from argmax by {d:.4g} -- with one '
+                        f'generation there is nothing to select, so all rules must agree')
+            if not failures:
+                print('[ok] all three selection rules agree at n=1 (nothing to select)')
+
+            # ---- 3c. selection must not consume the SAMPLER's randomness. softmax used
+            # to draw from the global stream via Categorical.sample(), which shifted every
+            # subsequent torch.randn in conditional_sample -- so turning softmax on
+            # reseeded the rollout rather than only changing the pick.
+            states = {}
+            for mode in ('argmax', 'softmax'):
+                policy.selection = mode
+                torch.manual_seed(11)
+                policy.predict_action_best(obs_eval, n_actions=n)
+                states[mode] = torch.random.get_rng_state()
+            policy.selection = 'final_pass'
+            if not torch.equal(states['argmax'], states['softmax']):
+                failures.append('softmax left the global RNG in a different state than '
+                                'argmax -- selection is still stealing sampler draws')
+            else:
+                print('[ok] softmax draws from its own generator (global RNG untouched)')
 
             # ---- 1b. the slot weights have the intended shape
             w = policy._slot_weights(torch.device('cpu'), torch.float32)
@@ -228,11 +273,19 @@ def main():
             print(f'[ok] slot weights: w_0={w[0]:.3f} .. w_{K-1}={w[-1]:.3f}, '
                   f'mean={w.mean():.6f}, last/first={ratio:.2f}x')
 
-            # decay=1.0 must return None -- the uniform path, byte-identical to the arms
-            # that predate this key
-            policy.slot_weight_decay = 1.0
+            # False is the uniform path -- byte-identical to what 1.0 used to do. Go
+            # through _init_slot_weighting, not the attribute: the config value False is
+            # normalised to an internal None there, and that mapping is the thing under
+            # test. 1.0 is now rejected rather than silently meaning 'off'.
+            policy._init_slot_weighting(False)
             assert policy._slot_weights(torch.device('cpu'), torch.float32) is None
-            print('[ok] decay=1.0 takes the uniform path (returns None)')
+            try:
+                policy._init_slot_weighting(1.0)
+            except ValueError:
+                print('[ok] decay=False -> uniform path (None); decay=1.0 rejected')
+            else:
+                failures.append('slot_weight_decay=1.0 was accepted -- it is a silent '
+                                'no-op and must raise in favour of False')
 
             # ---- 1c. the weighting actually reaches the loss, and 1.0 is the plain mean
             policy.train()
@@ -242,7 +295,7 @@ def main():
             policy.slot_weight_decay = 0.9
             torch.manual_seed(7)
             decayed = policy.compute_loss(batch)
-            print(f'[ok] loss decay=1.0 -> {uniform.item():.6f} | '
+            print(f'[ok] loss decay=False -> {uniform.item():.6f} | '
                   f'decay=0.9 -> {decayed.item():.6f}')
             if abs(uniform.item() - decayed.item()) < 1e-9:
                 failures.append('slot_weight_decay=0.9 changed nothing -- the weighting is '
