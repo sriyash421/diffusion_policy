@@ -33,8 +33,10 @@ exp_name: pusht_search
 # (splits/pusht_seed42_train${n_demos}.json) AND appears in the run name, so two budgets
 # can never land in the same output directory -- which is how the earlier 29-episode runs
 # would otherwise have been silently resumed by a 100-episode relaunch. The budgets nest:
-# the 25-episode train set is a strict subset of the 100-episode one, and val/test are
-# identical across manifests, so the two are directly comparable.
+# the 30-episode train set is the first 30 of the 100-episode one in its own order, and
+# val (30) and test (50) are copied verbatim, so 30-vs-100 isolates dataset size alone.
+# (The retired 29-episode manifests do NOT nest and do not share a val set, which is why
+# scripts/make_30demo_split.py exists.)
 n_demos: 100
 
 # Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
