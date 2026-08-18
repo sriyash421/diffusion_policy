@@ -21,6 +21,7 @@ SUBMIT="${SUBMIT:-}"
 # --skip-val: the ask is the 50 TEST episodes; the 30 val ones would roughly double the
 # per-checkpoint cost for a number nothing here reports.
 EVAL_ARGS="${EVAL_ARGS:---skip-val}"
+PY_BIN="${PY_BIN:-/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python}"
 
 RUNS="
 outer_inner/value_k16_corrupt-False_demos-30_seed-42
@@ -52,6 +53,32 @@ for rel in $RUNS; do
     # are hours from their first step_*.ckpt. The next top-up picks it up instead.
     if [ "$n_ckpt" -eq 0 ]; then
         printf '%-58s %s\n' "$name" "no checkpoints yet -- nothing to evaluate"
+        continue
+    fi
+    # Already fully scored: every checkpoint has every n level. Without this the script
+    # resurrects a watcher for a FINISHED arm on every invocation -- it only ever asked
+    # "has checkpoints, has no live watcher", which stays true forever once training ends.
+    # That watcher then idle-polls a completed run until its wall clock expires.
+    if "$PY_BIN" - "$dir" "$n_ckpt" <<'EOF'
+import json, os, re, sys
+run, n_ckpt = sys.argv[1], int(sys.argv[2])
+GRID = {1, 2, 4, 8, 16, 32, 64}
+path = os.path.join(run, 'bon_search', 'success_curves.jsonl')
+if not os.path.exists(path):
+    sys.exit(1)
+agg = {}
+for line in open(path):
+    if not line.strip():
+        continue
+    r = json.loads(line)
+    m = re.search(r'step_(\d+)', r['checkpoint'])
+    if m:
+        agg.setdefault(int(m.group(1)), set()).update(r['n'])
+# complete == one fully-swept row per checkpoint on disk
+sys.exit(0 if len(agg) >= n_ckpt and all(GRID <= v for v in agg.values()) else 1)
+EOF
+    then
+        printf '%-58s %s\n' "$name" "fully evaluated (${n_ckpt} checkpoints x 7 n) -- nothing to do"
         continue
     fi
     if [ -z "$SUBMIT" ]; then
