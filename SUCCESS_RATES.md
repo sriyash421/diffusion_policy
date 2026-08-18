@@ -5736,3 +5736,117 @@ python eval_search_pusht.py -c <run>/checkpoints/step_XXXXXXX.ckpt \
     --min-n 1 --max-n 1 --skip-val --n-envs 50 --device cuda:0
 ```
 
+
+---
+
+# C. Superseded — 30-demo best-of-n tables measured before the 2026-08-18 selection fixes
+
+Moved out of `LATEST_SUCCESS_RATES.md`. These are the **same 30-demo runs** that file still
+describes — the weights are current — but the numbers below were produced by an eval path
+with two defects, so they are not comparable to the corrected grid that replaced them.
+
+## Why they are stochastic in a way the table does not show
+
+Both defects were found by storing the per-candidate verifier distances and comparing the
+n=1 column, where all three selection rules must agree: with one candidate there is nothing
+to select.
+
+**1. `softmax` reseeded the rollout instead of only changing the pick.** The decision was
+always identical (one candidate z-scores to 0, so `Categorical` returns index 0). But
+`.sample()` drew from the *global* torch stream, and so does the sampler's
+`torch.randn(..., generator=None)`; DDIM at `eta=0` adds nothing further, so that one extra
+draw shifted every subsequent noise vector. Measured at `step_0010000`/test/n=1: all rules
+agreed at step 0, diverged at step 1, and only **86/1900** candidate-score rows matched
+after. So every `softmax` column here is a *different rollout* from its `argmax`
+counterpart, not a different selection applied to the same rollout.
+
+That makes the n=1 gaps below a **direct measurement of the noise floor** — two runs of
+identical weights differing only in RNG:
+
+| | argmax | softmax | gap |
+|---|---|---|---|
+| 60k, test reward | 0.599 | 0.668 | 0.069 |
+| 60k, test success | 0.120 | 0.160 | 0.040 |
+| 10k, test reward | 0.486 | 0.477 | 0.009 |
+| 10k, test success | 0.060 | 0.120 | 0.060 |
+
+**No gap anywhere in these tables smaller than ~0.07 reward / ~0.06 success is resolvable.**
+That bound is measured on this exact policy rather than assumed, so it is stronger and
+better founded than the ~14pp Wilson figure these tables were originally read against. It
+applies to every difference below — between selection rules, between arms, and between
+adjacent n.
+
+**2. `final_pass` was measured at n+1 generations.** It searched at n and then drew one
+more, so n=1 executed a slot-1 conditional over two generations. Training does the opposite
+— `generate_search_context` runs at `max_actions - 1` and the loss covers slot
+`max_actions - 1`, i.e. K generations total — so eval was off-by-one from training at every
+n, not just n=1. Every `final_pass` cell below therefore spent more compute than the
+`argmax`/`softmax` cell beside it.
+
+Fixed in `818dbb5`: selection got its own `torch.Generator` (the pattern `CropScopeMixin`
+already used), and n became the total generation count under every rule. Verified on the
+relaunched grid: n=1 argmax and softmax now emit identical candidate-score rows,
+3040/3040 at every checkpoint.
+
+## The tables
+
+SEARCH from `step_0060000.ckpt`, BC from `step_0080000.ckpt` — each arm's best in-training
+checkpoint, which is itself a selection-on-test bias of 1–2 SE. n in {1,2,4,8,16} x
+{argmax, softmax, final_pass}, `eval_search_pusht.py`, seed 42.
+
+### TEST — mean reward (max)
+
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+|---|---|---|---|---|---|---|
+| 1 | 0.599 | 0.668 | 0.663 | 0.624 | 0.590 | 0.585 |
+| 2 | 0.670 | 0.731 | 0.709 | 0.647 | 0.612 | 0.613 |
+| 4 | 0.757 | 0.670 | 0.734 | 0.660 | 0.679 | 0.576 |
+| 8 | 0.707 | 0.667 | 0.728 | 0.728 | 0.618 | 0.602 |
+| 16 | 0.724 | 0.790 | 0.660 | 0.644 | 0.637 | 0.664 |
+
+### TEST — success rate
+
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+|---|---|---|---|---|---|---|
+| 1 | 0.120 | 0.160 | 0.120 | 0.260 | 0.200 | 0.180 |
+| 2 | 0.200 | 0.340 | 0.160 | 0.240 | 0.300 | 0.240 |
+| 4 | 0.340 | 0.240 | 0.100 | 0.300 | 0.380 | 0.240 |
+| 8 | 0.180 | 0.200 | 0.140 | 0.400 | 0.180 | 0.200 |
+| 16 | 0.300 | 0.340 | 0.200 | 0.460 | 0.420 | 0.280 |
+
+### VAL — mean reward (max)
+
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+|---|---|---|---|---|---|---|
+| 1 | 0.680 | 0.683 | 0.723 | 0.677 | 0.644 | 0.601 |
+| 2 | 0.743 | 0.769 | 0.740 | 0.663 | 0.725 | 0.641 |
+| 4 | 0.783 | 0.731 | 0.760 | 0.686 | 0.670 | 0.703 |
+| 8 | 0.739 | 0.732 | 0.732 | 0.777 | 0.719 | 0.613 |
+| 16 | 0.780 | 0.751 | 0.735 | 0.786 | 0.772 | 0.643 |
+
+### VAL — success rate
+
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+|---|---|---|---|---|---|---|
+| 1 | 0.333 | 0.200 | 0.133 | 0.267 | 0.133 | 0.033 |
+| 2 | 0.233 | 0.133 | 0.200 | 0.167 | 0.267 | 0.233 |
+| 4 | 0.333 | 0.167 | 0.200 | 0.200 | 0.167 | 0.200 |
+| 8 | 0.200 | 0.300 | 0.167 | 0.200 | 0.367 | 0.200 |
+| 16 | 0.233 | 0.367 | 0.233 | 0.400 | 0.267 | 0.267 |
+
+## What was concluded from them, and what the fix does to it
+
+* **"Best-of-n gives a real gain on mean reward, roughly +0.06 to +0.16 from n=1 to n=16."**
+  Survives — the corrected grid reproduces it, and larger at early checkpoints.
+* **"`final_pass` is the weakest rule."** Survives and strengthens: it lost here while
+  spending n+1 generations to the others' n, i.e. it lost while doing more work.
+* **"No ranking of argmax vs softmax is supported — they trade places by n and by split."**
+  This was an artifact. Once softmax stopped reseeding the rollout, argmax leads at every
+  n≥4 on every checkpoint measured so far. Do not carry this claim forward.
+* **"BC beats SEARCH at matched n on test success at n=16 (0.460 vs 0.300)."** Untrustworthy
+  — a 0.160 gap read off two independently-reseeded rollouts on a single checkpoint each,
+  chosen by maximising test. Re-read it off the corrected grid instead.
+
+Raw outputs kept as provenance at
+`$DP_OUTPUT_ROOT/pusht_search/pusht_image_search/bon_grid_30demo.pre-nfix-*/` and
+`logs/bon_grid_30demo.log.pre-nfix-*`. Do not quote them.

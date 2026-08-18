@@ -31,24 +31,21 @@ def main():
     done = len(re.findall(r'^=== \S+ \w+ step_\d+ \w+ ===', LOG.read_text(), re.M))
     finished = 'grid done' in LOG.read_text()
 
-    parts = [START, '', '## 6. Full checkpoint x selection x n grid', '']
+    parts = [START, '', '## 2. Best-of-n grid -- policy x selection x checkpoint', '']
     parts.append(
         f'Every `step_*.ckpt` on the 10k grid x {{argmax, softmax, final_pass}} x '
         f'n in {{1,2,4,8,16}}, both arms. **{done}/60 combos complete'
         + ('' if finished else ' -- sweep still running, table is partial') + '.**\n')
     parts.append(
-        'This exists so a checkpoint never has to be pre-selected: pick on **val** and '
-        'read **test** at the same row. Selecting by maximising test (which is how the '
-        'section 2 checkpoints were chosen) inflates the reported number by 1-2 SE.\n')
+        'Pick a checkpoint on **val** and read **test** at the same row; this grid exists '
+        'so a checkpoint never has to be pre-selected. Selecting by maximising test '
+        'inflates the reported number by 1-2 SE.\n')
     parts.append(
         '**n counts GENERATIONS, identically under all three rules**, so the columns are '
-        'matched on compute. At n=1 there is nothing to select, so all three rules run '
-        'the same empty-context conditional and the n=1 rows must agree exactly -- a '
-        'disagreement there is a bug, not a result. (Grids generated before 2026-08-18 '
-        'do not have this property: `final_pass` cost n+1 generations, and softmax drew '
-        'from the sampler\'s RNG stream, so its n=1 column was a reseeded replicate '
-        'rather than the same rollout.)\n')
-    # bon_grid_table.py emits its own "### ARM -- split metric" headings, so none here
+        'matched on compute. At n=1 there is nothing to select, so all three rules run the '
+        'same empty-context conditional and their n=1 cells must agree exactly -- a '
+        'disagreement there is a bug, not a result.\n')
+    # bon_grid_table.py emits its own "### SPLIT -- metric" heading per table
     for split in ('test', 'val'):
         for metric in ('reward', 'success'):
             body = render(metric, split)
