@@ -68,6 +68,16 @@ class SearchProcedureMixin:
         self.selection_temperature = float(
             kwargs.get('selection_temperature', 1.0) or 1.0)
         assert self.selection_temperature > 0, 'selection_temperature must be > 0'
+        # Restrict the pool 'argmax'/'softmax' rank over to the LAST W candidates; None ==
+        # all of them. See select_candidate for why the trailing candidates are special.
+        window = kwargs.get('selection_window', None)
+        self.selection_window = None if window is None else int(window)
+        assert self.selection_window is None or self.selection_window > 0, \
+            f'selection_window must be positive or None, got {self.selection_window!r}'
+        # For selection == 'index': WHICH candidate to execute, as a plain index into the n
+        # generated. Negative counts from the end (-1 == last). The verifier score takes no
+        # part in selection at all in this mode.
+        self.selection_index = int(kwargs.get('selection_index', -1) or -1)
 
     @contextlib.contextmanager
     def _crop_scope(self):
@@ -285,6 +295,10 @@ class SearchProcedureMixin:
 
         WHICH chunk depends on ``self.selection``:
           * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
+          * 'softmax'    -- sampled from softmax(z / T) over the standardized scores.
+          * 'index'      -- a FIXED slot (``self.selection_index``), ignoring the scores.
+            The control for the two above: it isolates how much of a best-of-n gain comes
+            from the ranking rather than from the conditioning depth.
           * 'final_pass' -- one MORE sample, conditioned on all n scored candidates, is
             drawn and returned. It is not simulated and not compared to anything, so the
             verifier scalar never touches selection; it reaches the model only as search
@@ -308,9 +322,10 @@ class SearchProcedureMixin:
                 obs_dict, verifier=self.verifier, n_actions=n,
                 return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
 
-            if self.selection in ('argmax', 'softmax'):
-                action_pred = select_candidate(                         # (B, H, Da)
-                    actions, scores, self.selection, self.selection_temperature)
+            if self.selection in ('argmax', 'softmax', 'index'):
+                action_pred, pick = select_candidate(                   # (B, H, Da), (B,)
+                    actions, scores, self.selection, self.selection_temperature,
+                    window=self.selection_window, index=self.selection_index)
             else:
                 # Condition on the last max_actions-1 candidates: that is the widest
                 # context the model was ever trained at (the staircase memory mask tops out
@@ -324,12 +339,21 @@ class SearchProcedureMixin:
                     values=values[:, -keep:],
                     obs_features=obs_features,
                 )['action_pred']                                        # (B, H, Da)
+                # The executed action is a FURTHER sample, not one of the n candidates, so
+                # there is no candidate index to report. -1 marks "not a candidate" rather
+                # than pointing at an arbitrary slot a caller might plot as chosen.
+                pick = torch.full((actions.shape[0],), -1,
+                                  dtype=torch.long, device=actions.device)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
         return {
             'action': action_pred[:, start:end],            # (B, n_action_steps, Da)
             'action_pred': action_pred,
-            'scores': scores,
+            'scores': scores,                               # (B, n) -- ALWAYS all n
+            # Which candidate was executed, in full-candidate coordinates; -1 under
+            # 'final_pass'. Returned so a caller can record the selection actually made
+            # instead of re-deriving it.
+            'pick': pick,                                   # (B,)
         }
 

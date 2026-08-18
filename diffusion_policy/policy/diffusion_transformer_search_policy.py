@@ -646,6 +646,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
     # ablation arm ends up secretly identical to its sibling.
     _KNOWN_KWARGS = frozenset({
         'max_actions', 'search_context', 'selection', 'selection_temperature',
+        'selection_window', 'selection_index',
         'slot_weight_decay', 'context_decay', 'corrupt_obs_eval', 'scheduler_step_kwargs',
         # PushT verifier
         'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
