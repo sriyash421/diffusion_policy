@@ -47,6 +47,13 @@ for rel in $RUNS; do
         continue
     fi
     n_ckpt=$(ls "$dir"/checkpoints/step_*.ckpt 2>/dev/null | wc -l)
+    # Nothing to score yet. A watcher started now would just poll an empty checkpoints/
+    # until its 12h wall expired, holding a ckpt GPU for no work -- and the search arms
+    # are hours from their first step_*.ckpt. The next top-up picks it up instead.
+    if [ "$n_ckpt" -eq 0 ]; then
+        printf '%-58s %s\n' "$name" "no checkpoints yet -- nothing to evaluate"
+        continue
+    fi
     if [ -z "$SUBMIT" ]; then
         printf '%-58s %s\n' "$name" "WOULD SUBMIT (${n_ckpt} checkpoints present)"
         continue
