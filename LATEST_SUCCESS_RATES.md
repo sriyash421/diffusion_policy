@@ -23,11 +23,11 @@ encoder and denoiser, verified from each run's `.hydra/config.yaml`: ResNet18
 False`; 4 layers / 2 cond layers / 4 heads / 256 emb, `p_drop_attn 0.2`, `causal_attn:
 True`, `cond_encoder: gpt2`. **The only difference is `max_actions`: 16 vs 1.**
 
-"ST-diffusion-n16" means trained search width 16 — not the `train_pusht_st_n1` arm, which is a separate
+"ST-diffusion-k16" means trained search width k=16 — not the `train_pusht_st_n1` arm, which is a separate
 width-1 config with `num_inference_steps: 100` and was not part of these runs. The Gaussian
 arm (`train_pusht_gaussian_search`) exists in the tree but has never been run.
 
-| | ST-diffusion-n16 | ST-diffusion-n1 |
+| | ST-diffusion-k16 | ST-diffusion-k1 |
 |---|---|---|
 | config | `train_pusht_diffusion_search n_demos=30` | `train_pusht_bc n_demos=30` |
 | `max_actions` | 16 | 1 |
@@ -46,26 +46,26 @@ Fired by the trainer at 20k-step intervals, on **EMA** weights. Argmax only, so 
 2026-08-18 fixes leave these untouched** — neither the selection generator nor the n
 semantics affects an argmax rollout.
 
-**Not a matched comparison**: ST-diffusion-n16 ran at eval n=16 (search active), ST-diffusion-n1 at n=1. Section 2 is
+**Not a matched comparison**: ST-diffusion-k16 ran at eval n=16 (search active), ST-diffusion-k1 at n=1. Section 2 is
 the like-for-like reading.
 
 | arm | 20k | 40k | 60k | 80k | 100k |
 |---|---|---|---|---|---|
-| ST-n16 test | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
-| ST-n16 val  | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
-| ST-n1 test  | 0.4957 | 0.612 | 0.6029 | 0.6382 | - |
-| ST-n1 val   | 0.4577 | 0.5681 | 0.6342 | 0.6397 | - |
+| ST-k16 test | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
+| ST-k16 val  | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
+| ST-k1 test  | 0.4957 | 0.612 | 0.6029 | 0.6382 | - |
+| ST-k1 val   | 0.4577 | 0.5681 | 0.6342 | 0.6397 | - |
 
-ST-diffusion-n1's 100k row is blank because **the offline trainer skips its final rollout**: its rollouts
+ST-diffusion-k1's 100k row is blank because **the offline trainer skips its final rollout**: its rollouts
 drift +1 per fire (20001, 40002, 60003, 80004) so the next trigger lands at 100005, past the
 `max_gradient_steps: 100000` cap. Evaluated separately from `step_0100000.ckpt`: test mean
 reward 0.593, success 0.240. `TrainSearchOuterInnerWorkspace` hits its boundaries exactly
 and does not have this bug.
 
-**Both arms are over-trained at 100k.** ST-diffusion-n16 peaks at 60k and falls 19pp by
-100k; ST-diffusion-n1 peaks at 80k. 60-80k would have been the right budget at this demo count.
+**Both arms are over-trained at 100k.** ST-diffusion-k16 peaks at 60k and falls 19pp by
+100k; ST-diffusion-k1 peaks at 80k. 60-80k would have been the right budget at this demo count.
 
-**Open discrepancy:** the same ST-diffusion-n16 checkpoint at n=16 scored **0.8023** here but **0.724**
+**Open discrepancy:** the same ST-diffusion-k16 checkpoint at n=16 scored **0.8023** here but **0.724**
 in the standalone sweep. Same weights, same n. Most likely EMA vs raw weights — these
 rollouts use the EMA model and `eval_search_pusht.py` may not — but unconfirmed. Until it is
 resolved, treat this table and section 2 as measuring different things.
@@ -74,19 +74,19 @@ resolved, treat this table and section 2 as measuring different things.
 
 ## 2. Best-of-n grid -- policy x checkpoint x selection
 
-Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **13/60 combos complete -- sweep still running, table is partial.**
+Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **14/60 combos complete -- sweep still running, table is partial.**
 
 Pick a checkpoint on **val** and read **test** at the same row; this grid exists so a checkpoint never has to be pre-selected. Selecting by maximising test inflates the reported number by 1-2 SE.
 
 **n counts GENERATIONS, identically under all three rules**, so the columns are matched on compute. At n=1 there is nothing to select, so all three rules run the same empty-context conditional and their n=1 cells must agree exactly -- a disagreement there is a bug, not a result.
 
-The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a column heading is the eval width. `ST-diffusion-n1` read at n=16 is a BC checkpoint sampled 16 times i.i.d., since at width 1 there is no context to condition on.
+A policy label carries its TRAINED width as `k` (`max_actions`, matching the run dirs); the columns are the EVAL width `n`. `ST-diffusion-k1` read at n=16 is a BC checkpoint sampled 16 times i.i.d., since at k=1 there is no context to condition on.
 
 ### TEST  --  reward
 
 | policy | checkpoint | selection | n=1 | n=2 | n=4 | n=8 | n=16 |
 |---|---|---|---|---|---|---|---|
-| ST-diffusion-n16 | 10,000 | argmax | 0.486 | 0.634 | 0.757 | 0.801 | 0.797 |
+| ST-diffusion-k16 | 10,000 | argmax | 0.486 | 0.634 | 0.757 | 0.801 | 0.797 |
 |  |  | softmax | 0.486 | 0.668 | 0.695 | 0.724 | 0.697 |
 |  |  | final_pass | 0.486 | 0.616 | 0.611 | 0.674 | 0.666 |
 |  | 20,000 | argmax | 0.570 | 0.661 | 0.713 | 0.718 | 0.727 |
@@ -98,12 +98,13 @@ The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a col
 |  | 40,000 | argmax | 0.576 | 0.666 | 0.676 | 0.724 | 0.739 |
 |  |  | softmax | 0.576 | 0.654 | 0.696 | 0.693 | 0.690 |
 |  |  | final_pass | 0.576 | 0.621 | 0.656 | 0.676 | 0.682 |
+|  | 50,000 | argmax | 0.585 | 0.650 | 0.709 | 0.771 | 0.772 |
 
 ### TEST  --  success
 
 | policy | checkpoint | selection | n=1 | n=2 | n=4 | n=8 | n=16 |
 |---|---|---|---|---|---|---|---|
-| ST-diffusion-n16 | 10,000 | argmax | 0.060 | 0.160 | 0.320 | 0.360 | 0.400 |
+| ST-diffusion-k16 | 10,000 | argmax | 0.060 | 0.160 | 0.320 | 0.360 | 0.400 |
 |  |  | softmax | 0.060 | 0.060 | 0.200 | 0.100 | 0.240 |
 |  |  | final_pass | 0.060 | 0.080 | 0.120 | 0.100 | 0.160 |
 |  | 20,000 | argmax | 0.100 | 0.240 | 0.180 | 0.340 | 0.320 |
@@ -115,12 +116,13 @@ The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a col
 |  | 40,000 | argmax | 0.300 | 0.260 | 0.300 | 0.360 | 0.300 |
 |  |  | softmax | 0.300 | 0.220 | 0.340 | 0.260 | 0.240 |
 |  |  | final_pass | 0.300 | 0.160 | 0.200 | 0.180 | 0.160 |
+|  | 50,000 | argmax | 0.040 | 0.260 | 0.320 | 0.320 | 0.420 |
 
 ### VAL  --  reward
 
 | policy | checkpoint | selection | n=1 | n=2 | n=4 | n=8 | n=16 |
 |---|---|---|---|---|---|---|---|
-| ST-diffusion-n16 | 10,000 | argmax | 0.478 | 0.713 | 0.796 | 0.763 | 0.788 |
+| ST-diffusion-k16 | 10,000 | argmax | 0.478 | 0.713 | 0.796 | 0.763 | 0.788 |
 |  |  | softmax | 0.478 | 0.666 | 0.756 | 0.699 | 0.758 |
 |  |  | final_pass | 0.478 | 0.653 | 0.715 | 0.633 | 0.662 |
 |  | 20,000 | argmax | 0.494 | 0.741 | 0.707 | 0.808 | 0.785 |
@@ -132,12 +134,13 @@ The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a col
 |  | 40,000 | argmax | 0.687 | 0.725 | 0.721 | 0.726 | 0.745 |
 |  |  | softmax | 0.687 | 0.653 | 0.665 | 0.758 | 0.715 |
 |  |  | final_pass | 0.687 | 0.655 | 0.722 | 0.720 | 0.720 |
+|  | 50,000 | argmax | 0.655 | 0.722 | 0.766 | 0.727 | 0.806 |
 
 ### VAL  --  success
 
 | policy | checkpoint | selection | n=1 | n=2 | n=4 | n=8 | n=16 |
 |---|---|---|---|---|---|---|---|
-| ST-diffusion-n16 | 10,000 | argmax | 0.067 | 0.067 | 0.233 | 0.467 | 0.333 |
+| ST-diffusion-k16 | 10,000 | argmax | 0.067 | 0.067 | 0.233 | 0.467 | 0.333 |
 |  |  | softmax | 0.067 | 0.100 | 0.133 | 0.200 | 0.233 |
 |  |  | final_pass | 0.067 | 0.133 | 0.200 | 0.100 | 0.100 |
 |  | 20,000 | argmax | 0.033 | 0.200 | 0.300 | 0.333 | 0.400 |
@@ -149,6 +152,7 @@ The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a col
 |  | 40,000 | argmax | 0.067 | 0.167 | 0.367 | 0.300 | 0.300 |
 |  |  | softmax | 0.067 | 0.233 | 0.233 | 0.233 | 0.267 |
 |  |  | final_pass | 0.067 | 0.233 | 0.067 | 0.167 | 0.133 |
+|  | 50,000 | argmax | 0.233 | 0.133 | 0.267 | 0.233 | 0.300 |
 
 Regenerate: `python scripts/update_latest_with_grid.py`
 

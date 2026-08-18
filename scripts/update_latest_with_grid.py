@@ -46,9 +46,9 @@ def main():
         'same empty-context conditional and their n=1 cells must agree exactly -- a '
         'disagreement there is a bug, not a result.\n')
     parts.append(
-        'The `n` in a policy label is its TRAINED width (`max_actions`); the `n` in a '
-        'column heading is the eval width. `ST-diffusion-n1` read at n=16 is a BC '
-        'checkpoint sampled 16 times i.i.d., since at width 1 there is no context to '
+        'A policy label carries its TRAINED width as `k` (`max_actions`, matching the '
+        'run dirs); the columns are the EVAL width `n`. `ST-diffusion-k1` read at n=16 is '
+        'a BC checkpoint sampled 16 times i.i.d., since at k=1 there is no context to '
         'condition on.\n')
     # bon_grid_table.py emits its own "### SPLIT -- metric" heading per table
     for split in ('test', 'val'):
