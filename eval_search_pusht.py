@@ -1027,7 +1027,8 @@ def read_curve_rows(out_root):
                    'executed candidate at every control step (npz per criterion)')
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
-         wandb_entity, wandb_project, selection, selection_temperature, skip_val):
+         wandb_entity, wandb_project, selection, selection_temperature, skip_val,
+         criteria_sweep, criteria_n, collect_traces):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
