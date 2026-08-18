@@ -245,11 +245,17 @@ def _reduce_episode_rewards(rewards):
     return float(r.max()), float(r[-1]), float((1.0 - GAMMA) * np.sum(w * r))
 
 
-def rollout_max_rewards(env, policy, states, device, n):
+def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
     """Roll one episode per env (reset to its state) using best-of-n search.
 
     Returns (max, final, discounted) reward arrays, one entry per env. The name is kept
     because `max` remains the primary series -- success is defined on it.
+
+    ``score_sink``: optional list. When given, every policy call appends
+    ``(env_index, step_index, [score per candidate])`` -- the RAW verifier value for each
+    of the n candidates drawn, i.e. -mean_kp||feedback|| in pixels, which is what argmax
+    ranks on. Captured here because predict_action_best returns it and it is otherwise
+    discarded; storing it costs one .cpu() per step and nothing else.
     """
     def make_init_fn(state):
         state = np.asarray(state, dtype=np.float64)
@@ -262,6 +268,7 @@ def rollout_max_rewards(env, policy, states, device, n):
     obs = env.reset()
     policy.reset()
     done = False
+    step_i = 0
     while not done:
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         with torch.no_grad():
@@ -277,16 +284,23 @@ def rollout_max_rewards(env, policy, states, device, n):
                     f'undefined for it; got n={n}. Re-run with --max-n 1.')
                 action = policy.predict_action(obs_dict)['action']
             else:
-                action = policy.predict_action_best(obs_dict, n_actions=n)['action']
+                out = policy.predict_action_best(obs_dict, n_actions=n)
+                action = out['action']
+                if score_sink is not None and out.get('scores') is not None:
+                    sc = out['scores'].detach().cpu().numpy()   # (n_envs, n)
+                    for env_i in range(sc.shape[0]):
+                        score_sink.append((env_i, step_i, sc[env_i].tolist()))
         action = action.detach().cpu().numpy()
         obs, reward, done, info = env.step(action)
         done = np.all(done)
+        step_i += 1
     rewards = env.call('get_attr', 'reward')
     red = np.array([_reduce_episode_rewards(r) for r in rewards])   # (n_envs, 3)
     return red[:, 0], red[:, 1], red[:, 2]
 
 
-def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label):
+def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
+                     score_sink=None):
     """Best-of-n success rate over one split at ONE n.
 
     Returns (rate, ci, rewards) where `rewards` is a dict of three per-episode arrays --
@@ -312,8 +326,16 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label):
         if pad > 0:
             chunk_states = chunk_states + [states[0]] * pad
         t0 = time.perf_counter()
-        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n)
+        sink = [] if score_sink is not None else None
+        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink)
         dt = time.perf_counter() - t0
+        if sink is not None:
+            # env_i is the slot within this chunk; map it back to the episode index, and
+            # drop the padding slots so no duplicate episode is recorded.
+            for env_i, st, scores in sink:
+                if env_i < n_envs - pad:
+                    score_sink.append({'episode': start + env_i, 'step': st,
+                                       'scores': [round(v, 6) for v in scores]})
         for kind, arr in zip(REWARD_KINDS, chunk):
             out[kind][start:start + n_envs - pad] = arr[:n_envs - pad]
         tqdm.tqdm.write(f'  {label} n={n} chunk {start}: {dt:.1f}s')
@@ -331,7 +353,7 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label):
 def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300, seed=None,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
                     selection=None, selection_temperature=1.0, skip_val=False,
-                    noise_scheduler=None):
+                    noise_scheduler=None, score_writer=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
@@ -365,6 +387,12 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         val_states, val_idxs = [], np.zeros(0, dtype=int)
     else:
         val_states, val_idxs = get_split_states(cfg, 'val', run_dir=run_dir)
+    # Length, not truthiness. `val_states` is a plain list only on the skip_val branch; from
+    # get_split_states it is an ndarray, and `if <ndarray>` raises "truth value of an array
+    # with more than one element is ambiguous" for any val split with more than one episode
+    # -- i.e. every real one, so eval died before running a single episode and never created
+    # bon_search/. len() reads the same on both types.
+    has_val = len(val_states) > 0
 
     # Read the horizon from cfg.policy, NOT the top-level cfg: the policy is built with
     # n_action_steps + n_latency_steps, so with a nonzero latency the top-level values
@@ -417,18 +445,18 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             'mean_reward_discounted': [
                 float(np.mean(test_rewards[n]['discounted'])) for n in done],
             # val split: SELECTED ON
-            'val_success_rate': ([val_sr[n] for n in done] if val_states else None),
-            'val_success_ci': ([val_ci[n] for n in done] if val_states else None),
+            'val_success_rate': ([val_sr[n] for n in done] if has_val else None),
+            'val_success_ci': ([val_ci[n] for n in done] if has_val else None),
             # Mean val reward, kept because binary success cannot always select. A BC
             # policy at n=1 scores 0% success at EVERY checkpoint, so the success-based
             # selector is a tie across the whole run and max() returns whichever row came
             # first. Mean reward separates the same checkpoints cleanly (0.12 -> 0.29).
             'val_mean_reward': ([float(np.mean(val_rewards[n]['max'])) for n in done]
-                                if val_states else None),
+                                if has_val else None),
             'val_mean_reward_final': ([float(np.mean(val_rewards[n]['final'])) for n in done]
-                                      if val_states else None),
+                                      if has_val else None),
             'val_mean_reward_discounted': ([float(np.mean(val_rewards[n]['discounted']))
-                                            for n in done] if val_states else None),
+                                            for n in done] if has_val else None),
             'val_n_episodes': len(val_states),
             'val_episode_idxs': val_idxs.tolist(),
         }
@@ -439,11 +467,17 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         # would leave a killed job with a complete val curve and no test numbers at all.
         for n in n_list:
             # val drives checkpoint selection; test is reported only, never selected on.
-            if val_states:
+            if has_val:
+                vsink = [] if score_writer else None
                 val_sr[n], val_ci[n], val_rewards[n] = _eval_split_at_n(
-                    env, policy, val_states, device, n, n_envs, seed, 'val')
+                    env, policy, val_states, device, n, n_envs, seed, 'val', vsink)
+                if score_writer:
+                    score_writer('val', n, vsink)
+            tsink = [] if score_writer else None
             test_sr[n], test_ci[n], test_rewards[n] = _eval_split_at_n(
-                env, policy, test_states, device, n, n_envs, seed, 'test')
+                env, policy, test_states, device, n, n_envs, seed, 'test', tsink)
+            if score_writer:
+                score_writer('test', n, tsink)
             done.append(n)
             if on_n_done is not None:
                 on_n_done(_curve())
@@ -613,6 +647,35 @@ def step_from_ckpt(path):
 
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
+def _make_score_writer(step_dir, checkpoint, selection):
+    """Append per-candidate verifier distances to candidate_scores.jsonl.
+
+    One row per (split, n, episode, step) holding the n raw scores for that policy call.
+    Raw, not the rescaled context copy: this is exactly what argmax compares, so the
+    selection can be replayed offline (e.g. what would softmax at another temperature, or
+    a different rule entirely, have executed?) without re-running the sim.
+
+    Appended rather than rewritten so a killed sweep keeps the levels it finished, and
+    written per-n so cost stays bounded if a level is huge.
+    """
+    path = os.path.join(str(step_dir), 'candidate_scores.jsonl')
+
+    def _write(split, n, rows):
+        if not rows:
+            return
+        # scores are written after each (split, n), which is BEFORE on_n_done creates the
+        # step dir on the first n -- so make it here rather than relying on that ordering.
+        os.makedirs(str(step_dir), exist_ok=True)
+        with open(path, 'a') as f:
+            for r in rows:
+                f.write(json.dumps({
+                    'checkpoint': os.path.basename(str(checkpoint)),
+                    'selection': selection, 'split': split, 'n': int(n), **r}) + '\n')
+        print(f'  [scores] {split} n={n}: {len(rows)} rows -> {os.path.basename(path)}')
+
+    return _write
+
+
 # success_curves.jsonl, one row per checkpoint.
 #
 # This file records measurements ONLY. It deliberately names no winner. Any rule for
@@ -737,11 +800,16 @@ def read_curve_rows(out_root):
                    'bon_search_sel-<mode>/ so they never merge with the native-mode curve.')
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
+@click.option('--store-scores', is_flag=True,
+              help='write every candidate\'s raw verifier distance to '
+                   'candidate_scores.jsonl (one row per split/n/episode/step). This is the '
+                   'signal argmax ranks on; it is otherwise discarded after selection.')
 @click.option('--skip-val', is_flag=True,
               help='evaluate the 50 test episodes only, skipping the val split')
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
-         wandb_entity, wandb_project, selection, selection_temperature, skip_val):
+         wandb_entity, wandb_project, selection, selection_temperature, skip_val,
+         store_scores):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
@@ -774,7 +842,9 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 selection=selection,
                                 selection_temperature=selection_temperature,
                                 skip_val=skip_val,
-                                noise_scheduler=noise_scheduler)
+                                noise_scheduler=noise_scheduler,
+                                score_writer=_make_score_writer(
+                                    step_dir, checkpoint, selection) if store_scores else None)
         png = save_outputs(curve, str(step_dir), checkpoint)
         print('wrote', png)
         return
