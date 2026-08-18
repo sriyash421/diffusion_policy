@@ -19,7 +19,9 @@ import torch
 import torch.nn as nn
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.obs_corruption import ObsCorruptionMixin
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
+from diffusion_policy.policy.search_procedure import SearchProcedureMixin
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env.pusht.feedback_util import block_pose_from_feedback
@@ -29,7 +31,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import GPT2Config, GPT2Model
 
 
-class OnlineSearchPolicy(BaseImagePolicy):
+class OnlineSearchPolicy(ObsCorruptionMixin, SearchProcedureMixin, BaseImagePolicy):
     def __init__(self,
             shape_meta: dict[str, Any],
             obs_encoder: MultiImageObsEncoder,
@@ -74,7 +76,7 @@ class OnlineSearchPolicy(BaseImagePolicy):
         self.kwargs = kwargs
 
         # legacy flags kept for config compatibility (default off)
-        self.corrupt_obs = corrupt_obs
+        self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))
         self.mask_obs = mask_obs
         self.concat_obs = concat_obs
 
@@ -106,17 +108,6 @@ class OnlineSearchPolicy(BaseImagePolicy):
     # ------------------------------------------------------------------ utils
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
-
-    def corrupt_obs_features(self, obs_features):
-        """Optionally noise context features to simulate corrupted context."""
-        if not self.corrupt_obs:
-            return obs_features
-        noise = torch.randn_like(obs_features)
-        bsz = obs_features.shape[0]
-        timesteps = torch.randint(
-            0, self.obs_noise_scheduler.config.num_train_timesteps,
-            (bsz,), device=obs_features.device).long()
-        return self.obs_noise_scheduler.add_noise(obs_features, noise, timesteps)
 
     def _encode_obs(self, nobs: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Encode a (normalized) obs dict of shape (B, T, ...) into obs tokens (B, T, hidden)."""
@@ -169,8 +160,7 @@ class OnlineSearchPolicy(BaseImagePolicy):
             expert_mask = torch.ones(B, E, device=expert_obs_features.device)
 
         if C > 0:
-            if self.corrupt_obs and self.training:
-                context_features = self.corrupt_obs_features(context_features)
+            context_features = self.corrupt_obs_features(context_features)
             if context_mask is None:
                 context_mask = torch.ones(B, C, device=context_features.device)
             seq = torch.cat([context_features, expert_obs_features], dim=1)

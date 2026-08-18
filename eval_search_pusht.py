@@ -46,6 +46,7 @@ import click
 import dill
 import hydra
 import numpy as np
+import omegaconf
 import torch
 import tqdm
 
@@ -78,7 +79,18 @@ def build_envs(n_envs, n_obs_steps, n_action_steps, max_steps, render_size=96):
     return AsyncVectorEnv([env_fn] * n_envs)
 
 
-def load_policy(checkpoint, device, num_inference_steps=None):
+_SCHEDULERS = {
+    'ddim': 'diffusers.schedulers.scheduling_ddim.DDIMScheduler',
+    'ddpm': 'diffusers.schedulers.scheduling_ddpm.DDPMScheduler',
+}
+# keys each scheduler accepts but the other rejects, dropped when swapping
+_SCHEDULER_ONLY_KEYS = {
+    'ddim': ('variance_type',),
+    'ddpm': ('set_alpha_to_one', 'steps_offset'),
+}
+
+
+def load_policy(checkpoint, device, num_inference_steps=None, noise_scheduler=None):
     """Rebuild the policy from a checkpoint payload.
 
     ``num_inference_steps`` overrides the value baked into the checkpoint's config. It is a
@@ -86,11 +98,36 @@ def load_policy(checkpoint, device, num_inference_steps=None):
     how much of a weak n=1 result is sampler error rather than a weak policy. The configs
     here use 8 DDIM steps (inherited from the search arms, where every candidate is
     sampled 15x per gradient step and 8 keeps training affordable); upstream PushT uses 100.
+
+    ``noise_scheduler`` ('ddim' or 'ddpm') swaps the reverse-process sampler. This is also
+    sampling-time only, and for the same reason: both schedulers derive `alphas_cumprod`
+    from the same betas, so `add_noise` -- the only scheduler call `compute_loss` makes --
+    is bit-identical between them (verified: max|diff| = 0.0 at these betas). Only the
+    reverse loop differs, DDPM injecting noise at every step where DDIM is deterministic.
+
+    It exists because the two families behave very differently under step truncation: the
+    DDPM UNet scores 0% at every checkpoint when cut from 100 steps to 8, while the DDIM
+    search transformer is unchanged at 8/16/32/100. Swapping the sampler separates "this
+    policy is weak" from "this sampler needs a dense trajectory".
     """
     payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
     if num_inference_steps is not None:
         cfg.policy.num_inference_steps = int(num_inference_steps)
+    if noise_scheduler is not None:
+        key = noise_scheduler.lower()
+        assert key in _SCHEDULERS, f'noise_scheduler must be one of {sorted(_SCHEDULERS)}'
+        ns = cfg.policy.noise_scheduler
+        # open_dict: the cfg comes out of the checkpoint payload in struct mode, which
+        # blocks key deletion outright ("DictConfig in struct mode does not support
+        # deletion"). The two constructors do not accept the same kwargs -- a leftover
+        # `variance_type` on a DDIMScheduler (or `set_alpha_to_one` on a DDPMScheduler) is a
+        # TypeError at instantiation -- so drop whatever the target does not take.
+        with omegaconf.open_dict(ns):
+            ns._target_ = _SCHEDULERS[key]
+            for dead in _SCHEDULER_ONLY_KEYS[key]:
+                if dead in ns:
+                    del ns[dead]
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
     workspace.load_payload(payload, exclude_keys=None, include_keys=None)
@@ -527,7 +564,8 @@ def save_trace(trace, out_dir, label, episode_idxs, n):
 
 def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300, seed=None,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
-                    selection=None, selection_temperature=1.0, skip_val=False):
+                    selection=None, selection_temperature=1.0, skip_val=False,
+                    noise_scheduler=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
@@ -537,7 +575,8 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     With the callback, a job that dies at n=512 still leaves every n below it on disk, and
     the remaining levels can be run as separate jobs and merged (see --min-n).
     """
-    policy, cfg = load_policy(checkpoint, device, num_inference_steps)
+    policy, cfg = load_policy(checkpoint, device, num_inference_steps,
+                              noise_scheduler=noise_scheduler)
     # Selection is a pure READOUT rule -- which of the n scored candidates gets executed --
     # so it can be swapped on a trained checkpoint without retraining. That is what makes
     # 'same weights, argmax vs softmax' a controlled comparison rather than two runs.
@@ -955,6 +994,10 @@ def read_curve_rows(out_root):
 @click.option('--num-inference-steps', default=None, type=int,
               help='override the checkpoint\'s DDIM inference steps (sampling-time only; '
                    'the configs use 8, upstream PushT uses 100)')
+@click.option('--noise-scheduler', default=None, type=click.Choice(['ddim', 'ddpm']),
+              help='swap the reverse-process sampler (sampling-time only; the trained '
+                   'weights are valid under either, since add_noise is identical). DDPM '
+                   'collapses under step truncation where DDIM does not.')
 @click.option('--idle-exit-sec', default=None, type=float,
               help='watch mode: exit after this many seconds with no new checkpoint '
                    '(default: run forever)')
@@ -983,9 +1026,8 @@ def read_curve_rows(out_root):
               help='--criteria-sweep: record every candidate\'s verifier score and the '
                    'executed candidate at every control step (npz per criterion)')
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
-         poll_sec, seed, num_inference_steps, idle_exit_sec, use_wandb, wandb_entity,
-         wandb_project, selection, selection_temperature, skip_val,
-         criteria_sweep, criteria_n, collect_traces):
+         poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
+         wandb_entity, wandb_project, selection, selection_temperature, skip_val):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
@@ -1059,7 +1101,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 num_inference_steps=num_inference_steps,
                                 selection=selection,
                                 selection_temperature=selection_temperature,
-                                skip_val=skip_val)
+                                skip_val=skip_val,
+                                noise_scheduler=noise_scheduler)
         png = save_outputs(curve, str(step_dir), checkpoint)
         print('wrote', png)
         return
@@ -1129,7 +1172,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         num_inference_steps=num_inference_steps,
                                         selection=selection,
                                         selection_temperature=selection_temperature,
-                                        skip_val=skip_val)
+                                        skip_val=skip_val,
+                                        noise_scheduler=noise_scheduler)
             except Exception as e:
                 # NOT marked seen: the checkpoint may simply have been half-written (the
                 # trainer saves on a background thread), or this may be a transient CUDA

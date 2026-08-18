@@ -18,7 +18,11 @@ defaults:
 name: train_pusht_st_n1_29
 
 n_demos: 29
-run_name: stn1_demos-29-r8_seed-${training.seed}
+# `gpt2big`, tracking the parent's 2026-08-14 generation bump. The old name
+# `stn1_demos-29-r8_seed-42` still holds the pre-change run behind the 29-demo column of
+# LATEST_SUCCESS_RATES.md, and that directory EXISTS -- with training.resume: True, keeping
+# the old name would aim this architecture at those checkpoints.
+run_name: stn1gpt2big_demos-29-r8_seed-${training.seed}
 
 task:
   dataset:

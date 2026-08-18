@@ -1,28 +1,12 @@
+# PushT DIFFUSION search transformer -- the search master.
+#
+# Scaffolding (task, dataloader, optimizer, training, logging, checkpoint, hydra) comes
+# from pusht_base; this file is the denoiser and its search knobs.
 defaults:
+  - pusht_base
   - _self_
-  - task: pusht_image_search
 
 name: train_pusht_diffusion_search
-# Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
-# move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
-# actually selects the workspace.
-_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
-output_dir: null
-
-task_name: ${task.name}
-shape_meta: ${task.shape_meta}
-
-# ---------------------------------------------------------------------------
-# Run identity. These four keys, and nothing else, determine the output directory (see
-# hydra.run.dir at the bottom) -- so relaunching the same config RESUMES it instead of
-# minting a fresh timestamped dir that `training.resume: True` can never find, and the
-# ablation arm is readable straight off the path. A second seed is a new directory rather
-# than a silent collision.
-#
-# The ablation configs override `search_context` / `corrupt_obs` at THIS level; the policy
-# block interpolates from here so the two can never disagree.
-# ---------------------------------------------------------------------------
-exp_name: pusht_search
 
 # ---------------------------------------------------------------------------
 # DEFAULT TRAINER -- outer_inner. FLIP APPLIED 2026-08-13.
@@ -62,8 +46,15 @@ exp_name: pusht_search
 #   -- and confirm train_pusht_bc* / train_pusht_st_n1* still say offline.
 # ---------------------------------------------------------------------------
 trainer: outer_inner             # {offline, outer_inner} -- paired with _target_ at the top
-search_context: value            # {value, state, state_value, subgoal, subgoal_value}
+
+search_context: value            # {value, subgoal, subgoal_value}
+
 corrupt_obs: False
+# Paired with corrupt_obs above and REQUIRED whenever it is True: whether eval rollouts
+# also see corrupted observations. null means "not answered", which the policy rejects --
+# it used to be answered implicitly (and inconsistently) at the call site.
+corrupt_obs_eval: null
+
 # How the executed action is picked. ORTHOGONAL to search_context, which only says what
 # each candidate reports back:
 #   argmax     -- the verifier scalar ranks the candidates, best one executed (best-of-n
@@ -72,6 +63,7 @@ corrupt_obs: False
 #                 on all of them and executed as-is, unsimulated. The verifier scalar then
 #                 takes no part in selection at all.
 selection: argmax                # {argmax, softmax, final_pass}
+
 # Geometric decay of the per-candidate-slot LOSS weight, counting BACK from the last slot:
 # w_k ∝ decay^(K-1-k), renormalized to mean 1. 1.0 == uniform == the objective every run
 # before this key used, bit-identical. See DiffusionTransformerSearchPolicy._slot_weights.
@@ -80,7 +72,7 @@ selection: argmax                # {argmax, softmax, final_pass}
 # index, but `final_pass` deploys slot min(n, max_actions-1), so the deployed conditional's
 # weight depends on the eval n -- at max_actions=16 the slot used at n=1 is trained at 0.45
 # and the one at n>=16 at 1.96. Prefer `context_decay` below, which has no n dependence.
-slot_weight_decay: 1.0
+slot_weight_decay: False
 
 # Recency discount on the SEARCH CONTEXT, applied inside the transformer as an additive
 # attention bias. For a candidate generated against m context entries, the latest entry
@@ -91,53 +83,30 @@ slot_weight_decay: 1.0
 # index, on max_actions, or on the search width, so the profile is identical in every loop
 # at every n. See SearchTransformerForDiffusion._build_memory_masks.
 context_decay: 1.0
+
 # The ablation label for (search_context, selection). Asserted in the workspace against
 # _ARM_LABELS so a config cannot file its results under the wrong arm; it is what the run
 # directory will be named once the pending rename lands (see AUDIT.md 9.9).
 arm: value                       # {value, subgoal-chosen4value, subgoal-value, subgoal-only}
-# Training-set size in DEMONSTRATIONS. Selects the split manifest
-# (splits/pusht_seed42_train${n_demos}.json) AND appears in the run name, so two budgets
-# can never land in the same output directory -- which is how the earlier 29-episode runs
-# would otherwise have been silently resumed by a 100-episode relaunch. The budgets nest:
-# the 25-episode train set is a strict subset of the 100-episode one, and val/test are
-# identical across manifests, so the two are directly comparable.
-n_demos: 100
+
 # Search width: how many candidates the loop generates (policy.max_actions interpolates from
 # here). Top-level because it is part of the run identity -- the loop length changes both the
 # training cost (K-1 candidates are generated per gradient step) and the widest context the
 # model is ever trained at, so two K values must not share an output directory.
 n_candidates: 16
+
 # RENAME LANDED 2026-08-05 (AUDIT.md 9.9). Keyed on `arm`, not `search_context`, because
 # `selection` is a second axis: `subgoal` under argmax is `subgoal-chosen4value`, under
 # final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
 # The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
 # by running jobs still resolve; drop those symlinks once nothing reads through them.
-#
-# `swd-` ADDED 2026-08-13, and it is load-bearing rather than cosmetic. slot_weight_decay
-# changes the training objective but was absent from run_name, so two runs of the same arm
-# at different slot_weight_decay resolved to the SAME hydra.run.dir -- and with
-# `training.resume: True` the second launch would have found the first's latest.ckpt and
-# silently continued it instead of starting a new run. Any key that changes what is being
-# trained belongs here; the run directory is the only thing that keeps two experiments apart.
-#
-# Existing directories predate this component and keep their old names. They were all
-# trained at slot_weight_decay: 1.0 and are simply not resumed by anything launched now.
-run_name: ${arm}_corrupt-${corrupt_obs}_swd-${slot_weight_decay}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
-# Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
-# run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
-# own. Putting the whole run dir there -- not just a symlinked checkpoints/ -- means wandb
-# files, logs.json.txt and the eval watcher's bon_search/ follow automatically.
-# Override per-user with the DP_OUTPUT_ROOT env var.
-output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
+# Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
+# move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
+# actually selects the workspace.
+_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
 
-horizon: 16
-n_obs_steps: 2
-n_action_steps: 8
-n_latency_steps: 0
-dataset_obs_steps: ${n_obs_steps}
-past_action_visible: False
-keypoint_visible_rate: 1.0
 
 policy:
   _target_: diffusion_policy.policy.pusht_diffusion_search_policy.PushTDiffusionSearchPolicy
@@ -159,7 +128,7 @@ policy:
       # with a freshly-initialized GroupNorm, which discards exactly the normalization
       # statistics pretrained weights depend on. Pick one or the other; upstream PushT BC
       # pairs random init with group norm, and that is the configuration that works here.
-      weights: null
+      weights: IMAGENET1K_V1
     resize_shape: null
     # The CropRandomizer still lives here (so the encoder's declared input shape stays
     # 96x96 and its shape assertion keeps working), but the POLICY chooses the offsets and
@@ -197,10 +166,66 @@ policy:
   n_emb: 256
   p_drop_emb: 0.0
   p_drop_attn: 0.2
-  causal_attn: False
+
+  # TRUE, and this line used to be the odd one out. `causal_attn` defaults to True on both
+  # SearchTransformerForDiffusion and DiffusionTransformerSearchPolicy, and every other
+  # diffusion-transformer config in this repo (train_diffusion_transformer_{lowdim,hybrid,
+  # real_hybrid,sim2real}_*.yaml) sets True; only this file forced False.
+  #
+  # WHAT IT CHANGES: the DECODER, not the memory. `self.mask` goes from None to a triu
+  # buffer, which switches on the second clause of `_build_tgt_mask` -- within one candidate,
+  # horizon step i now attends only to steps j <= i. The 16 action steps were fully
+  # bidirectional and are now autoregressive. Cross-candidate isolation is unaffected.
+  #
+  # THIS BREAKS RESUME FOR EVERY PRE-EXISTING RUN, and silently looks like a corrupt
+  # checkpoint if you don't know why. register_buffer("mask", ...) adds a `model.mask` key to
+  # the state_dict (108 keys -> 109), and BaseWorkspace.load_payload calls load_state_dict
+  # without strict=False, so resuming an older checkpoint under this config dies with
+  # `Missing key(s) in state_dict: "model.mask"`. Those checkpoints are still EVALUABLE --
+  # create_from_checkpoint rebuilds from the cfg embedded in the payload, which still says
+  # False -- but an in-flight run must be finished or restarted, not resumed across this.
+  #
+  # Every number in LATEST_SUCCESS_RATES.md / SUCCESS_RATES.md predates this. Runs from here
+  # are a new generation. Note also that it does NOT reach the UNet arms
+  # (train_pusht_unet_bc*, DiffusionUnetImagePolicy has no such knob), so the ST-vs-UNet 2x2
+  # now varies horizon causality as well as architecture.
+  causal_attn: True
+
+  # A causal GPT2Model over the conditioning memory instead of the nn.TransformerEncoder,
+  # matching how SearchPolicy and OnlineSearchPolicy encode their context: one flat token
+  # stream [obs_0, obs_1, cand_0 ... cand_14], NO hand-built mask, causality supplied by
+  # GPT-2's own triangular mask, and a padding mask as the only thing passed in.
+  # `_build_encoder_mask` is not consulted on this path.
+  #
+  # Motivated by the capacity arm's stated prediction (train_pusht_st_n1): if capacity is not what limits
+  # this policy, "what remains is conditioning bandwidth ... that points at the obs
+  # projection and n_cond_layers, not at model size". This changes the trunk that bandwidth
+  # flows through while holding the bandwidth's width fixed.
+  #
+  # LIKE-FOR-LIKE ON PARAMETERS: GPT-2 at n_embd 256 / n_layer 2 is 1.58M, the same as the
+  # nn.TransformerEncoder it replaces, so this is not a capacity change wearing a trunk
+  # change's clothes. (That holds only because the model passes vocab_size=1; GPT2Config's
+  # 50257 default would have added a 12.87M `wte` that is never read.)
+  #
+  # ONE EDGE OF CONNECTIVITY CHANGES, and it is worth knowing which: under
+  # `_build_encoder_mask` the two obs tokens attended to each other in both directions.
+  # Under causal masking obs step 0 can no longer see obs step 1. Everything else --
+  # candidate->obs, candidate->earlier candidate, and no obs->candidate -- is already what
+  # causality gives. SearchPolicy never had to answer this because it flattens the whole obs
+  # window into a single token.
+  #
+  # REQUIRES `transformers`, newly declared in conda_environment.yaml -- an env built before
+  # that needs `pip install 'transformers==4.29.2'` or this config dies at policy
+  # construction. The import is lazy (see
+  # SearchTransformerForDiffusion._build_cond_encoder), so every OTHER config still imports
+  # the module fine without it. Checkpoints are not interchangeable with
+  # cond_encoder: transformer.
+  cond_encoder: gpt2
+
   # interpolated from the top-level identity keys so the run dir and the policy can never
   # disagree about which ablation arm this is
   corrupt_obs: ${corrupt_obs}
+  corrupt_obs_eval: ${corrupt_obs_eval}
   search_context: ${search_context}
   selection: ${selection}
   slot_weight_decay: ${slot_weight_decay}
@@ -234,190 +259,3 @@ policy:
   verifier_use_async: True
   verifier_steps: null
 
-dataloader:
-  # kept small: the verifier physics-simulates max_actions-1 candidates per step, so
-  # step time is dominated by the verifier. Raise if the verifier is parallelized.
-  batch_size: 32
-  num_workers: 8
-  shuffle: True
-  pin_memory: True
-  persistent_workers: True
-
-val_dataloader:
-  batch_size: 32
-  num_workers: 8
-  shuffle: False
-  pin_memory: True
-  persistent_workers: True
-
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 1.0e-4
-  betas: [0.95, 0.999]
-  eps: 1.0e-8
-  weight_decay: 1.0e-6
-
-training:
-  device: "cuda:0"
-  seed: 42
-  debug: False
-  resume: True
-  # Linear warmup to lr over 3k steps, cosine decay to min_lr_ratio*lr = 1e-5 reached at
-  # step 80,000, then HELD constant. decay_steps is measured from the END of warmup
-  # (progress = (step - warmup)/decay_steps), so 3000 + 77000 puts the floor at exactly 80k.
-  #
-  # This is the standard shared with the width-1 arms (train_pusht_st_n1*, train_pusht_unet_bc*)
-  # so n=1 and n=16 results are directly comparable. It replaces warmup 500 / decay_steps
-  # 10000, which was calibrated for the old 20k runs and left a 100k run at its 1e-5 floor
-  # for 89% of training -- the defect recorded in
-  # data/outputs/_discarded/bc_demos-29-r8_seed-42__BAD-lr-decay_steps-10000/WHY_DISCARDED.md.
-  #
-  # `decay_then_constant` is a pure function of the step index, so it is safe to resume and
-  # safe to EXTEND: training past 100k just continues at 1e-5. Plain `cosine` is periodic
-  # past its horizon (it climbs back to peak), so a resumed run would silently start a
-  # second cycle.
-  lr_scheduler: decay_then_constant
-  lr_warmup_steps: 3000
-  lr_scheduler_kwargs:
-    decay_steps: 77000
-    min_lr_ratio: 0.1
-  # SAFETY BOUND ONLY -- max_gradient_steps below is what ends the run, and it is enforced
-  # mid-epoch so it stops on the exact step. num_epochs must stay far above any epoch count
-  # that could reach the budget: an epoch is ceil(n_windows/batch_size) steps, so at 29 demos
-  # it is ~110 steps and the old `num_epochs: 1000` was only ~110k -- close enough to bind
-  # first and silently become the real limit. Kept rather than removed because the loop is
-  # `range(num_epochs)` in the offline trainer, and self.epoch is logged as the outer-step
-  # counter here.
-  num_epochs: 100000
-  # 100k. The old 20k cap dates from the pre-augmentation runs that overfit by ~3k steps;
-  # with crop augmentation and EMA in place val_loss keeps improving much longer. Matches
-  # the width-1 arms, so the two search widths are compared at equal optimization.
-  max_gradient_steps: 100000
-  gradient_accumulate_every: 1
-  gradient_clip_norm: 1.0
-  # EMA weights are what gets rolled out, validated, sampled and shipped in the checkpoint;
-  # the live weights are only the optimization target.
-  use_ema: True
-  # Constant, NOT the repo's warmup curve. EMAModel's default decay is a function of the
-  # step index (1 - (1+step)^-0.75, capped at max_value), which makes the averaging window
-  # depend on where you are in the run -- and its step counter is not checkpointed, so a
-  # resumed run re-enters the curve at 0. A flat decay is the same at every step and
-  # identical across restarts. 1/(1-0.995) = a 200-step averaging window throughout.
-  # Override to 0.999 for a 1000-step window if this smooths too little.
-  ema_decay: 0.995
-  freeze_encoder: False
-
-  # ---- outer/inner loop geometry (TrainSearchOuterInnerWorkspace) ----
-  # THE knob is max_gradient_steps above; these four define the loop shape and are
-  # independent of run length. num_inner = inner_epochs * ceil(outer_bs/inner_bs) = 32
-  # updates per outer step, so the search cost per update is divided by exactly
-  # inner_epochs (4x here: 480 -> 120 verifier sims). There is deliberately no num_outer --
-  # the outer loop runs until the gradient-step budget is spent.
-  outer_batch_size: 256    # windows whose search context is generated per outer step
-  inner_batch_size: 32     # matches dataloader.batch_size
-  inner_epochs: 4          # 256/32 = 8 batches/epoch x 4 = 32 updates per outer step
-  drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
-  # Rollout on GRADIENT STEPS and on a multiple of checkpoint_every, so every rollout
-  # number belongs to weights that were saved and can be re-verified against an eval curve.
-  # rollout_every (epochs) is kept only as the fallback for configs that predate this.
-  # ALL eval cadences are in GRADIENT STEPS. An epoch is not a stable unit here: its length
-  # depends on the dataset size and the train budget, so the old `val_every: 10` fired every
-  # ~960 steps at a 25-episode budget and would fire every ~4030 at 100 episodes -- the same
-  # config value silently meaning 4x less validation. rollout_every_steps is additionally a
-  # multiple of checkpoint_every, so every in-training success number belongs to weights that
-  # were saved and can be re-verified against an eval curve.
-  # The *_every (epoch) keys below are retained only as the fallback for configs predating
-  # this; the workspace prefers the *_every_steps ones whenever they are set.
-  # MUST be a multiple of checkpoint_every, so every in-training success number belongs to
-  # weights that were saved and can be re-verified against an eval curve. It was 2000 when
-  # checkpoint_every was 1000; at the 10k cadence that would put rollouts on steps with no
-  # checkpoint behind them. 20000 -> 5 rollouts over a 100k run.
-  rollout_every_steps: 20000
-  val_every_steps: 1000
-  sample_every_steps: 1000
-  rollout_every: 50
-  # 10k, matching the eval grid: every checkpoint written gets scored and nothing is scored
-  # off-grid. At the old 1k cadence a 100k run wrote 100 checkpoints of which ~10 were ever
-  # evaluated; on the 4.4 GB UNet checkpoints that same cadence filled a 1.9 TB disk at step
-  # 115k. A search-policy checkpoint is ~261 MB, so 10 x 261 MB per 100k run.
-  checkpoint_every: 10000
-  # EXTRA checkpoints off the regular cadence, for the early part of the curve where the
-  # policy changes fastest and a 10k grid has no resolution at all. Together with
-  # checkpoint_every this gives the eval grid 1k, 5k, 10k, 20k ... 100k = 12 checkpoints.
-  #
-  # An extra list rather than dropping checkpoint_every to 1000: at a 1k cadence a 100k run
-  # writes 100 checkpoints (~26 GB/run at ~261 MB each) of which only 12 are ever scored.
-  #
-  # These saves deliberately do NOT move the cadence anchor (_save(advance_anchor=False)).
-  # If they did, a save at 1000 would put the next cadence checkpoint at 11000 rather than
-  # 10000 and shift every later one by 1000 -- a grid no eval sweep expects, produced
-  # silently.
-  checkpoint_steps: [1000, 5000]
-  val_every: 10
-  sample_every: 10
-  # Bound the (verifier-driven) normalized-RMSE eval. These batches are now drawn as a
-  # FIXED SEEDED SUBSET spanning the whole split (see _make_nrmse_loader): with the plain
-  # shuffle:False loader all 128 windows came from the split's first episode, so every
-  # val_*/test_* number was a single-episode statistic.
-  nrmse_max_batches: 4
-  max_train_steps: null
-  max_val_steps: null
-  tqdm_interval_sec: 1.0
-
-logging:
-  entity: l2sml
-  project: pushT_diffusion_search
-  resume: True
-  mode: online
-  # The wandb run is named for the RUN IDENTITY, not the wall clock. The arms are CLI
-  # overrides on this file, so `${name}` is `train_pusht_diffusion_search` for every one of
-  # them -- the old `${now:...}_${name}_${task_name}` therefore gave a whole sweep the same
-  # wandb name and the same tags, separated only by submission timestamp, which makes the
-  # curves unattributable. `${run_name}` is exactly the output directory's basename, so a
-  # wandb curve and a checkpoint on disk can always be matched up.
-  name: ${run_name}
-  # the three feedback arms group together; slot_weight_decay is the within-group axis
-  group: ${arm}
-  tags: ["${name}", "${task_name}", "${exp_name}", "${arm}",
-         "swd-${slot_weight_decay}", "demos-${n_demos}", "n${n_candidates}"]
-  # null -> wandb auto-resume, which keys off the run files under `dir=` (the output dir on
-  # /gscratch, stable across resubmits because hydra.run.dir is identity-derived). If a
-  # preempted run turns out to fork a NEW wandb run instead of continuing, set this to a
-  # sanitized run_name -- wandb ids allow only alphanumerics, `-` and `_`, so the `.` in
-  # e.g. `swd-0.9` cannot be used raw.
-  id: null
-
-checkpoint:
-  # NO `topk`. Deliberate, and do not add it back without deciding to.
-  #
-  # `topk` retains the k best checkpoints by a monitored metric, which means a val_loss
-  # ranking silently decides which weights survive -- that is tooling nominating a
-  # checkpoint, which is exactly what this project does not do (SUCCESS_RATES.md: "These
-  # tables report measurements; they mark no winner"). It also stored a second, separately
-  # named copy of weights already on the step grid.
-  #
-  # It was also INERT here regardless: TrainSearchOuterInnerWorkspace has no
-  # TopKCheckpointManager, so this block was read by nothing and quietly did nothing --
-  # only TrainMLPImageWorkspace honors it, and only for the non-PushT configs that still
-  # set it.
-  #
-  # Checkpoint choice comes from real eval: eval_search_pusht.py evaluates each
-  # checkpoints/step_*.ckpt into bon_search/success_curves.jsonl and you pick from that
-  # curve, saying which rule you used. Every consumer globs step_*.ckpt only.
-  save_last_ckpt: True
-  save_last_snapshot: False
-
-hydra:
-  # Run dir is a pure function of the run IDENTITY, not of the wall clock. Consequences:
-  #   * relaunching the same config resumes it (training.resume finds latest.ckpt) --
-  #     with a timestamped dir it silently restarted from scratch every time;
-  #   * the ablation arm and seed are readable from the path, so reporting is a glob
-  #     instead of three hand-maintained arm->path tables that drift apart;
-  #   * a different seed is a different directory instead of overwriting the first run.
-  # Do NOT pass hydra.run.dir= on the command line; that was the workaround for the
-  # timestamped template and it reintroduces silent collisions between arms.
-  run:
-    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
-  sweep:
-    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/_sweep_${now:%Y.%m.%d-%H.%M.%S}
-    subdir: ${hydra.job.num}

@@ -3,17 +3,20 @@ import torch
 import torch.nn as nn
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.obs_corruption import ObsCorruptionMixin
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
 from torch.distributions import Normal
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from transformers import GPT2Config, GPT2Model
 
-from l2s.verifier import MazeVerifier
+from diffusion_policy.model.common.gpt2_trunk import build_gpt2_trunk
+from diffusion_policy.policy.crop_scope import CropScopeMixin
+from diffusion_policy.policy.search_procedure import SearchProcedureMixin
 
-class SearchPolicy(BaseImagePolicy):
+
+class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, BaseImagePolicy):
     def __init__(self,
             shape_meta: dict[str, Any],
             obs_encoder: MultiImageObsEncoder,
@@ -22,6 +25,9 @@ class SearchPolicy(BaseImagePolicy):
             n_obs_steps: int,
             hidden_dim: int = 512,
             hidden_depth: int = 4,
+            n_head: int = 4,
+            p_drop_emb: float = 0.1,
+            p_drop_attn: float = 0.1,
             corrupt_obs: bool = False,
             mask_obs: bool = False,
             concat_obs: bool = False,
@@ -38,12 +44,11 @@ class SearchPolicy(BaseImagePolicy):
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
-        self.verifier = MazeVerifier(
-            maze_path=kwargs.get('maze_path', None),
-            device=kwargs.get('device', 'cpu'),
-            noise=kwargs.get('verifier_noise', 0.0),
-        )
         self.kwargs = kwargs
+        self.verifier = self._build_verifier(**kwargs)
+        self._init_selection(**kwargs)
+        self._init_crop(shape_meta, kwargs.get('crop_shape'),
+                        kwargs.get('random_crop', True))
         self.mask_obs = mask_obs
         self.concat_obs = concat_obs
         if self.concat_obs:
@@ -57,26 +62,22 @@ class SearchPolicy(BaseImagePolicy):
                 nn.Linear(hidden_dim, hidden_dim),
             )
 
+        self.context_dim = self._context_dim(obs_feature_dim, **kwargs)
+        ctx_in = horizon * action_dim + self.context_dim
         if self.concat_obs:
             self.obs_projection = nn.Linear(obs_feature_dim * n_obs_steps, hidden_dim // 2)
-            self.act_projection = nn.Linear(horizon * action_dim + 1, hidden_dim // 2)
+            self.act_projection = nn.Linear(ctx_in, hidden_dim // 2)
             self.hidden_dim = hidden_dim
-        else:    
+        else:
             self.obs_projection = nn.Linear(obs_feature_dim * n_obs_steps, hidden_dim)
-            self.act_projection = nn.Linear(horizon * action_dim + 1, hidden_dim)
+            self.act_projection = nn.Linear(ctx_in, hidden_dim)
         self.max_actions = kwargs['max_actions']
 
-        # Shared trunk
-        cfg = GPT2Config(
-            n_positions=1024,
-            n_embd=hidden_dim,
-            n_layer=hidden_depth,
-            n_head=4,
-            resid_pdrop=float(0.1),
-            embd_pdrop=float(0.1),
-            attn_pdrop=float(0.1),
-        )
-        self.transformer = GPT2Model(cfg)
+        # Shared trunk. n_positions covers the obs token plus max_actions candidates.
+        self.transformer = build_gpt2_trunk(
+            n_emb=hidden_dim, n_head=n_head, n_layer=hidden_depth,
+            n_positions=1 + self.max_actions,
+            p_drop_emb=p_drop_emb, p_drop_attn=p_drop_attn)
         
         output_dim = horizon * action_dim
         self.mean_head = nn.Linear(hidden_dim, output_dim)
@@ -84,7 +85,7 @@ class SearchPolicy(BaseImagePolicy):
         
         self.log_std_limits = (-5.0, 2.0)
 
-        self.corrupt_obs = corrupt_obs
+        self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))
         self.obs_noise_scheduler = DDPMScheduler(
             num_train_timesteps=100,
             beta_start=0.001,
@@ -94,20 +95,16 @@ class SearchPolicy(BaseImagePolicy):
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
 
-    def corrupt_obs_features(self, obs_features):
-        if not self.corrupt_obs:
-            return obs_features
+    def _build_verifier(self, **kwargs):
+        """`l2s` is imported here, not at module scope, so this module stays importable in
+        environments that lack the maze-only package."""
+        from l2s.verifier import MazeVerifier
+        return MazeVerifier(
+            maze_path=kwargs.get('maze_path', None),
+            device=kwargs.get('device', 'cpu'),
+            noise=kwargs.get('verifier_noise', 0.0),
+        )
 
-        # Add noise to encoded obs features to simulate corrupted context.
-        obs_noise = torch.randn_like(obs_features)
-        bsz = obs_features.shape[0]
-        timesteps = torch.randint(
-            0, self.obs_noise_scheduler.config.num_train_timesteps, 
-            (bsz,), device=obs_features.device
-        ).long()
-        return self.obs_noise_scheduler.add_noise(
-            obs_features, obs_noise, timesteps)
-    
     def forward(
             self,
             obs_features: torch.Tensor, # B, hidden_dim
@@ -120,9 +117,6 @@ class SearchPolicy(BaseImagePolicy):
         """
             
         B = obs_features.shape[0]
-        if self.corrupt_obs:
-            obs_features = self.corrupt_obs_features(obs_features)
-
         if self.mask_obs:
             h = self.first_action_mlp(obs_features) # B, hidden_dim
             h = h.unsqueeze(1) # B, 1, hidden_dim
@@ -177,116 +171,87 @@ class SearchPolicy(BaseImagePolicy):
             std = torch.cat([first_action_std, std], dim=1)
         return Normal(mean, std) # B, T, horizon, action_dim
 
-    def _predict_action(
+    def _context_tokens(self, actions, values):
+        """(B, K, H, Da) raw actions + (B, K[, context_dim]) feedback -> (B, K, hidden)."""
+        B, K = actions.shape[:2]
+        actions = self._normalize_context_actions(actions)
+        actions = actions.reshape(B, K, -1).to(self.act_projection.weight.device)
+        values = values.to(actions)
+        if values.ndim == 2:
+            # (B, K) scalar feedback -> (B, K, 1)
+            values = values.unsqueeze(-1)
+        assert values.shape[-1] == self.context_dim, \
+            f"Got context feedback dim {values.shape[-1]}, expected {self.context_dim}"
+        return self.act_projection(torch.cat([actions, values], dim=-1))
+
+    def _encode_obs(self, nobs) -> torch.Tensor:
+        """ALREADY-NORMALIZED obs dict (B, T, ...) -> (B, T, obs_feature_dim).
+
+        Same contract as the diffusion policy's, so PushTSearchMixin's `_encode_subgoal`
+        works against either family. The fused (B, obs_feature_dim*To) -> hidden
+        projection stays in the caller: it is this policy's tokenization, not encoding.
+        """
+        if isinstance(nobs, dict):
+            B, T = next(iter(nobs.values())).shape[:2]
+            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
+        else:
+            B, T = nobs.shape[:2]
+            this_nobs = nobs.reshape(-1, *nobs.shape[2:])
+        offsets = self._crop_offsets_for(B, repeat=T)
+        if offsets is None:
+            return self.obs_encoder(this_nobs).reshape(B, T, -1)
+        return self.obs_encoder(this_nobs, crop_offsets=offsets).reshape(B, T, -1)
+
+    def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim)."""
+        nobs = self.normalizer.normalize(obs_dict)
+        To = self.n_obs_steps
+        if isinstance(nobs, dict):
+            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
+        else:
+            nobs = nobs[:, :To, ...]
+        return self._encode_obs(nobs)
+
+    def predict_action(
             self,
             obs_dict: Dict[str, torch.Tensor],
             actions: torch.Tensor = None,
             values: torch.Tensor = None,
+            obs_features: torch.Tensor = None,
         ) -> Dict[str, torch.Tensor]:
-        assert 'past_action' not in obs_dict
-        nobs = self.normalizer.normalize(obs_dict)
-        obs_value = next(iter(nobs.values()))
-        B, To = obs_value.shape[:2]
-        To = self.n_obs_steps
+        """One action chunk, optionally conditioned on prior candidates.
 
-        # Encode obs: flatten all obs steps
-        if isinstance(nobs, dict):
-            this_nobs = dict_apply(
-                nobs,
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:])
-            )
-        else:
-            this_nobs = nobs[:, :To, ...].reshape(-1, *nobs.shape[2:])
-        nobs_features = self.obs_encoder(this_nobs)
-        nobs_features = nobs_features.reshape(B, To, -1)
-        obs_features = nobs_features.reshape(B, -1)
-        obs_features = self.obs_projection(obs_features)
+        ``obs_features`` is accepted for interface parity with the diffusion policy (the
+        mixin passes it); this policy re-encodes per call, so it is ignored.
+
+        The trunk emits one distribution per sequence position, i.e. one per candidate
+        slot; the NEXT candidate is the last position, so the slice happens here rather
+        than in the caller.
+        """
+        assert 'past_action' not in obs_dict
+        To = self.n_obs_steps
+        if obs_features is None:
+            obs_features = self._encode_obs_features(obs_dict)
+        B = obs_features.shape[0]
+        obs_features = self.corrupt_obs_features(obs_features)
+        obs_features = self.obs_projection(obs_features.reshape(B, -1))
 
         # Prepare action_value_features by concatenating actions and values, and projecting to hidden_dim
-        if actions is None:
-            action_value_features = None
-        else:
-            actions = actions.reshape(B, actions.shape[1], -1).to(obs_features.device) # B, max_actions, horizon*action_dim
-            values = values.to(obs_features.device) # B, max_actions
-            action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1)
-            action_value_features = self.act_projection(action_value_input)
+        action_value_features = (
+            None if actions is None else self._context_tokens(actions, values))
 
         dist = self.forward(obs_features, action_value_features) # B, max_actions, horizon, action_dim
         naction_pred = dist.rsample() # B, max_actions, horizon, action_dim
         action_pred = self.normalizer['action'].unnormalize(naction_pred) # B, max_actions, horizon, action_dim
 
+        action_pred = action_pred[:, -1]              # B, horizon, action_dim
         start = To - 1
         end = start + self.n_action_steps
-        action = action_pred[:, :, start:end] # B, max_actions, n_action_steps, action_dim
         return {
-            'action': action,
-            'action_pred': action_pred
+            'action': action_pred[:, start:end],     # B, n_action_steps, action_dim
+            'action_pred': action_pred,
         }
 
-    def predict_action(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions
-    ):
-        actions = None
-        values = None
-        for _ in range(n_actions):
-            new_action = self._predict_action(
-                obs_dict,
-                actions=actions,
-                values=values
-            )['action_pred'][:, -1]  # B, horizon, action_dim
-
-            new_value = verifier.get_value(obs_dict, new_action)
-            if actions is None:
-                actions = new_action.unsqueeze(1)
-                values = new_value.unsqueeze(1)
-            else:
-                actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
-                values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        return actions, values # B, n_actions, horizon, action_dim and B, n_actions
-    
-    @torch.inference_mode()
-    def predict_n_actions(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions
-    ):
-        # return self.predict_action(obs_dict, verifier, n_actions)
-        if n_actions <= self.max_actions:
-            actions, values = self.predict_action(obs_dict, verifier, n_actions)
-            actions = actions
-            values = values
-            return actions, values
-        else:
-            # If n_actions exceeds max_actions, we can call predict_action multiple times.
-            actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
-
-            all_actions = actions.clone()
-            all_values = values.clone()
-
-            action_history = actions[:, 1:]
-            value_history = values[:, 1:]
-            for i in range(self.max_actions, n_actions):
-                new_action = self._predict_action(
-                    obs_dict,
-                    actions=action_history,
-                    values=value_history
-                )['action_pred'][:, -1]  # B, horizon, action_dim
-
-                new_value = verifier.get_value(obs_dict, new_action)
-
-                all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
-                all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
-
-                action_history = torch.cat([action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
-                value_history = torch.cat([value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
-            
-            return all_actions, all_values  # B, n_actions, horizon, action_dim and B, n_actions
-
-    
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
@@ -300,29 +265,17 @@ class SearchPolicy(BaseImagePolicy):
         assert Da == self.action_dim, \
             f"Expected action dim {self.action_dim}, got {Da}"
         
-        # Encode obs
-        if isinstance(nobs, dict):
-            this_nobs = dict_apply(
-                nobs,
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:])
-            )
-        else:
-            this_nobs = nobs[:, :To, ...].reshape(-1, *nobs.shape[2:])
-        nobs_features = self.obs_encoder(this_nobs)
-        nobs_features = nobs_features.reshape(B, To, -1)
-        obs_features = nobs_features.reshape(B, -1)
-        obs_features = self.obs_projection(obs_features) # B, hidden_dim
+        obs_features = self.corrupt_obs_features(self._encode_obs_features(batch['obs']))
+        obs_features = self.obs_projection(obs_features.reshape(B, -1)) # B, hidden_dim
 
         with torch.inference_mode():
-            actions, values = self.predict_action(
+            actions, values = self.search_candidates(
                 batch['obs'],
                 verifier=self.verifier,
                 n_actions=self.max_actions-1
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
-        actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
-        action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1) # B, max_actions, horizon*action_dim + 1
-        action_value_features = self.act_projection(action_value_input) # B, max_actions, hidden_dim
+        action_value_features = self._context_tokens(actions, values) # B, max_actions, hidden
         dist = self.forward(obs_features, action_value_features)  # B, max_actions, horizon, action_dim
         target_actions = target_actions.unsqueeze(1).expand(-1, self.max_actions, -1, -1) # B, max_actions, horizon, action_dim
         log_prob = dist.log_prob(target_actions).sum(dim=(-1, -2)) # B, max_actions

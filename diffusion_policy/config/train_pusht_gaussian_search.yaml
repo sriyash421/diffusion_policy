@@ -1,0 +1,75 @@
+# PushT GAUSSIAN search arm -- maze's Gaussian search transformer on PushT's verifier.
+#
+# The counterpart to train_pusht_diffusion_search: same task, encoder, verifier, search
+# procedure, demo budget and optimizer from pusht_base; the ONLY difference is how a
+# candidate is produced (one rsample from a Normal vs a denoising loop). Mirrors maze's
+# SearchPolicy exactly -- fused obs token, one token per candidate, Gaussian heads, NLL
+# loss -- so the two PushT arms also differ on obs tokenization (fused here, one token per
+# obs step on the diffusion arm), which is inherited from that mirroring.
+defaults:
+  - pusht_base
+  - _self_
+
+name: train_pusht_gaussian_search
+
+# No denoising context to amortize across updates, so the plain offline loop.
+trainer: offline
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+
+# Search-arm knobs, same meaning as on the diffusion master.
+search_context: value            # {value, subgoal, subgoal_value}
+corrupt_obs: False
+# Paired with corrupt_obs above and REQUIRED whenever it is True: whether eval rollouts
+# also see corrupted observations. null means "not answered", which the policy rejects --
+# it used to be answered implicitly (and inconsistently) at the call site.
+corrupt_obs_eval: null
+selection: argmax                # {argmax, softmax, final_pass}
+arm: gaussian
+n_candidates: 16
+run_name: ${arm}_k${n_candidates}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+
+policy:
+  _target_: diffusion_policy.policy.pusht_gaussian_search_policy.PushTGaussianSearchPolicy
+  shape_meta: ${shape_meta}
+  # Identical encoder recipe to the diffusion arm, so the two are comparable.
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: IMAGENET1K_V1
+    resize_shape: null
+    crop_shape: [76, 76]
+    random_crop: True
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: False
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  # GPT-2 trunk, matched to online search (hidden_depth 4 / n_head 4 / hidden_dim 256) and
+  # to the diffusion arm's n_layer / n_head / n_emb.
+  hidden_dim: 256
+  hidden_depth: 4
+  n_head: 4
+  p_drop_emb: 0.0
+  p_drop_attn: 0.2
+  # structural variants inherited from maze's SearchPolicy; mutually exclusive
+  mask_obs: False
+  concat_obs: False
+  corrupt_obs: ${corrupt_obs}
+  corrupt_obs_eval: ${corrupt_obs_eval}
+  search_context: ${search_context}
+  selection: ${selection}
+  # policy-owned crop, so the obs and every subgoal share one offset
+  crop_shape: [76, 76]
+  random_crop: True
+  max_actions: ${n_candidates}
+  verifier_n_envs: 32
+  verifier_legacy: False
+  verifier_use_async: True
+  verifier_steps: null
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "gaussian", "demos-${n_demos}"]
