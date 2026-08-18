@@ -10,13 +10,18 @@ Most differences below are inside that band -- read the caveats before quoting a
 
 ## The two arms
 
+Both arms are **diffusion** policies (`PushTDiffusionSearchPolicy`, DDIM at 8 steps).
+"SEARCH" here means search width 16, not the `train_pusht_st_n1` arm -- that is a separate
+width-1 config with `num_inference_steps: 100`, and it was not part of these runs. The
+Gaussian arm (`train_pusht_gaussian_search`) exists in the tree but has never been run.
+
 Both are `PushTDiffusionSearchPolicy` with a **byte-identical** obs encoder and denoiser
 (verified from each run's `.hydra/config.yaml`): ResNet18 `IMAGENET1K_V1`, `crop_shape
 [76,76]`, `random_crop`, `use_group_norm`, `imagenet_norm: False`; 4 layers / 2 cond layers
 / 4 heads / 256 emb, `p_drop_attn 0.2`, `causal_attn: True`, `cond_encoder: gpt2`, DDIM at
 8 inference steps. **The only difference is `max_actions`: 16 vs 1.**
 
-| | ST (search) | BC |
+| | SEARCH (k=16) | BC (k=1) |
 |---|---|---|
 | config | `train_pusht_diffusion_search n_demos=30` | `train_pusht_bc n_demos=30` |
 | `max_actions` / eval n | 16 / 16 | 1 / 1 |
@@ -32,13 +37,13 @@ dataset size. Seed 42, single seed.
 
 ## 1. In-training rollouts (mean reward, max)
 
-**These are NOT a matched comparison**: ST evaluated at n=16 (search active), BC at n=1.
+**These are NOT a matched comparison**: SEARCH evaluated at n=16 (search active), BC at n=1.
 Use section 2 for like-for-like.
 
 | arm | 20k | 40k | 60k | 80k | 100k |
 |---|---|---|---|---|---|
-| ST test  | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
-| ST val   | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
+| SEARCH test | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
+| SEARCH val  | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
 | BC test  | 0.4957 | 0.612 | 0.6029 | 0.6382 | - |
 | BC val   | 0.4577 | 0.5681 | 0.6342 | 0.6397 | - |
 
@@ -48,18 +53,18 @@ drift +1 per fire (20001, 40002, 60003, 80004) so the next trigger lands at 1000
 reward 0.593, success 0.240. `TrainSearchOuterInnerWorkspace` hits its boundaries exactly and
 does not have this bug.
 
-**Both arms are over-trained at 100k.** ST peaks at 60k (0.8023) and falls 19pp by 100k; BC
+**Both arms are over-trained at 100k.** SEARCH peaks at 60k (0.8023) and falls 19pp by 100k; BC
 peaks at 80k. 60-80k would have been the right budget at this demo count.
 
 ## 2. Best-of-n x selection rule (matched n, both arms)
 
-ST from `step_0060000.ckpt`, BC from `step_0080000.ckpt` -- each arm's best in-training
+SEARCH from `step_0060000.ckpt`, BC from `step_0080000.ckpt` -- each arm's best in-training
 checkpoint. n in {1,2,4,8,16} x {argmax, softmax, final_pass}, `eval_search_pusht.py`,
 seed 42.
 
 ### TEST -- mean reward (max)
 
-| n | ST/argmax | ST/softmax | ST/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
 |---|---|---|---|---|---|---|
 | 1 | 0.599 | 0.668 | 0.663 | 0.624 | 0.590 | 0.585 |
 | 2 | 0.670 | 0.731 | 0.709 | 0.647 | 0.612 | 0.613 |
@@ -69,7 +74,7 @@ seed 42.
 
 ### TEST -- success rate
 
-| n | ST/argmax | ST/softmax | ST/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
 |---|---|---|---|---|---|---|
 | 1 | 0.120 | 0.160 | 0.120 | 0.260 | 0.200 | 0.180 |
 | 2 | 0.200 | 0.340 | 0.160 | 0.240 | 0.300 | 0.240 |
@@ -79,7 +84,7 @@ seed 42.
 
 ### VAL -- mean reward (max)
 
-| n | ST/argmax | ST/softmax | ST/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
 |---|---|---|---|---|---|---|
 | 1 | 0.680 | 0.683 | 0.723 | 0.677 | 0.644 | 0.601 |
 | 2 | 0.743 | 0.769 | 0.740 | 0.663 | 0.725 | 0.641 |
@@ -89,7 +94,7 @@ seed 42.
 
 ### VAL -- success rate
 
-| n | ST/argmax | ST/softmax | ST/final_pass | BC/argmax | BC/softmax | BC/final_pass |
+| n | SEARCH/argmax | SEARCH/softmax | SEARCH/final_pass | BC/argmax | BC/softmax | BC/final_pass |
 |---|---|---|---|---|---|---|
 | 1 | 0.333 | 0.200 | 0.133 | 0.267 | 0.133 | 0.033 |
 | 2 | 0.233 | 0.133 | 0.200 | 0.167 | 0.267 | 0.233 |
@@ -106,21 +111,21 @@ seed 42.
   both arms; it never wins on test success.
 
 **NOT supported by this data:**
-* **That the search-trained policy beats BC.** At matched n the ST advantage largely
+* **That the search-trained policy beats BC.** At matched n the search advantage largely
   disappears -- on test success at n=16, BC/argmax (0.460) is the best cell in the table,
-  above ST/argmax (0.300). The apparent +0.164 in section 1 is ST-at-16 vs BC-at-1, which
+  above SEARCH/argmax (0.300). The apparent +0.164 in section 1 is search-at-16 vs BC-at-1, which
   conflates the trained policy with eval-time search budget.
 * **Any ranking of argmax vs softmax.** They trade places by n and by split.
 * **Any single cell.** CIs are ~+/-0.12 at 50 episodes and nearly every pairwise difference
   overlaps.
 
-**Open discrepancy:** the same ST checkpoint at n=16 scored **0.8023** in training but
+**Open discrepancy:** the same search checkpoint at n=16 scored **0.8023** in training but
 **0.724** in the standalone sweep. Same weights, same n, same runner. Most likely EMA vs raw
 weights (training rollouts use the EMA model; the eval script may not), but unconfirmed. **Do
-not quote the ST column until this is resolved** -- it would shift every ST number.
+not quote the search column until this is resolved** -- it would shift every search number.
 
 **Other caveats:** single seed, one checkpoint per arm, and success rate is non-monotonic in
-n (ST/argmax test: 0.12, 0.20, 0.34, 0.18, 0.30), which is impossible without noise and
+n (SEARCH/argmax test: 0.12, 0.20, 0.34, 0.18, 0.30), which is impossible without noise and
 indicates the noise dominates the effect at this episode count.
 
 ## 4. Where the raw results are
