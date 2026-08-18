@@ -7,7 +7,15 @@
 set -u
 cd "$(dirname "$0")/.."
 export DP_OUTPUT_ROOT="${DP_OUTPUT_ROOT:-/home/harine/diffusion_policy_outputs}"
-PY=/home/harine/miniconda3/envs/robodiff2/bin/python
+# Interpreter, overridable: the paths below are per-machine, and a wrong one fails here
+# with a clear message rather than 100k steps later. On Hyak:
+#   PY=/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python \
+#   DP_OUTPUT_ROOT=/gscratch/robotics/harine/diffusion_policy_outputs bash $0
+PY="${PY:-/home/harine/miniconda3/envs/robodiff2/bin/python}"
+if [ ! -x "$PY" ]; then
+  echo "no interpreter at $PY -- set PY=/path/to/env/bin/python" >&2
+  exit 1
+fi
 mkdir -p logs
 
 # rollout_every_steps 20000 is inherited, so success rates land at 20k/40k/60k/80k/100k.
