@@ -77,6 +77,33 @@ _ARM_LABELS = {
 }
 
 
+# Policy families whose arm is named after the FAMILY rather than the search-context
+# ablation, because the family is what they vary against train_pusht_diffusion_search: a
+# Gaussian candidate is one rsample where the diffusion arm runs a denoising loop, and that
+# -- not the context -- is the comparison. Their context ablations still have to be
+# nameable, so anything other than the default (value, argmax) carries the context in the
+# label too; see _expected_arm.
+_FAMILY_ARMS = {'PushTGaussianSearchPolicy': 'gaussian'}
+
+
+def _expected_arm(cfg, key):
+    """The arm label cfg SHOULD declare, or None if (search_context, selection) is unnamed.
+
+    For the context-ablation families this is just _ARM_LABELS[key]. For a family in
+    _FAMILY_ARMS it is the family name at the default context, and family-context otherwise
+    -- so two Gaussian runs that differ only in search_context still get distinct run
+    directories rather than silently sharing one.
+    """
+    context_label = _ARM_LABELS.get(key)
+    target = str((cfg.get('policy', None) or {}).get('_target_', '') or '')
+    family = _FAMILY_ARMS.get(target.rsplit('.', 1)[-1])
+    if family is None:
+        return context_label
+    if context_label is None:
+        return None
+    return family if key == ('value', 'argmax') else f'{family}-{context_label}'
+
+
 def _check_arm_label(cfg):
     """Fail fast if cfg.arm disagrees with (search_context, selection).
 
@@ -88,7 +115,7 @@ def _check_arm_label(cfg):
         return
     key = (cfg.get('search_context', 'value') or 'value',
            cfg.get('selection', 'argmax') or 'argmax')
-    expected = _ARM_LABELS.get(key)
+    expected = _expected_arm(cfg, key)
     if expected is None:
         raise ValueError(
             f'no arm label defined for search_context/selection {key}; add it to '
