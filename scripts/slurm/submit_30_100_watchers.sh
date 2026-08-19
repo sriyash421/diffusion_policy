@@ -30,6 +30,9 @@ offline/gaussian_k16_corrupt-False_demos-30_seed-42
 offline/gaussian_k16_corrupt-False_demos-100_seed-42
 offline/bc_demos-30_seed-42
 offline/bc_demos-100_seed-42
+unet_bc/unetbc_demos-30_seed-42
+offline/value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42
 "
 
 # One squeue call, not one per run: on a busy queue the per-run form is both slow and
