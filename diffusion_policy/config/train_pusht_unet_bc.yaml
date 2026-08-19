@@ -24,14 +24,19 @@ val_dataloader:
 policy:
   _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
   shape_meta: ${shape_meta}
+  # DDIM at 8 inference steps, byte-identical to the ST arms' scheduler. Was DDPM at 100:
+  # that made the sampler a second difference alongside architecture, so a gap could not be
+  # attributed to either. variance_type is dropped (DDPM-only); set_alpha_to_one and
+  # steps_offset are DDIM's, taken from train_pusht_diffusion_search.
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
     beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small
     clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
     prediction_type: epsilon
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
@@ -57,7 +62,7 @@ policy:
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
-  num_inference_steps: 100
+  num_inference_steps: 8   # matches both ST arms
   obs_as_global_cond: ${obs_as_global_cond}
   # 256, NOT the upstream UNet recipe's 128 -- matched to the search transformer's `n_emb`,
   # which is the width its diffusion-timestep embedding is built at
