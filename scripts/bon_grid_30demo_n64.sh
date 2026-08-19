@@ -44,10 +44,17 @@ for arm in search bc; do
   for ckpt in $(ls $d/checkpoints/step_*.ckpt | sort); do
     step=$(basename $ckpt .ckpt)
     echo "=== [$(date -Is)] $arm $step argmax ==="
-    $PY -u eval_search_pusht.py -c "$ckpt" \
+    # 45m cap: at n=64 the async verifier pool has deadlocked (0 CPU, blocked on a unix
+    # socket) at least once, wedging the whole chain behind one checkpoint. A timeout skips
+    # the stuck checkpoint instead; eval_search_pusht resumes per (checkpoint, n_list), so
+    # a skipped one is picked up by re-running this script.
+    timeout 45m $PY -u eval_search_pusht.py -c "$ckpt" \
       -o "$ROOT/bon_grid_30demo/$arm" --selection argmax \
       --min-n 32 --max-n 64 --n-envs 16 --store-scores 2>&1 \
       | grep -E "success_rate=|\[scores\]|Traceback|Error"
+    rc=${PIPESTATUS[0]}
+    [ "$rc" = 124 ] && echo "=== [$(date -Is)] TIMEOUT after 45m: $arm $step -- skipped ==="
+    pkill -f 'pusht_verifier' 2>/dev/null   # a timed-out eval leaves its worker pool behind
   done
 done
 echo "=== [$(date -Is)] n64 done ==="

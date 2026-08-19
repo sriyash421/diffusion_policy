@@ -9,7 +9,7 @@ exactly. Reads whatever has completed so far, so it is safe against an in-progre
 import argparse, os, re, sys
 
 NS = [1, 2, 4, 8, 16, 32, 64]
-ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'BC'))
+ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'ST-diffusion-k1'))
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
 
@@ -36,7 +36,8 @@ def main():
     ap.add_argument('--split', choices=['test', 'val'], default='test')
     a = ap.parse_args()
     idx = 1 if a.metric == 'reward' else 0
-    logs = a.log or ['logs/bon_grid_30demo.log', 'logs/bon_grid_30demo_n64.log']
+    logs = a.log or ['logs/bon_grid_30demo.log', 'logs/bon_grid_30demo_n64.log',
+                     'logs/bon_grid_30demo_n64.log.part1']
     d = {}
     for path in logs:
         if os.path.exists(path):
