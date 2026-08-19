@@ -70,7 +70,7 @@ resolved, treat this table and section 2 as measuring different things.
 
 ## 2. Best-of-n grid -- policy x checkpoint x selection
 
-Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **54/60 combos complete -- sweep still running, table is partial.**
+Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **60/60 combos complete.**
 
 Pick a checkpoint on **val** and read **test** at the same row; this grid exists so a checkpoint never has to be pre-selected. Selecting by maximising test inflates the reported number by 1-2 SE.
 
@@ -137,6 +137,13 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | final_pass | 0.543 | 0.577 | 0.575 | 0.585 | 0.557 | - | - |
 |  | 80,000 | argmax | 0.624 | 0.647 | 0.660 | 0.728 | 0.644 | - | - |
 |  |  | softmax | 0.624 | 0.682 | 0.683 | 0.681 | 0.643 | - | - |
+|  |  | final_pass | 0.624 | 0.585 | 0.601 | 0.686 | 0.623 | - | - |
+|  | 90,000 | argmax | 0.578 | 0.640 | 0.675 | 0.702 | 0.739 | - | - |
+|  |  | softmax | 0.578 | 0.585 | 0.664 | 0.662 | 0.671 | - | - |
+|  |  | final_pass | 0.578 | 0.589 | 0.610 | 0.615 | 0.614 | - | - |
+|  | 100,000 | argmax | 0.593 | 0.615 | 0.672 | 0.697 | 0.710 | - | - |
+|  |  | softmax | 0.593 | 0.629 | 0.603 | 0.680 | 0.684 | - | - |
+|  |  | final_pass | 0.593 | 0.586 | 0.656 | 0.581 | 0.562 | - | - |
 
 ### TEST  --  success
 
@@ -195,6 +202,13 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | final_pass | 0.140 | 0.200 | 0.180 | 0.180 | 0.180 | - | - |
 |  | 80,000 | argmax | 0.260 | 0.240 | 0.300 | 0.400 | 0.460 | - | - |
 |  |  | softmax | 0.260 | 0.220 | 0.340 | 0.380 | 0.260 | - | - |
+|  |  | final_pass | 0.260 | 0.180 | 0.180 | 0.260 | 0.120 | - | - |
+|  | 90,000 | argmax | 0.160 | 0.180 | 0.260 | 0.340 | 0.300 | - | - |
+|  |  | softmax | 0.160 | 0.260 | 0.220 | 0.220 | 0.140 | - | - |
+|  |  | final_pass | 0.160 | 0.160 | 0.140 | 0.140 | 0.200 | - | - |
+|  | 100,000 | argmax | 0.240 | 0.180 | 0.340 | 0.360 | 0.320 | - | - |
+|  |  | softmax | 0.240 | 0.220 | 0.200 | 0.280 | 0.200 | - | - |
+|  |  | final_pass | 0.240 | 0.120 | 0.320 | 0.300 | 0.200 | - | - |
 
 ### VAL  --  reward
 
@@ -253,6 +267,13 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | final_pass | 0.531 | 0.659 | 0.630 | 0.552 | 0.643 | - | - |
 |  | 80,000 | argmax | 0.677 | 0.663 | 0.686 | 0.777 | 0.786 | - | - |
 |  |  | softmax | 0.677 | 0.639 | 0.719 | 0.670 | 0.731 | - | - |
+|  |  | final_pass | 0.677 | 0.601 | 0.671 | 0.630 | 0.714 | - | - |
+|  | 90,000 | argmax | 0.629 | 0.677 | 0.676 | 0.725 | 0.650 | - | - |
+|  |  | softmax | 0.629 | 0.706 | 0.677 | 0.658 | 0.641 | - | - |
+|  |  | final_pass | 0.629 | 0.551 | 0.669 | 0.658 | 0.629 | - | - |
+|  | 100,000 | argmax | 0.558 | 0.684 | 0.689 | 0.655 | 0.776 | - | - |
+|  |  | softmax | 0.558 | 0.627 | 0.676 | 0.707 | 0.726 | - | - |
+|  |  | final_pass | 0.558 | 0.643 | 0.705 | 0.569 | 0.630 | - | - |
 
 ### VAL  --  success
 
@@ -311,6 +332,13 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | final_pass | 0.033 | 0.200 | 0.133 | 0.133 | 0.267 | - | - |
 |  | 80,000 | argmax | 0.267 | 0.167 | 0.200 | 0.200 | 0.400 | - | - |
 |  |  | softmax | 0.267 | 0.300 | 0.300 | 0.233 | 0.233 | - | - |
+|  |  | final_pass | 0.267 | 0.033 | 0.067 | 0.167 | 0.333 | - | - |
+|  | 90,000 | argmax | 0.100 | 0.200 | 0.233 | 0.300 | 0.300 | - | - |
+|  |  | softmax | 0.100 | 0.300 | 0.233 | 0.267 | 0.200 | - | - |
+|  |  | final_pass | 0.100 | 0.167 | 0.167 | 0.200 | 0.133 | - | - |
+|  | 100,000 | argmax | 0.133 | 0.300 | 0.233 | 0.300 | 0.367 | - | - |
+|  |  | softmax | 0.133 | 0.233 | 0.233 | 0.333 | 0.200 | - | - |
+|  |  | final_pass | 0.133 | 0.167 | 0.333 | 0.267 | 0.300 | - | - |
 
 Regenerate: `python scripts/update_latest_with_grid.py`
 

@@ -6,7 +6,7 @@ exactly. Reads whatever has completed so far, so it is safe against an in-progre
 
     python scripts/bon_grid_table.py [--metric reward|success] [--split test|val]
 """
-import argparse, re, sys
+import argparse, os, re, sys
 
 NS = [1, 2, 4, 8, 16, 32, 64]
 ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'BC'))
@@ -28,12 +28,19 @@ def parse(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--log', default='logs/bon_grid_30demo.log')
+    # the n>16 slice runs as a separate job into its own log; both must be read or the
+    # 32/64 columns silently stay empty even after that sweep finishes
+    ap.add_argument('--log', action='append', default=None,
+                    help='sweep log; repeatable, later logs merge over earlier ones')
     ap.add_argument('--metric', choices=['reward', 'success'], default='reward')
     ap.add_argument('--split', choices=['test', 'val'], default='test')
     a = ap.parse_args()
     idx = 1 if a.metric == 'reward' else 0
-    d = parse(a.log)
+    logs = a.log or ['logs/bon_grid_30demo.log', 'logs/bon_grid_30demo_n64.log']
+    d = {}
+    for path in logs:
+        if os.path.exists(path):
+            d.update(parse(path))
     if not d:
         sys.exit('no completed cells yet')
 
