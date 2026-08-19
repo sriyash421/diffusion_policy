@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 30-demo ST k16-vs-k1 pair, sequential: k16 first (it is the slower arm and gets a clean
 # GPU), then k1. ONE config, one override apart: `n_candidates` is the only difference, and
-# `trainer`/`_target_`/`n_search_actions` all derive from it. "BC" is NOT this pair -- BC
-# means the UNet (train_pusht_unet_bc, scripts/run_unetbc_30demo.sh).
+# `n_search_actions` and the k in run_name all derive from it. "BC" is NOT this pair --
+# BC means the UNet (train_pusht_unet_bc, scripts/run_unetbc_30demo.sh).
 #
 #   nohup bash scripts/run_30demo_2x2.sh > logs/run_30demo_2x2.log 2>&1 &
 set -u

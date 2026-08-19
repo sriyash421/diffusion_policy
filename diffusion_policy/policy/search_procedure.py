@@ -76,6 +76,56 @@ class SearchProcedureMixin:
         self._selection_generator.manual_seed(
             int(kwargs.get('selection_seed', 0) or 0) + 20250818)
 
+        # Per-EPISODE sampling seeds, set by the eval harness (see set_sample_seeds).
+        # None means "use the global RNG", which is what training does.
+        self._sample_seeds = None
+        self._sample_draw = 0
+
+    def set_sample_seeds(self, seeds):
+        """Make the diffusion noise a pure function of (episode, draw index).
+
+        WHY. Eval rolls episodes out in chunks of ``n_envs`` and draws one
+        ``torch.randn(size=(B, ...))`` for the whole chunk, so an episode's noise depended
+        on how many envs preceded it in its chunk -- i.e. on ``--n-envs``, on where the
+        chunk boundary fell, and on how many padding slots were appended. Two evals of the
+        SAME checkpoint at ``--n-envs 16`` and ``--n-envs 50`` therefore scored different
+        trajectories, and an ST curve was never paired with a BC curve episode-by-episode.
+
+        With per-row seeds each episode owns its own generator, so its noise is identical
+        whatever the batching -- and padding rows cannot perturb real ones, because they no
+        longer share a stream. Both policies use DDIM at eta=0, whose ``step`` draws no
+        noise at all, so this initial draw is the ONLY stochastic input to a rollout: fixing
+        it fixes the whole trajectory.
+
+        ``seeds`` is one integer per row of the batch, or None to restore global-RNG
+        behaviour. The draw counter resets here, so it must be called once per chunk.
+        """
+        self._sample_seeds = None if seeds is None else [int(x) for x in seeds]
+        self._sample_draw = 0
+
+    def _init_noise(self, shape, dtype, device, generator=None):
+        """Initial denoising noise: per-row streams when seeded, else the global RNG.
+
+        Generators are CPU-side and the result is moved to `device`, so a run is
+        reproducible across CPU/GPU as well as across batch shapes. The draw counter
+        advances once per call, which is what gives the k candidates of one search step
+        (and successive control steps) independent noise while keeping each episode's
+        sequence a pure function of its own seed.
+        """
+        if self._sample_seeds is None:
+            return torch.randn(size=shape, dtype=dtype, device=device, generator=generator)
+        batch = shape[0]
+        assert len(self._sample_seeds) == batch, (
+            f'set_sample_seeds got {len(self._sample_seeds)} seeds but the batch is {batch}')
+        draw = self._sample_draw
+        self._sample_draw += 1
+        rows = []
+        for base in self._sample_seeds:
+            g = torch.Generator()
+            g.manual_seed((base * 1_000_003 + draw) % (2 ** 63 - 1))
+            rows.append(torch.randn(size=tuple(shape[1:]), dtype=dtype, generator=g))
+        return torch.stack(rows).to(device)
+
     @contextlib.contextmanager
     def _crop_scope(self):
         """No-op by default; policies that own image crops override it to pin one offset
@@ -342,7 +392,7 @@ class SearchProcedureMixin:
                 # `values`, not `scores` -- in the subgoal modes the context is the encoded
                 # subgoal observation and the bare scalar would be the wrong width.
                 # keep may be 0 -- at n=1 (nothing generated yet) or at max_actions=1 (the
-                # BC arm, which has no context capacity at all). `actions[:, -0:]` is the
+                # ST k=1 arm, which has no context capacity at all). `actions[:, -0:]` is the
                 # WHOLE tensor, so the empty case must pass None rather than a slice.
                 keep = min(n_search, self.max_actions - 1)
                 action_pred = self.predict_action(

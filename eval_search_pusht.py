@@ -61,6 +61,22 @@ from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 
+# EVAL RUNS AT FULL FP32. This is a measurement script, so precision beats throughput.
+#
+# cuDNN's TF32 path (on by default for convolutions, and the ResNet18 obs encoder is all
+# convolution) has ~1e-3 relative precision and picks different kernels for different batch
+# widths. That made an episode's action depend on `--n-envs`: measured 1.9e-2 max|diff| on
+# one action between --n-envs 16 and 50, which a 300-step contact sim amplifies into
+# visibly different coverage. With TF32 off the same comparison drops to 7.6e-5.
+#
+# It is NOT bit-exact even so -- convolution and matmul reductions still associate
+# differently at different batch widths -- so `n_envs` stays in _IDENTITY. What this buys is
+# that a cross-n_envs comparison is now float noise rather than a different trajectory.
+# At a FIXED --n-envs the whole eval is bit-identical run to run (verified).
+torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.deterministic = True
+
 SUCCESS_REWARD = 1.0
 N_LIST = [int(2 ** k) for k in range(7)]  # 1, 2, 4, 8, 16, 32, 64
 CKPT_RE = re.compile(r'step_(\d+)\.ckpt$')
@@ -299,6 +315,17 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
     return red[:, 0], red[:, 1], red[:, 2]
 
 
+def _episode_seed(seed, n, episode_idx):
+    """Stable per-episode sampling seed.
+
+    A pure function of (base seed, search width, episode index) -- deliberately NOT of the
+    checkpoint, the split or the batching, so the same episode is scored on the same noise
+    at every checkpoint and under every policy. `n` is included because the n=1 and n=16
+    columns should be independent draws rather than n=1 being a prefix of n=16.
+    """
+    return (int(seed) * 1_000_003 + int(n) * 10_007 + int(episode_idx)) % (2 ** 31 - 1)
+
+
 def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
                      score_sink=None):
     """Best-of-n success rate over one split at ONE n.
@@ -325,6 +352,15 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
         pad = n_envs - len(chunk_states)
         if pad > 0:
             chunk_states = chunk_states + [states[0]] * pad
+        # Give every episode its own noise stream, keyed on its GLOBAL index in the split
+        # rather than its slot in this chunk. That is what makes a curve independent of
+        # --n-envs, of where the chunk boundary falls, and of the padding slots (which now
+        # draw from their own streams and cannot perturb the real rows). Episode i of the
+        # test split therefore sees the same trajectory noise under ST and under BC, so the
+        # two are paired episode-by-episode. See SearchProcedureMixin.set_sample_seeds.
+        seeder = getattr(policy, 'set_sample_seeds', None)
+        if seeder is not None:
+            seeder([_episode_seed(seed, n, start + i) for i in range(n_envs)])
         t0 = time.perf_counter()
         sink = [] if score_sink is not None else None
         chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink)
@@ -415,6 +451,10 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         return {
             'n': list(done),
             'seed': seed,
+            # Rollout batch width. Recorded because curves written before per-episode
+            # seeding depend on it (see SearchProcedureMixin.set_sample_seeds); it is in
+            # _IDENTITY so those cannot merge with n_envs-invariant ones.
+            'n_envs': n_envs,
             'selection': selection,
             # recorded so a softmax curve is self-describing: the number is meaningless
             # without knowing T, and T only means anything because the score is z-scored
@@ -544,6 +584,11 @@ _PER_N_LISTS = ('success_rate', 'success_ci',
 # would splice together points measured on different episodes or a different sampler seed
 _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              'val_episode_idxs',
+             # Curves written before per-episode seeding landed depend on the rollout batch
+             # width, so an n_envs mismatch means the two were measured on different noise
+             # and must not merge. Post-fix curves are n_envs-invariant and will agree here
+             # anyway, so this only ever rejects genuinely incomparable pairs.
+             'n_envs',
              # a softmax curve and an argmax curve at the same step are different
              # experiments; without these two a --selection override that landed in
              # the same directory would merge into the native curve n-by-n

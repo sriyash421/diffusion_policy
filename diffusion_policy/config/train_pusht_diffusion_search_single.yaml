@@ -14,8 +14,8 @@
 # trained the old way after the flip has a name for what it did.
 #
 # Inherit this, not the base, for anything that must stay single-step at k>1. (Width 1
-# needs nothing: `n_candidates=1` already derives the offline trainer.) `train_pusht_bc`
-# already does: BC has max_actions=1 and generates no candidates at all, so there is no
+# needs nothing: outer/inner handles the empty context since 2026-08-18.) The width-1
+# already does: ST k=1 has max_actions=1 and generates no candidates at all, so there is no
 # search cost to amortize and outer/inner would only add machinery it never uses.
 #
 # `_self_` LAST. With `_self_` first the base is applied afterwards and silently overrides

@@ -1,11 +1,10 @@
 # The architecture 2x2: what is held equal and what is not
 
-> **SUPERSEDED 2026-08-18 — naming and configs below are the retired generation.**
-> `train_pusht_st_n1{,_29,_drop001}` and `train_pusht_bc` have moved to
-> `diffusion_policy/config/archive_config/`. Width is now the override `n_candidates` on
-> the single `train_pusht_diffusion_search` config, and **BC means the diffusion UNet only**
-> (`train_pusht_unet_bc`) — below, "BC" still refers to the width-1 transformer.
-> The live comparison is in `LATEST_SUCCESS_RATES.md`.
+> **NAMING UPDATED 2026-08-18.** `train_pusht_bc` is now **`train_pusht_st_k1`** — it was
+> never the UNet, it is the k=1 point of the same search transformer. In this repo **BC
+> means the diffusion UNet only** (`train_pusht_unet_bc`, `PushTUNetSearchPolicy`).
+> Below, "BC" still refers to the width-1 transformer, i.e. what is now ST k=1 —
+> read it that way. The live comparison is in `LATEST_SUCCESS_RATES.md`.
 
 > **2026-08-17 — superseded numbers.** Everything measured before the search-procedure
 > unification of 2026-08-17 is archived in `ARCHIVED_SUCCESS_RATES_AUG17.md`, which lists

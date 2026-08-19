@@ -92,6 +92,11 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
 
         Both sides run in eval mode: with ``p_drop_attn=0.2`` active the difference would
         be dominated by independent dropout draws rather than by any real drift.
+
+        AT k=1 THIS IS NOT A STALENESS METRIC. There is no buffered context to go stale
+        (``aux['actions']`` is None), so what it measures is plain weight movement between
+        the collector snapshot and the live policy. The number is real, but do not read it
+        as context drift -- at width 1 there is nothing to be stale.
         """
         was_training = policy.training
         policy.eval()
@@ -146,18 +151,19 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         context is a few MB. That is safe because the dataset is deterministic per index
         here (``random_crop: False``), so a re-fetch returns byte-identical obs.
         """
-        # A width-1 policy has no context to buffer: generate_search_context asks
-        # search_candidates for max_actions - 1 = 0 candidates, which returns (None, None),
-        # and the torch.cat below would fail with a bare "expected Tensor ... got NoneType".
-        # There is also nothing for this trainer to do in that case -- the whole point is
-        # amortizing a search cost that does not exist at width 1 -- so say so here rather
-        # than let it look like a tensor bug. Use the offline trainer
-        # (train_mlp_image_workspace.TrainMLPImageWorkspace) for max_actions: 1.
-        assert policy.max_actions > 1, (
-            f'{type(self).__name__} needs a search context to amortize, but the policy has '
-            f'max_actions={policy.max_actions} (context width {policy.max_actions - 1}). '
-            f'Set trainer: offline and _target_: '
-            f'diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace.')
+        # WIDTH 1: there is no context to buffer. generate_search_context asks
+        # search_candidates for max_actions - 1 = 0 candidates; its loop body never runs and
+        # it returns (None, None), which the torch.cat below cannot take. Return the None
+        # pair straight away -- the denoiser already treats a None context as the empty
+        # context, so k=1 trains here exactly as it would on the offline loop, just with the
+        # pooled sampling. Skipping the loop also means the verifier pool is never spawned.
+        #
+        # This trainer buys nothing at k=1 (there is no search cost to amortize) and its
+        # pooled ordering is strictly worse than full-dataset epochs. That is a deliberate
+        # trade: one code path for every k, so the width-1 arm cannot drift from the k=16
+        # arm in anything but the width itself.
+        if policy.max_actions == 1:
+            return None, None
         actions, values = list(), list()
         was_training = policy.training
         policy.eval()
@@ -349,7 +355,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
-                        sel_t = torch.as_tensor(sel, dtype=torch.long, device=buf_actions.device)
+                        # device from the batch, not the buffer: at k=1 the buffer is None.
+                        sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
 
                         want_aux = (inner_idx % drift_every) == 0
                         # Crop offsets are a pure function of (seed, global_step). This
@@ -368,8 +375,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
                         result = policy.compute_loss(
                             batch,
-                            actions=buf_actions[sel_t],
-                            values=buf_values[sel_t],
+                            actions=None if buf_actions is None else buf_actions[sel_t],
+                            values=None if buf_values is None else buf_values[sel_t],
                             return_aux=want_aux)
                         raw_loss, aux = result if want_aux else (result, None)
 

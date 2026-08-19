@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# NAMING: the on-disk arm key `bc` is HISTORICAL and means the search transformer at
+# k=1 (max_actions 1), NOT the UNet. It is kept because the eval outputs under
+# bon_grid_30demo/bc/ and the run dir offline/bc_demos-30_seed-42 already exist under
+# it; renaming the key would orphan them. Everything a human reads says ST k=1.
+# The UNet baseline is the separate `unetbc` arm.
 # Extend every row of the 30-demo grid to n in {32, 64}: both arms x
 # {argmax, softmax, final_pass} x all ten checkpoints = 60 combos.
 #

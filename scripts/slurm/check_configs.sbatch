@@ -64,4 +64,34 @@ for spec in $CONFIGS; do
     python train.py --config-name="$c" --cfg job --resolve ${ovr//,/ } 2>/dev/null \
       | python -c "import sys,yaml;c=yaml.safe_load(sys.stdin.read());print(c['run_name'])"
 done | sort | uniq -c | awk '$1>1{print "COLLISION:",$0; f=1} END{if(!f) print "OK: all run_names distinct"}'
+echo
+echo "=== ST/BC data parity ==="
+# The UNet BC baseline is only a valid comparison if it trains on the SAME episodes as the
+# ST arms. That currently holds by inheritance (both pull task: pusht_image_search through
+# pusht_base), which means it can be broken silently by a local task.dataset override in
+# either file. Assert it instead of trusting it.
+python - <<'PARITY'
+import sys
+sys.path.insert(0, '.')
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+import pathlib
+OmegaConf.register_new_resolver('eval', eval, replace=True)
+cfgdir = str(pathlib.Path('diffusion_policy/config').resolve())
+with initialize_config_dir(config_dir=cfgdir, version_base=None):
+    st = compose(config_name='train_pusht_diffusion_search')
+    bc = compose(config_name='train_pusht_unet_bc')
+a = OmegaConf.to_container(st.task.dataset, resolve=True)
+b = OmegaConf.to_container(bc.task.dataset, resolve=True)
+diff = {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
+if diff:
+    print('  FAIL: ST and UNet BC train on different data:')
+    for k, (x, y) in sorted(diff.items()):
+        print(f'    {k}: ST={x!r}  BC={y!r}')
+    sys.exit(1)
+print(f"  OK: identical task.dataset -- manifest={a['split_file'].split('/')[-1]} "
+      f"n_train={a['n_train_episodes']} n_val={a['n_val_episodes']} n_test={a['n_test_episodes']}")
+PARITY
+[ $? -ne 0 ] && fail=1
+
 exit $fail

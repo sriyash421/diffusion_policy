@@ -426,11 +426,11 @@ class SearchTransformerForDiffusion(nn.Module):
         timesteps = self._normalize_timesteps(timestep, B, K_decode, device)
 
         # `actions is None` is "no context supplied"; an EMPTY context tensor is the same
-        # thing and must take the same branch. It is not a corner case -- the BC baseline
+        # thing and must take the same branch. It is not a corner case -- the ST k=1 arm
         # runs at max_actions=1, so max_context_actions is 0 and search_candidates hands
         # back a (B, 0, T, Da) tensor on every call after the first. Falling through to the
         # else branch reshapes 0 elements into (B, 0, -1), where -1 is ambiguous, and
-        # raises. Before this guard, BC could be trained and rolled out at n=1 but could
+        # raises. Before this guard, ST k=1 could be trained and rolled out at n=1 but could
         # not be evaluated at n>1 at all.
         if actions is None or actions.shape[1] == 0 or self.max_context_actions == 0:
             K_context = 0
@@ -725,12 +725,12 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             **kwargs,
         ) -> torch.Tensor:
         scheduler = self.noise_scheduler
-        trajectory = torch.randn(
-            size=(obs_cond.shape[0], self.horizon, self.action_dim),
-            dtype=obs_cond.dtype,
-            device=obs_cond.device,
-            generator=generator,
-        )
+        # _init_noise, not torch.randn: under eval it gives each EPISODE its own stream so
+        # the sample does not depend on batch position (see set_sample_seeds). Falls back to
+        # torch.randn with this generator when no seeds are set, which is the training path.
+        trajectory = self._init_noise(
+            (obs_cond.shape[0], self.horizon, self.action_dim),
+            obs_cond.dtype, obs_cond.device, generator)
 
         scheduler.set_timesteps(self.num_inference_steps)
         for t in scheduler.timesteps:
@@ -767,7 +767,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         is ``search_candidates``.
 
         ``actions``/``values`` optionally supply the search context this chunk is
-        conditioned on (used by the search loop; ``None`` for a plain BC readout).
+        conditioned on (used by the search loop; ``None`` for a plain width-1 readout).
         ``actions`` arrive in RAW action units -- the search loop keeps them raw because the
         verifier simulates them -- and are normalized here, see _normalize_context_actions.
         ``obs_features``: optional pre-computed _encode_obs_features output, reused across
@@ -853,7 +853,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         every one of them is trained on the SAME target -- the expert action. What differs
         is how much context each is allowed to see: the staircase memory mask lets slot k
         attend to exactly the first k context candidates. So the model is fitting a family
-        of conditionals at once, from "no context" (slot 0, the BC case) up to "K-1 scored
+        of conditionals at once, from "no context" (slot 0, the k=1 case) up to "K-1 scored
         candidates" (slot K-1).
 
         WHY WEIGHT THEM. Under ``selection: final_pass`` the executed action is a sample

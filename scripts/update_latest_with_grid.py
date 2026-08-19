@@ -61,7 +61,7 @@ def main():
         '`cond_pos_emb` is None, so the model discards any context handed to it '
         '(verified: contexts differing by 200x give bit-identical actions). Its n '
         'candidates are therefore n INDEPENDENT draws, which is what makes it a clean '
-        'test-time-search baseline. One consequence: **BC/final_pass is not a selection '
+        'test-time-search baseline. One consequence: **ST-k1/final_pass is not a selection '
         'rule** -- with nothing to condition on, the returned sample is drawn from the '
         'same distribution as any other, so that row measures a single plain k1 draw at '
         'n times the cost, and is flat in n rather than rising. Do not read it as a '

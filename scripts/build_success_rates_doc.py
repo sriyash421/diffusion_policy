@@ -2,9 +2,9 @@
 
 Organised by DEMO BUDGET, because that is the axis the experiment varies:
 
-    1. 100 demos  -- BC + the six search arms (Round 7, committed manifest)
-    2.  29 demos  -- BC + the six legacy search arms (legacy manifest, val 10)
-    A. archive    -- BC@25, and the pre-encoder-fix outer/inner runs
+    1. 100 demos  -- ST k=1 + the six search arms (Round 7, committed manifest)
+    2.  29 demos  -- ST k=1 + the six legacy search arms (legacy manifest, val 10)
+    A. archive    -- ST k=1 @25, and the pre-encoder-fix outer/inner runs
 
 Each section carries three tables -- test success, val success, test mean reward -- with
 one row per (feedback mechanism, obs, checkpoint) and n as COLUMNS. Every evaluated
@@ -34,7 +34,7 @@ ARMS = (('value', 'value'),
         ('subgoal-chosen4value', 'subgoal'),
         ('subgoal-value', 'subgoal_value'))
 
-D100 = [('none (BC)', '—', OFF / 'bc_demos-100_seed-42' / 'bon_search')]
+D100 = [('none (ST k=1)', '—', OFF / 'bc_demos-100_seed-42' / 'bon_search')]
 for arm, _ctx in ARMS:
     for corrupt in ('False', 'True'):
         D100.append((arm, 'corrupt' if corrupt == 'True' else 'clean',
@@ -77,7 +77,7 @@ for bon in sorted((OFF).glob('subgoal-only*_demos-100_seed-42')):
 #   r8      the same 29 episodes with EMA on, one crop offset shared across the whole
 #           search, val=30, and a 100k budget. Directory suffix `-r8`.
 LEGACY29 = ' `[no-EMA]` `[split-crop]`'
-D29 = [('none (BC)' + LEGACY29, 'legacy', OFF / 'bc_demos-29_seed-42' / 'bon_search')]
+D29 = [('none (ST k=1)' + LEGACY29, 'legacy', OFF / 'bc_demos-29_seed-42' / 'bon_search')]
 for arm, _ctx in ARMS:
     for corrupt in ('False', 'True'):
         D29.append((arm + LEGACY29, 'legacy ' + ('corrupt' if corrupt == 'True' else 'clean'),
@@ -119,7 +119,7 @@ def oi_sources(n_demos):
 D100 += oi_sources(100)
 D29 += oi_sources(29)
 
-ARCHIVE = [('none (BC)', '25 demos', OFF / 'bc_demos-25_seed-42' / 'bon_search')]
+ARCHIVE = [('none (ST k=1)', '25 demos', OFF / 'bc_demos-25_seed-42' / 'bon_search')]
 # DIRECTORY NAMES, not config names -- the 2026-07-30 outer/inner runs live under
 # ROOT/runs/<name>/ and are named after the configs that produced them. Those three config
 # files were deleted on 2026-08-13 when outer/inner became the default in
@@ -247,9 +247,9 @@ L += ['\n## What each arm is\n',
       '',
       '| feedback mechanism | what a candidate contributes |',
       '|---|---|',
-      '| **none (BC)** | nothing — `max_actions: 1`, so the context is always empty. '
-      'Training is plain denoising BC and the verifier is never used. n=1 is an ordinary BC '
-      'rollout; n>1 is best-of-n over **i.i.d.** samples, i.e. BC given the same test-time '
+      '| **none (ST k=1)** | nothing — `max_actions: 1`, so the context is always empty. '
+      'Training is plain denoising and the verifier is never used. n=1 is an ordinary '
+      'single-sample rollout; n>1 is best-of-n over **i.i.d.** samples, i.e. width 1 given the same test-time '
       'budget as search. |',
       '| **value** | the verifier scalar (−mean keypoint distance to the goal T); '
       'argmax selection |',
@@ -288,7 +288,7 @@ L += ['\n### What `corrupt` currently means — read before comparing corrupt ro
       '| **P0-1** | the flag has no `self.training` gate, so corruption is active at '
       '**evaluation and rollout too**, not just training | a corrupt arm is solving a '
       'strictly harder task than the clean arm beside it. **corrupt vs clean is not a '
-      'controlled comparison, and corrupt vs BC is not either** (BC has no corrupt run at '
+      'controlled comparison, and corrupt vs ST k=1 is not either** (ST k=1 has no corrupt run at '
       'any budget). |',
       '| **P0-2** | the magnitude is uncalibrated. `t ~ U{0..99}` is redrawn per call, so '
       'the noise coefficient ranges over `[0.032, 0.808]` (expected **0.476**); at t=99 the '
@@ -318,7 +318,7 @@ L += ['\n### What `corrupt` currently means — read before comparing corrupt ro
       'does not do so cleanly.\n']
 
 L += ['\n## 1. 100 demos\n',
-      'Round 7. Committed manifest: **100 train / 30 val / 50 test**. BC trains to 300k '
+      'Round 7. Committed manifest: **100 train / 30 val / 50 test**. ST k=1 trains to 300k '
       'steps (its own optimum); the six argmax search arms to 20k, since they peak at step '
       '1k–8k and decline after; subgoal-only to 100k.\n']
 
@@ -417,7 +417,7 @@ L += ['\n## 2. 29 demos\n',
       'r8 rows as a curve; if you need a held-out number from them, re-evaluate on val '
       'first.\n',
       '\nThe r8 generation is also still **in progress** and covers only the three argmax '
-      'arms — there is no r8 `subgoal-only` and no r8 BC, so the crop/EMA fix has not been '
+      'arms — there is no r8 `subgoal-only` and no r8 ST k=1, so the crop/EMA fix has not been '
       'applied to the `final_pass` selection rule at any budget.\n']
 L += ['\n### 2a. Binary success rate \u2014 TEST (50 episodes)\n']
 L += demo_table(D29, 'test')
@@ -457,8 +457,8 @@ L += ['\n### What differs between the 29- and 100-demo generations, besides the 
       'checkpoints exist, and when metrics were logged |',
       '',
       'So a 29-vs-100 comparison confounds demo count with EMA and with the crop change. '
-      'BC@29 sits on the legacy *data* split but uses the *current* config (EMA on, policy '
-      'crop on), so **BC@29 vs BC@100 isolates demo count cleanly**, while BC@29 vs the '
+      'ST k=1 @29 sits on the legacy *data* split but uses the *current* config (EMA on, policy '
+      'crop on), so **ST k=1 @29 vs @100 isolates demo count cleanly**, while ST k=1 @29 vs the '
       '29-demo search arms carries the caveats above.\n']
 
 
@@ -508,7 +508,7 @@ def selection_table():
         if not rows:
             continue
         native = 'final_pass' if 'subgoal-only' in d.name else (
-            'none (BC)' if d.name.startswith('bc_') else 'argmax')
+            'none (ST k=1)' if d.name.startswith('bc_') else 'argmax')
         name = d.name.replace('_demos-100_seed-42', '').replace('_seed-42', '')
         first = True
         for step in sorted({s for s, _ in rows}):
@@ -585,7 +585,7 @@ L += ['\n## 4. Where the raw results are\n',
       '',
       '```',
       '$DP_OUTPUT_ROOT/pusht_search/pusht_image_search/offline/',
-      '    bc_demos-{25,29,100}_seed-42/                  BC baselines (max_actions 1)',
+      '    bc_demos-{25,29,100}_seed-42/                  ST k=1 (max_actions 1; dir name is historical)',
       '    ctx-<mech>_corrupt-<bool>_demos-100_seed-42/   100-demo search arms  [section 1]',
       '    subgoal-only_corrupt-<bool>_demos-100_seed-42/ 100-demo, final_pass  [section 1]',
       '    ctx-<mech>_corrupt-<bool>_seed-42/             29-demo search arms   [section 2]',
@@ -621,8 +621,8 @@ L += ['\n## 4. Where the raw results are\n',
 L += ['\n---\n', '\n# A. Archive\n',
       '**Superseded — do not compare to sections 1 or 2.**\n',
       '',
-      '- **BC @ 25 demos** — a budget no search arm matches, so it has no counterpart to be '
-      'a baseline for. Kept because it is the run that established BC needed ~300k steps '
+      '- **ST k=1 @ 25 demos** — a budget no search arm matches, so it has no counterpart to be '
+      'a baseline for. Kept because it is the run that established ST k=1 needed ~300k steps '
       'rather than 20k: at 20k it solved 1 of 1000 test episodes at n=1. It ended at 99k '
       'when `num_epochs: 1000` bound before `max_gradient_steps` — harmless, since its '
       'val_loss bottoms at 0.049 @ 14k and rises to 0.132 by 88k.',

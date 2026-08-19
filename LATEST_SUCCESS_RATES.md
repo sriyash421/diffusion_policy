@@ -86,7 +86,7 @@ Pick a checkpoint on **val** and read **test** at the same row; this grid exists
 
 A policy label carries its TRAINED width as `k` (`max_actions`, matching the run dirs); the columns are the EVAL width `n`. `ST-diffusion-k1` read at n=16 is sampled 16 times i.i.d., since at its trained width of 1 there is no context to condition on.
 
-**ST-diffusion-k1 has no search context at all** -- `max_context_actions` is 0 and its `cond_pos_emb` is None, so the model discards any context handed to it (verified: contexts differing by 200x give bit-identical actions). Its n candidates are therefore n INDEPENDENT draws, which is what makes it a clean test-time-search baseline. One consequence: **BC/final_pass is not a selection rule** -- with nothing to condition on, the returned sample is drawn from the same distribution as any other, so that row measures a single plain k1 draw at n times the cost, and is flat in n rather than rising. Do not read it as a comparison against k1/argmax.
+**ST-diffusion-k1 has no search context at all** -- `max_context_actions` is 0 and its `cond_pos_emb` is None, so the model discards any context handed to it (verified: contexts differing by 200x give bit-identical actions). Its n candidates are therefore n INDEPENDENT draws, which is what makes it a clean test-time-search baseline. One consequence: **ST-k1/final_pass is not a selection rule** -- with nothing to condition on, the returned sample is drawn from the same distribution as any other, so that row measures a single plain k1 draw at n times the cost, and is flat in n rather than rising. Do not read it as a comparison against k1/argmax.
 
 ### TEST  --  reward
 

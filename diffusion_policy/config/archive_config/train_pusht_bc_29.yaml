@@ -14,14 +14,14 @@
 # only 4 of 29 episodes. The committed manifest reproduces the downsample_mask derivation
 # exactly; see scripts/dump_pusht_splits.py and the `derivation` block in the manifest.
 #
-# Everything else follows train_pusht_bc: max_actions 1 (empty context, no verifier), and
+# Everything else follows the width-1 arm: max_actions 1 (empty context, no verifier), and
 # the same encoder / backbone / optimizer / EMA / eval protocol as the search arms.
 #
 # CAVEAT for the comparison: this run is NOT config-identical to the legacy search arms
 # beyond the demo count -- they predate `use_ema: True` and the policy-level `crop_shape`.
 # See the "what differs" note in SUCCESS_RATES.md before reading the two side by side.
 defaults:
-  - train_pusht_bc
+  - train_pusht_diffusion_search
   - _self_
 
 name: train_pusht_bc_29
@@ -40,3 +40,6 @@ task:
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "bc", "demos-${n_demos}", "legacy-split"]
+
+# width 1 -- see above; the old width-1 parent config was deleted 2026-08-18.
+n_candidates: 1

@@ -93,11 +93,20 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         model = self.model
         scheduler = self.noise_scheduler
 
-        trajectory = torch.randn(
-            size=condition_data.shape, 
-            dtype=condition_data.dtype,
-            device=condition_data.device,
-            generator=generator)
+        # Search-capable subclasses (PushTUNetSearchPolicy via SearchProcedureMixin) provide
+        # _init_noise, which gives each EPISODE its own noise stream at eval so the sample
+        # does not depend on batch position. Plain DiffusionUnetImagePolicy has no such
+        # attribute and keeps the original global-RNG draw, bit-identical.
+        _draw = getattr(self, '_init_noise', None)
+        if _draw is None:
+            trajectory = torch.randn(
+                size=condition_data.shape,
+                dtype=condition_data.dtype,
+                device=condition_data.device,
+                generator=generator)
+        else:
+            trajectory = _draw(tuple(condition_data.shape), condition_data.dtype,
+                               condition_data.device, generator)
     
         # set step values
         scheduler.set_timesteps(self.num_inference_steps)
