@@ -50,6 +50,16 @@ def main():
         'run dirs); the columns are the EVAL width `n`. `BC` (trained width 1) read at n=16 is '
         'sampled 16 times i.i.d., since at its trained width of 1 there is no context to '
         'condition on.\n')
+    parts.append(
+        '**BC has no search context at all** -- `max_context_actions` is 0 and its '
+        '`cond_pos_emb` is None, so the model discards any context handed to it '
+        '(verified: contexts differing by 200x give bit-identical actions). Its n '
+        'candidates are therefore n INDEPENDENT draws, which is what makes it a clean '
+        'test-time-search baseline. One consequence: **BC/final_pass is not a selection '
+        'rule** -- with nothing to condition on, the returned sample is drawn from the '
+        'same distribution as any other, so that row measures a single plain BC draw at '
+        'n times the cost, and is flat in n rather than rising. Do not read it as a '
+        'comparison against BC/argmax.\n')
     # bon_grid_table.py emits its own "### SPLIT -- metric" heading per table
     for split in ('test', 'val'):
         for metric in ('reward', 'success'):
