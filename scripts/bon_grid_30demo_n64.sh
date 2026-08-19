@@ -43,6 +43,13 @@ for arm in search bc; do
   d=${ARMS[$arm]}
   for ckpt in $(ls $d/checkpoints/step_*.ckpt | sort); do
     step=$(basename $ckpt .ckpt)
+    # eval_search_pusht only resumes in its --watch/--run-dir path; with -c it re-runs the
+    # checkpoint unconditionally. Skip here, or a relaunch after a timeout redoes every
+    # checkpoint that already finished.
+    if $PY scripts/_curve_has_n.py "$ROOT/bon_grid_30demo/$arm/success_curves.jsonl" "$step"; then
+      echo "=== [$(date -Is)] $arm $step argmax -- already has n=32,64, skipping ==="
+      continue
+    fi
     echo "=== [$(date -Is)] $arm $step argmax ==="
     # 45m cap: at n=64 the async verifier pool has deadlocked (0 CPU, blocked on a unix
     # socket) at least once, wedging the whole chain behind one checkpoint. A timeout skips
