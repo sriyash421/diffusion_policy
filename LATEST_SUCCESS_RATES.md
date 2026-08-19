@@ -3,9 +3,9 @@
 The current generation: the **30-demo search-vs-BC pair**, trained 2026-08-17/18 after the
 search-procedure unification, evaluated after the 2026-08-18 selection fixes.
 
-Everything superseded lives in `SUCCESS_RATES.md` — section C holds this generation's
-pre-fix best-of-n tables (with why they were stochastic), section B the pre-2026-08-17
-generation, section A older arms still.
+This doc covers **only** these two runs. Every other arm, demo budget and generation --
+including this generation's pre-fix best-of-n tables and why they were stochastic -- is in
+`SUCCESS_RATES.md`.
 
 `success = coverage >= 95%`; `mean reward = clip(coverage/0.95, 0, 1)` averaged over
 episodes. Test is 50 episodes, val 30. Seed 42, single seed.
@@ -22,10 +22,6 @@ encoder and denoiser, verified from each run's `.hydra/config.yaml`: ResNet18
 `IMAGENET1K_V1`, `crop_shape [76,76]`, `random_crop`, `use_group_norm`, `imagenet_norm:
 False`; 4 layers / 2 cond layers / 4 heads / 256 emb, `p_drop_attn 0.2`, `causal_attn:
 True`, `cond_encoder: gpt2`. **The only difference is `max_actions`: 16 vs 1.**
-
-"ST-diffusion-k16" means trained search width k=16 — not the `train_pusht_st_n1` arm, which is a separate
-width-1 config with `num_inference_steps: 100` and was not part of these runs. The Gaussian
-arm (`train_pusht_gaussian_search`) exists in the tree but has never been run.
 
 | | ST-diffusion-k16 | BC |
 |---|---|---|
@@ -304,6 +300,5 @@ Regenerate: `python scripts/update_latest_with_grid.py`
 | grid stdout | `logs/bon_grid_30demo.log` (repo) |
 | in-training metrics | `{outer_inner,offline}/*/logs.json.txt` |
 | resolved configs | `{outer_inner,offline}/*/.hydra/config.yaml` |
-| pre-fix grid + sweep (provenance for `SUCCESS_RATES.md` section C; do not quote) | `bon_grid_30demo.pre-nfix-*/`, `bon_30demo/`, `logs/bon_grid_30demo.log.pre-nfix-*`, `logs/bon_sweep_30demo.log` |
 
 Reproduce: `bash scripts/run_30demo_2x2.sh` then `bash scripts/bon_grid_30demo.sh`.
