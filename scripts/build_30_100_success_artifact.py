@@ -28,8 +28,9 @@ FAMILIES = [
                     'rather than a denoising loop.',
      {30: BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-30_seed-42',
       100: BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-100_seed-42'}),
-    ('BC', 'The same policy class as ST-diffusion with max_actions=1 — no search context, '
-           'so n>1 is best-of-n over i.i.d. samples at a matched compute budget.',
+    ('ST k=1', 'The same policy class as ST-diffusion k16, trained at width 1 — the search '
+              'context is always empty, so n>1 is best-of-n over i.i.d. samples at a '
+              'matched compute budget.',
      {30: BASE / 'offline' / 'bc_demos-30_seed-42',
       100: BASE / 'offline' / 'bc_demos-100_seed-42'}),
 ]

@@ -25,7 +25,13 @@ How the executed action is picked out of the n scored candidates, and how each c
 
 **Sampler.** The diffusion arms use `DDIMScheduler`, 100 train timesteps, **8 inference steps**, `prediction_type: epsilon`, and no `scheduler_step_kwargs` — so `DDIMScheduler.step` runs at its default `eta = 0.0`, the deterministic DDIM ODE. **No noise is injected during denoising.** The initial latent *is* a fresh `randn` per candidate, which is exactly what makes the n candidates differ and what best-of-n exploits. The ST-gaussian arm instead draws one `rsample` from a Normal head per candidate. Evals passed no `--noise-scheduler` / `--num-inference-steps` override, so every number below used the trained configuration.
 
-**Arms.** BC is *not* a UNet: it is the same `PushTDiffusionSearchPolicy` as ST-diffusion with `max_actions: 1`, so at n>1 it is best-of-n over i.i.d. samples with an empty search context. That is the point — it gives BC the same test-time budget, so any gap is attributable to the learned search context rather than to drawing more samples. (A separate UNet BC config, `train_pusht_unet_bc`, exists but is not part of this sweep.)
+**The two width-1 baselines are different things, and neither is "BC" alone.**
+
+`ST k=1` is the *same transformer* as `ST-diffusion k16` (`PushTDiffusionSearchPolicy`) trained at `max_actions: 1`. Its search context is always empty, so it isolates the *learned search context*: it shares architecture, encoder, scheduler, optimizer and data with k16, and differs only in whether candidates condition on each other during training. `ST-big k=1` is the same thing at a ~24x wider trunk.
+
+`UNet BC` is a *different architecture* — `PushTUNetSearchPolicy`, a convolutional diffusion UNet with no transformer and no search context at all. It isolates the *backbone*. It is matched to the ST arms on everything outside the backbone: same 30-demo manifest, seed 42, 100k steps, DDIM at 8 inference steps, ResNet-18/ImageNet encoder with the same [76,76] random crop, batch 32, lr 1e-4, EMA 0.995.
+
+At n>1 **both** are plain best-of-n over i.i.d. samples scored by the same verifier, so all arms are compared at a matched test-time budget and any gap is attributable to the trained policy rather than to drawing more samples.
 
 ## Data
 
@@ -159,9 +165,9 @@ _4/10 checkpoints written, 4 fully swept._
 | 30,000 | 0.944 | 0.909 | 0.933 | 0.937 | 0.953 | 0.977 | 0.943 |
 | 40,000 | 0.922 | 0.925 | 0.953 | 0.921 | 0.960 | 0.956 | 0.944 |
 
-## BC — 30 demos
+## ST k=1 — 30 demos
 
-`offline/bc_demos-30_seed-42` — same policy class as ST-diffusion, max_actions=1
+`offline/bc_demos-30_seed-42` — same policy class as ST-diffusion k16, width 1 (empty search context)
 
 _10/10 checkpoints written, 10 fully swept._
 
@@ -195,9 +201,9 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.607 | 0.581 | 0.656 | 0.635 | 0.633 | 0.640 | 0.679 |
 | 100,000 | 0.591 | 0.602 | 0.585 | 0.679 | 0.655 | 0.698 | 0.659 |
 
-## BC — 100 demos
+## ST k=1 — 100 demos
 
-`offline/bc_demos-100_seed-42` — same policy class as ST-diffusion, max_actions=1
+`offline/bc_demos-100_seed-42` — same policy class as ST-diffusion k16, width 1 (empty search context)
 
 _10/10 checkpoints written, 10 fully swept._
 
@@ -333,8 +339,8 @@ _3/10 checkpoints written, 3 fully swept._
 | ST-diffusion | 100 | 10/10 | 10 | — |
 | ST-gaussian | 30 | 8/10 | 8 | — |
 | ST-gaussian | 100 | 4/10 | 4 | — |
-| BC | 30 | 10/10 | 10 | — |
-| BC | 100 | 10/10 | 10 | — |
+| ST k=1 | 30 | 10/10 | 10 | — |
+| ST k=1 | 100 | 10/10 | 10 | — |
 | UNet BC | 30 | 10/10 | 10 | — |
 | ST-big k=1 | 30 | 10/10 | 10 | — |
 | ST-big k=16 | 30 | 3/10 | 3 | — |

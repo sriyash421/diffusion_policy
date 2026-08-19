@@ -35,9 +35,9 @@ ARMS = [
      BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-30_seed-42'),
     ('ST-gaussian', 'search transformer, Gaussian head', 100,
      BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-100_seed-42'),
-    ('BC', 'same policy class as ST-diffusion, max_actions=1', 30,
+    ('ST k=1', 'same policy class as ST-diffusion k16, width 1 (empty search context)', 30,
      BASE / 'offline' / 'bc_demos-30_seed-42'),
-    ('BC', 'same policy class as ST-diffusion, max_actions=1', 100,
+    ('ST k=1', 'same policy class as ST-diffusion k16, width 1 (empty search context)', 100,
      BASE / 'offline' / 'bc_demos-100_seed-42'),
     # 30-demo additions. A different ARCHITECTURE (UNet) and a ~24x wider transformer
     # trunk at both search widths, all on the same manifest/seed/protocol as the six
@@ -151,12 +151,23 @@ def main():
              'The ST-gaussian arm instead draws one `rsample` from a Normal head per '
              'candidate. Evals passed no `--noise-scheduler` / `--num-inference-steps` '
              'override, so every number below used the trained configuration.\n')
-    L.append('**Arms.** BC is *not* a UNet: it is the same `PushTDiffusionSearchPolicy` as '
-             'ST-diffusion with `max_actions: 1`, so at n>1 it is best-of-n over i.i.d. '
-             'samples with an empty search context. That is the point — it gives BC the '
-             'same test-time budget, so any gap is attributable to the learned search '
-             'context rather than to drawing more samples. (A separate UNet BC config, '
-             '`train_pusht_unet_bc`, exists but is not part of this sweep.)\n')
+    L.append('**The two width-1 baselines are different things, and neither is "BC" '
+             'alone.**\n')
+    L.append('`ST k=1` is the *same transformer* as `ST-diffusion k16` '
+             '(`PushTDiffusionSearchPolicy`) trained at `max_actions: 1`. Its search '
+             'context is always empty, so it isolates the *learned search context*: it '
+             'shares architecture, encoder, scheduler, optimizer and data with k16, and '
+             'differs only in whether candidates condition on each other during training. '
+             '`ST-big k=1` is the same thing at a ~24x wider trunk.\n')
+    L.append('`UNet BC` is a *different architecture* — `PushTUNetSearchPolicy`, a '
+             'convolutional diffusion UNet with no transformer and no search context at '
+             'all. It isolates the *backbone*. It is matched to the ST arms on everything '
+             'outside the backbone: same 30-demo manifest, seed 42, 100k steps, DDIM at 8 '
+             'inference steps, ResNet-18/ImageNet encoder with the same [76,76] random '
+             'crop, batch 32, lr 1e-4, EMA 0.995.\n')
+    L.append('At n>1 **both** are plain best-of-n over i.i.d. samples scored by the same '
+             'verifier, so all arms are compared at a matched test-time budget and any gap '
+             'is attributable to the trained policy rather than to drawing more samples.\n')
 
     L.append('## Data\n')
     L.append('The 30-demo train set is the first 30 episodes of the 100-demo train list in '
