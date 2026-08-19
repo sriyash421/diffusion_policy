@@ -34,6 +34,21 @@ FAMILIES = [
       100: BASE / 'offline' / 'bc_demos-100_seed-42'}),
 ]
 
+# 30 demos only, so they do not belong in the grid above (whose second column IS the
+# 100-demo budget). Same manifest, seed, protocol and n grid, so the numbers compare
+# directly with the 30-demo column.
+EXTRA = [
+    ('UNet BC', 'A different architecture: the diffusion UNet, not a transformer. No '
+                'search context at all, so every n is i.i.d. best-of-n.',
+     BASE / 'unet_bc' / 'unetbc_demos-30_seed-42'),
+    ('ST-big k=1', 'Search transformer widened to 6/8/1024 — a ~75M trunk against the '
+                   '~3M above — trained at width 1.',
+     BASE / 'offline' / 'value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
+    ('ST-big k=16', 'The same ~75M trunk trained at width 16. Against k=1 it isolates '
+                    'search from capacity.',
+     BASE / 'outer_inner' / 'value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
+]
+
 # Sequential ramp, one hue light->dark (dataviz: magnitude is never categorical). Light mode
 # reads low->high as surface->deep; dark mode gets its OWN steps against the dark ground
 # rather than an inversion, so "near zero recedes" holds in both.
@@ -147,13 +162,38 @@ def main():
             f'<div class="arm-grid">{"".join(cols)}</div>'
             '</section>')
 
+    extra_cells = []
+    for label, blurb, run in EXTRA:
+        ck = n_ckpt(run)
+        done = len([s for s, v in grid(read_rows(run)).items() if set(NS) <= set(v)])
+        pk = peak(run)
+        extra_cells.append(
+            '<div class="cell">'
+            f'<div class="cell-hd"><span class="demos">{label}</span>'
+            f'<span class="prog mono">{done}<span class="sep">/</span>10 swept</span></div>'
+            f'<p class="blurb">{blurb}</p>'
+            f'{matrix(run, label)}'
+            f'<div class="cell-ft mono tiny">{ck}/10 checkpoints written'
+            + (f' · highest cell {pk:.2f}' if pk is not None else '') + '</div></div>')
+    cards.append(
+        '<section class="arm">'
+        '<div class="arm-hd"><h2>30-demo additions</h2><p>A different architecture and a '
+        'wider trunk, run only at 30 demos. Same manifest, seed, protocol and n grid as '
+        'the 30-demo column above, so these compare directly with it.</p></div>'
+        f'<div class="arm-grid arm-grid-3">{"".join(extra_cells)}</div>'
+        '</section>')
+
     legend = ''.join(f'<i class="s{i}"></i>' for i in range(len(RAMP_LIGHT)))
     stamp = args.generated or 'sweep in progress'
 
     css_ramp_light = '\n'.join(
-        f'  .s{i}{{--cell:{c};}}' for i, c in enumerate(RAMP_LIGHT))
-    css_ramp_dark = '\n'.join(
-        f'    .s{i}{{--cell:{c};}}' for i, c in enumerate(RAMP_DARK))
+        f'.s{i}{{--cell:{c};}}' for i, c in enumerate(RAMP_LIGHT))
+    css_ramp_dark_media = '\n'.join(
+        f'  :root:not([data-theme="light"]) .s{i}{{--cell:{c};}}'
+        for i, c in enumerate(RAMP_DARK))
+    css_ramp_dark_attr = '\n'.join(
+        f':root[data-theme="dark"] .s{i}{{--cell:{c};}}'
+        for i, c in enumerate(RAMP_DARK))
 
     html = f"""<title>PushT Search Sweep</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -164,16 +204,16 @@ def main():
   --ground:#fcfcfb; --panel:#ffffff; --ink:#14161a; --ink-2:#54585f; --ink-3:#878c93;
   --rule:#e6e6e3; --rule-2:#f0f0ed; --accent:#256abf; --warn:#8a5a12;
   --cell-ink:#14161a; --cell-ink-hi:#ffffff;
-{css_ramp_light}
 }}
+{css_ramp_light}
 @media (prefers-color-scheme: dark) {{
   :root:not([data-theme="light"]) {{
     color-scheme: dark;
     --ground:#141618; --panel:#191b1e; --ink:#f2f3f4; --ink-2:#b3b8bf; --ink-3:#7b818a;
     --rule:#2a2e33; --rule-2:#212529; --accent:#6da7ec; --warn:#d8a24a;
     --cell-ink:#c8d4e2; --cell-ink-hi:#0b0f14;
-{css_ramp_dark}
   }}
+{css_ramp_dark_media}
   /* dark crosses to the contrasting ink one step earlier than light */
   :root:not([data-theme="light"]) td.c.s7{{color:var(--cell-ink-hi);}}
 }}
@@ -182,8 +222,8 @@ def main():
   --ground:#141618; --panel:#191b1e; --ink:#f2f3f4; --ink-2:#b3b8bf; --ink-3:#7b818a;
   --rule:#2a2e33; --rule-2:#212529; --accent:#6da7ec; --warn:#d8a24a;
   --cell-ink:#c8d4e2; --cell-ink-hi:#0b0f14;
-{css_ramp_dark}
 }}
+{css_ramp_dark_attr}
 :root[data-theme="dark"] td.c.s7{{color:var(--cell-ink-hi);}}
 *{{box-sizing:border-box;}}
 body{{
@@ -228,6 +268,9 @@ header h1 em{{font-style:italic; color:var(--accent);}}
 .arm-grid{{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px;}}
 @media (max-width:760px){{.arm-grid{{grid-template-columns:1fr;}}}}
 
+.arm-grid-3{{grid-template-columns:repeat(3,minmax(0,1fr));}}
+@media (max-width:1000px){{.arm-grid-3{{grid-template-columns:1fr;}}}}
+.blurb{{margin:0; font-size:12.5px; color:var(--ink-3); line-height:1.45;}}
 .cell{{border:1px solid var(--rule); border-radius:3px; background:var(--panel);
   padding:14px 14px 12px; display:flex; flex-direction:column; gap:10px;
   overflow-x:auto;}}
@@ -273,7 +316,8 @@ footer{{color:var(--ink-3); font-size:12.5px; border-top:1px solid var(--rule);
 <header>
   <p class="eyebrow">PushT · 100k steps · 50 held-out test episodes</p>
   <h1>Does search beat <em>more samples?</em></h1>
-  <p class="lede">Three policy families at two demo budgets, every 10k-step checkpoint
+  <p class="lede">Three policy families at two demo budgets, plus three 30-demo
+  additions, every 10k-step checkpoint
   read out at seven search widths. Each matrix is one arm: gradient step down, search
   width <span class="mono">n</span> across. Darker means a higher success rate.</p>
 </header>

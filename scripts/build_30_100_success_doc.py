@@ -39,6 +39,15 @@ ARMS = [
      BASE / 'offline' / 'bc_demos-30_seed-42'),
     ('BC', 'same policy class as ST-diffusion, max_actions=1', 100,
      BASE / 'offline' / 'bc_demos-100_seed-42'),
+    # 30-demo additions. A different ARCHITECTURE (UNet) and a ~24x wider transformer
+    # trunk at both search widths, all on the same manifest/seed/protocol as the six
+    # above, so they drop straight into the same tables.
+    ('UNet BC', 'diffusion UNet, i.i.d. best-of-n (no search context)', 30,
+     BASE / 'unet_bc' / 'unetbc_demos-30_seed-42'),
+    ('ST-big k=1', 'search transformer 6/8/1024 (~75M trunk), width 1', 30,
+     BASE / 'offline' / 'value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
+    ('ST-big k=16', 'search transformer 6/8/1024 (~75M trunk), width 16', 30,
+     BASE / 'outer_inner' / 'value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
 ]
 
 
@@ -100,7 +109,7 @@ def main():
 
     L = []
     L.append('# PushT 30/100-demo sweep — success rates\n')
-    L.append('Three policy families x two demo budgets. Every arm trains to 100k gradient '
+    L.append('Three policy families x two demo budgets, plus three 30-demo additions (a diffusion UNet baseline, and a ~24x wider search transformer at widths 1 and 16). Every arm trains to 100k gradient '
              'steps with a checkpoint every 10k; every checkpoint is swept over '
              '`n = 1, 2, 4, 8, 16, 32, 64` on the same 50 held-out test episodes.\n')
     L.append('Regenerate with `python scripts/build_30_100_success_doc.py`. '
