@@ -1,6 +1,6 @@
 # SEARCH TRANSFORMER AT WIDTH 1, 29 demos (the Round-8 parity split).
 #
-# Identical to train_pusht_st_n1 except for the demo budget. See that file for what
+# Identical to the archived width-1 capacity arm except for the demo budget. See that file for what
 # max_actions: 1 does, why outer/inner is a no-op on the objective at width 1, and why the
 # LR schedule is set here rather than inherited.
 #
@@ -12,7 +12,7 @@
 #
 # `_self_` LAST.
 defaults:
-  - train_pusht_st_n1
+  - train_pusht_diffusion_search
   - _self_
 
 name: train_pusht_st_n1_29
@@ -43,3 +43,7 @@ task:
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "st-n1", "demos-29", "r8-split"]
+
+# width 1 -- its former parent (train_pusht_st_n1.yaml) was deleted 2026-08-18 when k
+# became a plain override on the search master.
+n_candidates: 1

@@ -49,7 +49,7 @@ tag to read something other than `train_pusht_diffusion_search`.
 
 ## What was NOT archived, and why
 
-- **`train_pusht_bc*`** — not an override of the search arms. BC sets
+- **`train_pusht_st_k1`** (formerly `train_pusht_bc*`) — not an override of the search arms. BC sets
   `policy.max_actions: 1` (empty context, so no candidates and no verifier pool),
   `n_search_actions: 1`, and its own `run_name` template. It is the baseline every search
   number is read against, so it stays first-class.

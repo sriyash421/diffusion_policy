@@ -59,7 +59,23 @@ from diffusion_policy.dataset.pusht_image_dataset import (
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
-from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
+from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
+
+# EVAL RUNS AT FULL FP32. This is a measurement script, so precision beats throughput.
+#
+# cuDNN's TF32 path (on by default for convolutions, and the ResNet18 obs encoder is all
+# convolution) has ~1e-3 relative precision and picks different kernels for different batch
+# widths. That made an episode's action depend on `--n-envs`: measured 1.9e-2 max|diff| on
+# one action between --n-envs 16 and 50, which a 300-step contact sim amplifies into
+# visibly different coverage. With TF32 off the same comparison drops to 7.6e-5.
+#
+# It is NOT bit-exact even so -- convolution and matmul reductions still associate
+# differently at different batch widths -- so `n_envs` stays in _IDENTITY. What this buys is
+# that a cross-n_envs comparison is now float noise rather than a different trajectory.
+# At a FIXED --n-envs the whole eval is bit-identical run to run (verified).
+torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.deterministic = True
 
 SUCCESS_REWARD = 1.0
 N_LIST = [int(2 ** k) for k in range(7)]  # 1, 2, 4, 8, 16, 32, 64
@@ -245,17 +261,17 @@ def _reduce_episode_rewards(rewards):
     return float(r.max()), float(r[-1]), float((1.0 - GAMMA) * np.sum(w * r))
 
 
-def rollout_max_rewards(env, policy, states, device, n, trace_out=None):
+def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
     """Roll one episode per env (reset to its state) using best-of-n search.
 
     Returns (max, final, discounted) reward arrays, one entry per env. The name is kept
     because `max` remains the primary series -- success is defined on it.
 
-    ``trace_out``, when given, is a dict of lists that collects the per-CONTROL-STEP search
-    state: every candidate's verifier score, which candidate was executed, and the reward
-    that followed. Recorded from what ``predict_action_best`` actually returned rather than
-    re-derived, because a 'softmax' pick cannot be reproduced after the fact and a
-    re-derivation would silently disagree with the action that was really executed.
+    ``score_sink``: optional list. When given, every policy call appends
+    ``(env_index, step_index, [score per candidate])`` -- the RAW verifier value for each
+    of the n candidates drawn, i.e. -mean_kp||feedback|| in pixels, which is what argmax
+    ranks on. Captured here because predict_action_best returns it and it is otherwise
+    discarded; storing it costs one .cpu() per step and nothing else.
     """
     def make_init_fn(state):
         state = np.asarray(state, dtype=np.float64)
@@ -268,6 +284,7 @@ def rollout_max_rewards(env, policy, states, device, n, trace_out=None):
     obs = env.reset()
     policy.reset()
     done = False
+    step_i = 0
     while not done:
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         with torch.no_grad():
@@ -281,88 +298,36 @@ def rollout_max_rewards(env, policy, states, device, n, trace_out=None):
                 assert n == 1, (
                     f'{type(policy).__name__} has no predict_action_best, so best-of-n is '
                     f'undefined for it; got n={n}. Re-run with --max-n 1.')
-                assert trace_out is None, (
-                    f'{type(policy).__name__} generates no candidates, so there is no '
-                    f'per-candidate trace to record.')
                 action = policy.predict_action(obs_dict)['action']
             else:
-                result = policy.predict_action_best(obs_dict, n_actions=n)
-                action = result['action']
-                if trace_out is not None:
-                    trace_out['scores'].append(
-                        result['scores'].detach().cpu().numpy())     # (B, n)
-                    trace_out['pick'].append(
-                        result['pick'].detach().cpu().numpy())       # (B,)
+                out = policy.predict_action_best(obs_dict, n_actions=n)
+                action = out['action']
+                if score_sink is not None and out.get('scores') is not None:
+                    sc = out['scores'].detach().cpu().numpy()   # (n_envs, n)
+                    for env_i in range(sc.shape[0]):
+                        score_sink.append((env_i, step_i, sc[env_i].tolist()))
         action = action.detach().cpu().numpy()
         obs, reward, done, info = env.step(action)
-        if trace_out is not None:
-            # reward/done as returned by the MultiStepWrapper for THIS control step, so the
-            # trace indexes on the same axis as scores/pick. `done` is what gives each
-            # episode its valid length: every env keeps being stepped until ALL are done,
-            # so the tail of a short episode is padding, not measurement.
-            trace_out['reward'].append(np.asarray(reward, dtype=np.float32))
-            trace_out['done'].append(np.asarray(done, dtype=bool))
         done = np.all(done)
+        step_i += 1
     rewards = env.call('get_attr', 'reward')
     red = np.array([_reduce_episode_rewards(r) for r in rewards])   # (n_envs, 3)
     return red[:, 0], red[:, 1], red[:, 2]
 
 
-# chosen_idx sentinels. -1 is a real outcome ('final_pass' executes a further sample, which
-# is not any candidate); PAD means "this episode had already ended", i.e. not a measurement.
-# Distinct values because conflating them would make a final_pass trace look entirely empty.
-TRACE_PAD = -2
+def _episode_seed(seed, n, episode_idx):
+    """Stable per-episode sampling seed.
 
-
-def _stack_trace(chunks):
-    """Per-chunk trace dicts -> one dict of episode-major arrays.
-
-    Each chunk collected ``(T_chunk, B, ...)`` lists, and different chunks run a different
-    number of control steps (the loop ends when every env in THAT chunk is done). Ragged in
-    T, so pad to the longest with NaN and record each episode's own length -- padding with
-    zeros would read as "score 0 / no reward" and quietly drag any mean computed over the
-    time axis toward it.
+    A pure function of (base seed, search width, episode index) -- deliberately NOT of the
+    checkpoint, the split or the batching, so the same episode is scored on the same noise
+    at every checkpoint and under every policy. `n` is included because the n=1 and n=16
+    columns should be independent draws rather than n=1 being a prefix of n=16.
     """
-    if not chunks:
-        return None
-    n_ep = sum(c['n_valid'] for c in chunks)
-    T = max(len(c['scores']) for c in chunks)
-    K = chunks[0]['scores'][0].shape[1]
-    scores = np.full((n_ep, T, K), np.nan, dtype=np.float32)
-    pick = np.full((n_ep, T), TRACE_PAD, dtype=np.int16)     # PAD = past this episode's end
-    reward = np.full((n_ep, T), np.nan, dtype=np.float32)
-    valid_len = np.zeros(n_ep, dtype=np.int32)
-    off = 0
-    for c in chunks:
-        v = c['n_valid']
-        t = len(c['scores'])
-        # (T_chunk, B, ...) -> (B, T_chunk, ...), dropping the pad envs at the tail of the
-        # chunk (the last chunk is padded up to n_envs with a repeat of states[0])
-        scores[off:off + v, :t] = np.stack(c['scores'], axis=0).transpose(1, 0, 2)[:v]
-        pick[off:off + v, :t] = np.stack(c['pick'], axis=0).transpose(1, 0)[:v]
-        reward[off:off + v, :t] = np.stack(c['reward'], axis=0).transpose(1, 0)[:v]
-        dones = np.stack(c['done'], axis=0).transpose(1, 0)[:v]        # (v, T_chunk)
-        for i in range(v):
-            hit = np.nonzero(dones[i])[0]
-            valid_len[off + i] = (hit[0] + 1) if hit.size else t
-        off += v
-
-    # BLANK OUT everything at or after each episode's own end. Envs are stepped until ALL
-    # of them are done, so a short episode keeps producing candidates and scores after it
-    # terminated -- real-looking numbers that are not measurements of anything. Leaving them
-    # in makes `scores.mean(axis=1)` quietly wrong for exactly the episodes that succeeded
-    # fastest, which is the worst possible subset to bias. After this the invariant is
-    # simple: anything not NaN / -2 is an in-episode measurement, and `valid_len` merely
-    # says where to stop.
-    beyond = np.arange(scores.shape[1])[None, :] >= valid_len[:, None]   # (n_ep, T)
-    scores[beyond] = np.nan
-    pick[beyond] = TRACE_PAD
-    reward[beyond] = np.nan
-    return dict(scores=scores, chosen_idx=pick, step_reward=reward, valid_len=valid_len)
+    return (int(seed) * 1_000_003 + int(n) * 10_007 + int(episode_idx)) % (2 ** 31 - 1)
 
 
 def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
-                     traces=None):
+                     score_sink=None):
     """Best-of-n success rate over one split at ONE n.
 
     Returns (rate, ci, rewards) where `rewards` is a dict of three per-episode arrays --
@@ -387,16 +352,26 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
         pad = n_envs - len(chunk_states)
         if pad > 0:
             chunk_states = chunk_states + [states[0]] * pad
+        # Give every episode its own noise stream, keyed on its GLOBAL index in the split
+        # rather than its slot in this chunk. That is what makes a curve independent of
+        # --n-envs, of where the chunk boundary falls, and of the padding slots (which now
+        # draw from their own streams and cannot perturb the real rows). Episode i of the
+        # test split therefore sees the same trajectory noise under ST and under BC, so the
+        # two are paired episode-by-episode. See SearchProcedureMixin.set_sample_seeds.
+        seeder = getattr(policy, 'set_sample_seeds', None)
+        if seeder is not None:
+            seeder([_episode_seed(seed, n, start + i) for i in range(n_envs)])
         t0 = time.perf_counter()
-        trace_out = None
-        if traces is not None:
-            trace_out = {k: list() for k in ('scores', 'pick', 'reward', 'done')}
-        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n,
-                                    trace_out=trace_out)
-        if trace_out is not None:
-            trace_out['n_valid'] = n_envs - pad
-            traces.append(trace_out)
+        sink = [] if score_sink is not None else None
+        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink)
         dt = time.perf_counter() - t0
+        if sink is not None:
+            # env_i is the slot within this chunk; map it back to the episode index, and
+            # drop the padding slots so no duplicate episode is recorded.
+            for env_i, st, scores in sink:
+                if env_i < n_envs - pad:
+                    score_sink.append({'episode': start + env_i, 'step': st,
+                                       'scores': [round(v, 6) for v in scores]})
         for kind, arr in zip(REWARD_KINDS, chunk):
             out[kind][start:start + n_envs - pad] = arr[:n_envs - pad]
         tqdm.tqdm.write(f'  {label} n={n} chunk {start}: {dt:.1f}s')
@@ -411,161 +386,10 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     return float(sr), ci, out
 
 
-# ---------------------------------------------------------------------------
-# SELECTION-CRITERIA sweep. Orthogonal to the n sweep above: n is held FIXED (16) and what
-# varies is the read-out rule applied to the same 16 generated-and-scored candidates.
-#
-# All six are pure read-outs on trained weights -- no retraining, and generation is
-# identical across them -- so this isolates selection from everything else. They cannot
-# share a rollout, though: each executes a different action, so the trajectories diverge
-# after the first control step.
-#
-# Candidate order is meaningful. Candidate k is conditioned on candidates 0..k-1, so the
-# trailing candidates are the deeply-conditioned ones, and the pairs below separate the two
-# things a best-of-n number confounds:
-#   * 'cand-*' take a FIXED slot and ignore the verifier entirely -- how good is candidate k
-#     just from being conditioned on k earlier ones?
-#   * 'argmax-*'/'softmax-*' add the verifier ranking on top. (rule - cand) is the ranking's
-#     contribution; ('*-last8' - '*-all') says whether restricting the oracle to
-#     well-conditioned candidates helps or merely removes options.
-# ---------------------------------------------------------------------------
-CRITERIA = (
-    dict(label='cand-last',          selection='index',   index=-1,   window=None),
-    dict(label='cand-8th-from-last', selection='index',   index=-8,   window=None),
-    dict(label='argmax-all',         selection='argmax',  index=None, window=None),
-    dict(label='argmax-last8',       selection='argmax',  index=None, window=8),
-    dict(label='softmax-all',        selection='softmax', index=None, window=None),
-    dict(label='softmax-last8',      selection='softmax', index=None, window=8),
-)
-CRITERIA_JSONL = 'criteria_curves.jsonl'
-
-
-def _apply_criterion(policy, crit, temperature):
-    """Point the policy's read-out at one criterion. Weights are untouched."""
-    policy.selection = crit['selection']
-    policy.selection_window = crit['window']
-    policy.selection_temperature = float(temperature)
-    if crit['index'] is not None:
-        policy.selection_index = crit['index']
-
-
-def eval_criteria(checkpoint, device, n=16, n_envs=50, max_steps=300, seed=None,
-                  run_dir=None, num_inference_steps=None, selection_temperature=1.0,
-                  skip_val=True, criteria=CRITERIA, on_criterion_done=None,
-                  collect_traces=True):
-    """Evaluate ONE checkpoint under each selection criterion at fixed width ``n``.
-
-    Returns {label: row}. ``on_criterion_done(label, row, traces)`` fires after each
-    criterion so a killed job keeps everything it finished -- the six criteria are
-    independent rollouts and there is no reason to lose five because the sixth timed out.
-
-    One policy load and one env pool are shared across all six, which is why these belong in
-    a single job rather than six.
-    """
-    policy, cfg = load_policy(checkpoint, device, num_inference_steps)
-    assert hasattr(policy, 'predict_action_best'), (
-        f'{type(policy).__name__} has no search interface, so selection criteria are '
-        f'undefined for it. This sweep applies to the search-transformer arms only.')
-    assert policy.max_actions >= n, (
-        f'checkpoint was trained at max_actions={policy.max_actions} but the sweep asks for '
-        f'n={n}. Beyond max_actions the search rolls its context window, so the trailing-8 '
-        f'criteria would not mean what they mean at n <= max_actions.')
-    if seed is None:
-        seed = int(cfg.training.get('seed', 42))
-    if run_dir is None:
-        run_dir = pathlib.Path(checkpoint).resolve().parent.parent
-    test_states, test_idxs = get_split_states(cfg, 'test', run_dir=run_dir)
-    if skip_val:
-        val_states, val_idxs = [], np.zeros(0, dtype=int)
-    else:
-        val_states, val_idxs = get_split_states(cfg, 'val', run_dir=run_dir)
-
-    env = build_envs(n_envs, cfg.policy.n_obs_steps, cfg.policy.n_action_steps, max_steps)
-    rows = dict()
-    try:
-        for crit in criteria:
-            label = crit['label']
-            _apply_criterion(policy, crit, selection_temperature)
-            traces = list() if collect_traces else None
-            val_sr = val_ci = val_rw = None
-            if val_states:
-                val_sr, val_ci, val_rw = _eval_split_at_n(
-                    env, policy, val_states, device, n, n_envs, seed, f'val/{label}')
-            test_sr, test_ci, test_rw = _eval_split_at_n(
-                env, policy, test_states, device, n, n_envs, seed, f'test/{label}',
-                traces=traces)
-            row = {
-                'criterion': label,
-                'n': n,
-                'selection': crit['selection'],
-                'selection_window': crit['window'],
-                'selection_index': crit['index'],
-                # only meaningful for the softmax criteria; None elsewhere so a row is
-                # self-describing rather than carrying a number that did nothing
-                'selection_temperature': (
-                    selection_temperature if crit['selection'] == 'softmax' else None),
-                'seed': seed,
-                'success_rate': test_sr,
-                'success_ci': test_ci,
-                'mean_reward': float(np.mean(test_rw['max'])),
-                'mean_reward_final': float(np.mean(test_rw['final'])),
-                'mean_reward_discounted': float(np.mean(test_rw['discounted'])),
-                'per_episode_rewards': {
-                    kind: test_rw[kind].tolist() for kind in REWARD_KINDS},
-                'n_episodes': len(test_states),
-                'episode_idxs': test_idxs.tolist(),
-                'val_success_rate': val_sr,
-                'val_success_ci': val_ci,
-                'val_mean_reward': (
-                    float(np.mean(val_rw['max'])) if val_rw is not None else None),
-                'val_n_episodes': len(val_states),
-                'val_episode_idxs': val_idxs.tolist(),
-                'gamma': GAMMA,
-            }
-            rows[label] = row
-            if on_criterion_done is not None:
-                on_criterion_done(label, row, _stack_trace(traces) if traces else None)
-    finally:
-        force_close(env)   # never block teardown on a dead worker (see force_close)
-        close = getattr(policy, 'close', None)
-        if close is not None:
-            try:
-                close()
-            except Exception as e:
-                print(f'warning: failed to close policy verifier pool: {e}')
-    return rows
-
-
-def save_trace(trace, out_dir, label, episode_idxs, n):
-    """Write one criterion's per-control-step search trace.
-
-    Compressed npz rather than json: `scores` alone is 50 x ~37 x 16 float32.
-
-    SIGN CONVENTION, which any plot has to carry: the verifier value is NEGATIVE mean
-    per-keypoint distance to the goal T, so it is <= 0 and HIGHER IS BETTER (closer). It is
-    stored exactly as the verifier produced it -- flipping it here would make the stored
-    array disagree with the `action_value*` series in the training logs.
-    """
-    out = pathlib.Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    dst = out.joinpath(f'{label}.npz')
-    np.savez_compressed(
-        dst,
-        scores=trace['scores'],              # (n_episodes, T, n) verifier value, all cands
-        chosen_idx=trace['chosen_idx'],      # (n_episodes, T) executed candidate; -1 under
-                                             #   final_pass, -2 where the episode had ended
-        step_reward=trace['step_reward'],    # (n_episodes, T)
-        valid_len=trace['valid_len'],        # (n_episodes,) control steps before done
-        episode_idxs=np.asarray(episode_idxs, dtype=np.int32),
-        n_candidates=np.int32(n),
-    )
-    return dst
-
-
 def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300, seed=None,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
                     selection=None, selection_temperature=1.0, skip_val=False,
-                    noise_scheduler=None):
+                    noise_scheduler=None, score_writer=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
@@ -599,6 +423,12 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         val_states, val_idxs = [], np.zeros(0, dtype=int)
     else:
         val_states, val_idxs = get_split_states(cfg, 'val', run_dir=run_dir)
+    # Length, not truthiness. `val_states` is a plain list only on the skip_val branch; from
+    # get_split_states it is an ndarray, and `if <ndarray>` raises "truth value of an array
+    # with more than one element is ambiguous" for any val split with more than one episode
+    # -- i.e. every real one, so eval died before running a single episode and never created
+    # bon_search/. len() reads the same on both types.
+    has_val = len(val_states) > 0
 
     # Read the horizon from cfg.policy, NOT the top-level cfg: the policy is built with
     # n_action_steps + n_latency_steps, so with a nonzero latency the top-level values
@@ -608,19 +438,23 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     env = build_envs(n_envs, cfg.policy.n_obs_steps, cfg.policy.n_action_steps, max_steps)
     val_sr, val_ci, test_sr, test_ci, test_rewards, val_rewards = {}, {}, {}, {}, {}, {}
     done = []
-    # How the executed action is picked, and therefore what n COSTS. Under 'final_pass' the
-    # policy draws one further sample, conditioned on the n scored candidates, and executes
-    # that -- so a point at n is n+1 diffusion samples, not n. Recorded per curve because
-    # otherwise a `subgoal-only` curve and a `value` curve read off the same x axis are
-    # being compared at different compute, which flatters whichever one is doing more work.
+    # How the executed action is picked. n is the TOTAL generation count under every rule
+    # (predict_action_best searches at n-1 under 'final_pass' and returns the n'th sample),
+    # so n_generations == n and curves from different rules are directly comparable. Kept
+    # as an explicit field because it was NOT always equal: before 2026-08-18 'final_pass'
+    # cost n+1, so archived curves carry the old value and must be read off it, not off n.
     selection = getattr(policy, 'selection', 'argmax')
-    n_extra = 1 if selection == 'final_pass' else 0
+    n_extra = 0
     temperature = getattr(policy, 'selection_temperature', None)
 
     def _curve():
         return {
             'n': list(done),
             'seed': seed,
+            # Rollout batch width. Recorded because curves written before per-episode
+            # seeding depend on it (see SearchProcedureMixin.set_sample_seeds); it is in
+            # _IDENTITY so those cannot merge with n_envs-invariant ones.
+            'n_envs': n_envs,
             'selection': selection,
             # recorded so a softmax curve is self-describing: the number is meaningless
             # without knowing T, and T only means anything because the score is z-scored
@@ -651,18 +485,18 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             'mean_reward_discounted': [
                 float(np.mean(test_rewards[n]['discounted'])) for n in done],
             # val split: SELECTED ON
-            'val_success_rate': ([val_sr[n] for n in done] if val_states else None),
-            'val_success_ci': ([val_ci[n] for n in done] if val_states else None),
+            'val_success_rate': ([val_sr[n] for n in done] if has_val else None),
+            'val_success_ci': ([val_ci[n] for n in done] if has_val else None),
             # Mean val reward, kept because binary success cannot always select. A BC
             # policy at n=1 scores 0% success at EVERY checkpoint, so the success-based
             # selector is a tie across the whole run and max() returns whichever row came
             # first. Mean reward separates the same checkpoints cleanly (0.12 -> 0.29).
             'val_mean_reward': ([float(np.mean(val_rewards[n]['max'])) for n in done]
-                                if val_states else None),
+                                if has_val else None),
             'val_mean_reward_final': ([float(np.mean(val_rewards[n]['final'])) for n in done]
-                                      if val_states else None),
+                                      if has_val else None),
             'val_mean_reward_discounted': ([float(np.mean(val_rewards[n]['discounted']))
-                                            for n in done] if val_states else None),
+                                            for n in done] if has_val else None),
             'val_n_episodes': len(val_states),
             'val_episode_idxs': val_idxs.tolist(),
         }
@@ -673,16 +507,22 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         # would leave a killed job with a complete val curve and no test numbers at all.
         for n in n_list:
             # val drives checkpoint selection; test is reported only, never selected on.
-            if val_states:
+            if has_val:
+                vsink = [] if score_writer else None
                 val_sr[n], val_ci[n], val_rewards[n] = _eval_split_at_n(
-                    env, policy, val_states, device, n, n_envs, seed, 'val')
+                    env, policy, val_states, device, n, n_envs, seed, 'val', vsink)
+                if score_writer:
+                    score_writer('val', n, vsink)
+            tsink = [] if score_writer else None
             test_sr[n], test_ci[n], test_rewards[n] = _eval_split_at_n(
-                env, policy, test_states, device, n, n_envs, seed, 'test')
+                env, policy, test_states, device, n, n_envs, seed, 'test', tsink)
+            if score_writer:
+                score_writer('test', n, tsink)
             done.append(n)
             if on_n_done is not None:
                 on_n_done(_curve())
     finally:
-        force_close(env)   # never block teardown on a dead worker (see force_close)
+        env.close()
         # The policy's verifier lazily forks its own pool of sim workers, which garbage
         # collection will not reap. A fresh policy is built per checkpoint, so without
         # this --watch mode leaks a full pool for every checkpoint it evaluates.
@@ -744,6 +584,11 @@ _PER_N_LISTS = ('success_rate', 'success_ci',
 # would splice together points measured on different episodes or a different sampler seed
 _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              'val_episode_idxs',
+             # Curves written before per-episode seeding landed depend on the rollout batch
+             # width, so an n_envs mismatch means the two were measured on different noise
+             # and must not merge. Post-fix curves are n_envs-invariant and will agree here
+             # anyway, so this only ever rejects genuinely incomparable pairs.
+             'n_envs',
              # a softmax curve and an argmax curve at the same step are different
              # experiments; without these two a --selection override that landed in
              # the same directory would merge into the native curve n-by-n
@@ -847,6 +692,35 @@ def step_from_ckpt(path):
 
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
+def _make_score_writer(step_dir, checkpoint, selection):
+    """Append per-candidate verifier distances to candidate_scores.jsonl.
+
+    One row per (split, n, episode, step) holding the n raw scores for that policy call.
+    Raw, not the rescaled context copy: this is exactly what argmax compares, so the
+    selection can be replayed offline (e.g. what would softmax at another temperature, or
+    a different rule entirely, have executed?) without re-running the sim.
+
+    Appended rather than rewritten so a killed sweep keeps the levels it finished, and
+    written per-n so cost stays bounded if a level is huge.
+    """
+    path = os.path.join(str(step_dir), 'candidate_scores.jsonl')
+
+    def _write(split, n, rows):
+        if not rows:
+            return
+        # scores are written after each (split, n), which is BEFORE on_n_done creates the
+        # step dir on the first n -- so make it here rather than relying on that ordering.
+        os.makedirs(str(step_dir), exist_ok=True)
+        with open(path, 'a') as f:
+            for r in rows:
+                f.write(json.dumps({
+                    'checkpoint': os.path.basename(str(checkpoint)),
+                    'selection': selection, 'split': split, 'n': int(n), **r}) + '\n')
+        print(f'  [scores] {split} n={n}: {len(rows)} rows -> {os.path.basename(path)}')
+
+    return _write
+
+
 # success_curves.jsonl, one row per checkpoint.
 #
 # This file records measurements ONLY. It deliberately names no winner. Any rule for
@@ -913,48 +787,6 @@ def append_curve_row(out_root, step, checkpoint, curve):
     return row
 
 
-def _append_criteria_row(out_root, step, checkpoint, row):
-    """Merge one (step, criterion) result into the run-level criteria jsonl.
-
-    Keyed on (step, criterion), not step alone: a checkpoint contributes six rows, one per
-    read-out rule, and they are written as each finishes. Merge-under-lock rather than
-    append for the same reason success_curves.jsonl does it -- several per-checkpoint jobs
-    run concurrently against one run directory.
-
-    `per_episode_rewards` is dropped from the index (it is in the per-criterion json next to
-    the trace); the index stays small enough to read whole.
-    """
-    out_root = pathlib.Path(out_root)
-    out_root.mkdir(parents=True, exist_ok=True)
-    jsonl = out_root.joinpath(CRITERIA_JSONL)
-    slim = {k: v for k, v in row.items()
-            if k not in ('per_episode_rewards', 'episode_idxs', 'val_episode_idxs')}
-    slim = {'step': step, 'checkpoint': str(checkpoint), **slim}
-
-    with _locked(jsonl):
-        rows = []
-        if jsonl.is_file():
-            with open(jsonl) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rows.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue  # torn final line from a preempted write
-        by_key = {(r.get('step'), r.get('criterion')): r for r in rows}
-        by_key[(step, row['criterion'])] = slim
-        ordered = [by_key[k] for k in sorted(
-            by_key, key=lambda k: (k[0] if k[0] is not None else -1, str(k[1])))]
-        tmp = str(jsonl) + '.tmp'
-        with open(tmp, 'w') as f:
-            for r in ordered:
-                f.write(json.dumps(r) + '\n')
-        os.replace(tmp, jsonl)
-    return slim
-
-
 def read_curve_rows(out_root):
     """Every row previously written to success_curves.jsonl (skipping partial lines)."""
     path = pathlib.Path(out_root).joinpath(CURVES_JSONL)
@@ -1013,68 +845,20 @@ def read_curve_rows(out_root):
                    'bon_search_sel-<mode>/ so they never merge with the native-mode curve.')
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
+@click.option('--store-scores', is_flag=True,
+              help='write every candidate\'s raw verifier distance to '
+                   'candidate_scores.jsonl (one row per split/n/episode/step). This is the '
+                   'signal argmax ranks on; it is otherwise discarded after selection.')
 @click.option('--skip-val', is_flag=True,
               help='evaluate the 50 test episodes only, skipping the val split')
-@click.option('--criteria-sweep', is_flag=True,
-              help='instead of sweeping n, hold n fixed (--criteria-n) and sweep the six '
-                   'SELECTION criteria on the same weights. Writes to criteria_search/ so '
-                   'it never merges with the n-sweep curves in bon_search/.')
-@click.option('--criteria-n', default=16, type=int,
-              help='search width for --criteria-sweep; must be <= the checkpoint\'s '
-                   'max_actions or the trailing-window criteria change meaning')
-@click.option('--traces/--no-traces', 'collect_traces', default=True,
-              help='--criteria-sweep: record every candidate\'s verifier score and the '
-                   'executed candidate at every control step (npz per criterion)')
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
-         criteria_sweep, criteria_n, collect_traces):
+         store_scores):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
     assert n_list, f'no powers of two in [{min_n}, {max_n}]'
-
-    if criteria_sweep:
-        assert checkpoint is not None, '--criteria-sweep needs -c/--checkpoint'
-        assert selection is None, (
-            '--selection pins ONE read-out rule; --criteria-sweep sweeps all six. '
-            'Passing both would silently evaluate the sweep under a fixed override.')
-        run_root = pathlib.Path(checkpoint).resolve().parent.parent
-        # Its own subtree: these rows are keyed by criterion at fixed n, not by n, so
-        # merging them into bon_search/ would put two different experiments in one file.
-        out = pathlib.Path(output_dir) if output_dir else run_root.joinpath('criteria_search')
-        step = step_from_ckpt(checkpoint)
-        step_dir = out.joinpath(f'step_{step:07d}') if step is not None else out
-
-        def _persist(label, row, trace):
-            step_dir.mkdir(parents=True, exist_ok=True)
-            dst = step_dir.joinpath(f'{label}.json')
-            tmp = str(dst) + '.tmp'
-            with open(tmp, 'w') as f:
-                json.dump({'checkpoint': str(checkpoint), 'step': step, **row}, f, indent=2)
-            os.replace(tmp, dst)
-            if trace is not None:
-                save_trace(trace, step_dir.joinpath('traces'), label,
-                           row['episode_idxs'], row['n'])
-            # run-level index, same append-under-lock discipline as success_curves.jsonl so
-            # six concurrent per-checkpoint jobs cannot lose each other's rows
-            _append_criteria_row(out, step, checkpoint, row)
-            print(f'  [persisted {label}: success={row["success_rate"]:.3f} '
-                  f'mean_reward={row["mean_reward"]:.3f}]')
-
-        rows = eval_criteria(
-            checkpoint, device, n=criteria_n, n_envs=n_envs, max_steps=max_steps,
-            seed=seed, num_inference_steps=num_inference_steps,
-            selection_temperature=selection_temperature, skip_val=skip_val,
-            on_criterion_done=_persist, collect_traces=collect_traces)
-        print(f'\n{"criterion":<22} {"success":>8} {"95% CI":>16} {"mean_rew":>9}')
-        for label, row in rows.items():
-            ci = row['success_ci']
-            print(f'{label:<22} {row["success_rate"]:>8.3f} '
-                  f'[{ci[0]:.3f},{ci[1]:.3f}]'.rjust(16) + f' {row["mean_reward"]:>9.3f}')
-        print(f'\nwrote {step_dir}')
-        return
-
     if not watch:
         assert checkpoint is not None, 'provide -c/--checkpoint or --watch'
         # resolve() not a '..'-relative join: with a symlinked checkpoints/ the old form
@@ -1103,7 +887,9 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 selection=selection,
                                 selection_temperature=selection_temperature,
                                 skip_val=skip_val,
-                                noise_scheduler=noise_scheduler)
+                                noise_scheduler=noise_scheduler,
+                                score_writer=_make_score_writer(
+                                    step_dir, checkpoint, selection) if store_scores else None)
         png = save_outputs(curve, str(step_dir), checkpoint)
         print('wrote', png)
         return

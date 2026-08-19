@@ -68,16 +68,63 @@ class SearchProcedureMixin:
         self.selection_temperature = float(
             kwargs.get('selection_temperature', 1.0) or 1.0)
         assert self.selection_temperature > 0, 'selection_temperature must be > 0'
-        # Restrict the pool 'argmax'/'softmax' rank over to the LAST W candidates; None ==
-        # all of them. See select_candidate for why the trailing candidates are special.
-        window = kwargs.get('selection_window', None)
-        self.selection_window = None if window is None else int(window)
-        assert self.selection_window is None or self.selection_window > 0, \
-            f'selection_window must be positive or None, got {self.selection_window!r}'
-        # For selection == 'index': WHICH candidate to execute, as a plain index into the n
-        # generated. Negative counts from the end (-1 == last). The verifier score takes no
-        # part in selection at all in this mode.
-        self.selection_index = int(kwargs.get('selection_index', -1) or -1)
+        # Selection draws from its OWN stream, not the global one the diffusion sampler
+        # uses, so turning softmax on does not perturb the trajectories themselves. Same
+        # reason CropScopeMixin owns _crop_generator. Not a buffer: it holds no learnable
+        # state and a checkpoint should not pin the eval noise.
+        self._selection_generator = torch.Generator()
+        self._selection_generator.manual_seed(
+            int(kwargs.get('selection_seed', 0) or 0) + 20250818)
+
+        # Per-EPISODE sampling seeds, set by the eval harness (see set_sample_seeds).
+        # None means "use the global RNG", which is what training does.
+        self._sample_seeds = None
+        self._sample_draw = 0
+
+    def set_sample_seeds(self, seeds):
+        """Make the diffusion noise a pure function of (episode, draw index).
+
+        WHY. Eval rolls episodes out in chunks of ``n_envs`` and draws one
+        ``torch.randn(size=(B, ...))`` for the whole chunk, so an episode's noise depended
+        on how many envs preceded it in its chunk -- i.e. on ``--n-envs``, on where the
+        chunk boundary fell, and on how many padding slots were appended. Two evals of the
+        SAME checkpoint at ``--n-envs 16`` and ``--n-envs 50`` therefore scored different
+        trajectories, and an ST curve was never paired with a BC curve episode-by-episode.
+
+        With per-row seeds each episode owns its own generator, so its noise is identical
+        whatever the batching -- and padding rows cannot perturb real ones, because they no
+        longer share a stream. Both policies use DDIM at eta=0, whose ``step`` draws no
+        noise at all, so this initial draw is the ONLY stochastic input to a rollout: fixing
+        it fixes the whole trajectory.
+
+        ``seeds`` is one integer per row of the batch, or None to restore global-RNG
+        behaviour. The draw counter resets here, so it must be called once per chunk.
+        """
+        self._sample_seeds = None if seeds is None else [int(x) for x in seeds]
+        self._sample_draw = 0
+
+    def _init_noise(self, shape, dtype, device, generator=None):
+        """Initial denoising noise: per-row streams when seeded, else the global RNG.
+
+        Generators are CPU-side and the result is moved to `device`, so a run is
+        reproducible across CPU/GPU as well as across batch shapes. The draw counter
+        advances once per call, which is what gives the k candidates of one search step
+        (and successive control steps) independent noise while keeping each episode's
+        sequence a pure function of its own seed.
+        """
+        if self._sample_seeds is None:
+            return torch.randn(size=shape, dtype=dtype, device=device, generator=generator)
+        batch = shape[0]
+        assert len(self._sample_seeds) == batch, (
+            f'set_sample_seeds got {len(self._sample_seeds)} seeds but the batch is {batch}')
+        draw = self._sample_draw
+        self._sample_draw += 1
+        rows = []
+        for base in self._sample_seeds:
+            g = torch.Generator()
+            g.manual_seed((base * 1_000_003 + draw) % (2 ** 63 - 1))
+            rows.append(torch.randn(size=tuple(shape[1:]), dtype=dtype, generator=g))
+        return torch.stack(rows).to(device)
 
     @contextlib.contextmanager
     def _crop_scope(self):
@@ -293,67 +340,77 @@ class SearchProcedureMixin:
         (Tensors only: the runners push this dict straight through ``dict_apply``, so a
         string mode tag here would crash them. Read the mode off ``policy.selection``.)
 
+        ``n_actions`` is the TOTAL number of generations, identically under every
+        selection rule, so curves from different rules share one x axis and one cost.
+
         WHICH chunk depends on ``self.selection``:
           * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
-          * 'softmax'    -- sampled from softmax(z / T) over the standardized scores.
-          * 'index'      -- a FIXED slot (``self.selection_index``), ignoring the scores.
-            The control for the two above: it isolates how much of a best-of-n gain comes
-            from the ranking rather than from the conditioning depth.
-          * 'final_pass' -- one MORE sample, conditioned on all n scored candidates, is
-            drawn and returned. It is not simulated and not compared to anything, so the
-            verifier scalar never touches selection; it reaches the model only as search
-            context. ``scores`` still describes the n context candidates (so the caller can
-            log the spread), but no longer describes the returned action.
+          * 'final_pass' -- only n-1 candidates are searched and scored; the n'th
+            generation is conditioned on them and returned. It is not simulated and not
+            compared to anything, so the verifier scalar never touches selection; it
+            reaches the model only as search context. ``scores`` describes the n-1 context
+            candidates (so the caller can log the spread), not the returned action, and is
+            absent entirely at n=1.
 
-        Cost at width n: 'argmax' is n samples + n sims, 'final_pass' is n+1 samples + n
-        sims. Consumers that compare arms should compare at equal SAMPLES, not equal n --
-        see the ``n_generations`` field eval_search_pusht.py records.
+        That split matches training exactly: ``generate_search_context`` runs at
+        ``max_actions - 1`` and the loss covers slot ``max_actions - 1``, i.e. K
+        generations in total. It also makes 'final_pass' at n=1 the empty-context
+        conditional -- the same action 'argmax' and 'softmax' return there, since with one
+        candidate there is nothing to select.
+
+        Cost at width n is n samples under every rule; 'argmax'/'softmax' additionally run
+        n verifier sims and 'final_pass' n-1.
         """
         n = n_actions if n_actions is not None else self.max_actions
+        final_pass = self.selection == 'final_pass'
+        # Under 'final_pass' the last of the n generations IS the returned action, so only
+        # n-1 of them are searched.
+        n_search = n - 1 if final_pass else n
+        assert n_search >= 0, f'n_actions must be >= 1, got {n}'
         # `scores` is the scalar verifier value in every search_context mode; `values` may
         # be a wider context (e.g. a subgoal state), which is not rankable.
         # The crop scope spans the whole search so the obs and every candidate's subgoal
         # share one offset, exactly as in training. (In eval mode that offset is the
         # deterministic center crop, so this is belt-and-braces rather than load-bearing.)
         with self._crop_scope():
-            # encoded once and shared by the search AND (in 'final_pass') the extra sample
+            # encoded once and shared by the search AND (in 'final_pass') the final sample
             obs_features = self._encode_obs_features(obs_dict)
-            actions, values, scores = self.predict_n_actions(
-                obs_dict, verifier=self.verifier, n_actions=n,
-                return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
+            actions = values = scores = None
+            if n_search > 0:
+                actions, values, scores = self.predict_n_actions(
+                    obs_dict, verifier=self.verifier, n_actions=n_search,
+                    return_scores=True, obs_features=obs_features)  # (B,n,H,Da), ctx, (B,n)
 
-            if self.selection in ('argmax', 'softmax', 'index'):
-                action_pred, pick = select_candidate(                   # (B, H, Da), (B,)
+            if not final_pass:
+                action_pred = select_candidate(                         # (B, H, Da)
                     actions, scores, self.selection, self.selection_temperature,
-                    window=self.selection_window, index=self.selection_index)
+                    generator=self._selection_generator)
             else:
                 # Condition on the last max_actions-1 candidates: that is the widest
                 # context the model was ever trained at (the staircase memory mask tops out
                 # at max_context_actions), so a longer one would index past cond_pos_emb.
                 # `values`, not `scores` -- in the subgoal modes the context is the encoded
                 # subgoal observation and the bare scalar would be the wrong width.
-                keep = self.max_actions - 1
+                # keep may be 0 -- at n=1 (nothing generated yet) or at max_actions=1 (the
+                # ST k=1 arm, which has no context capacity at all). `actions[:, -0:]` is the
+                # WHOLE tensor, so the empty case must pass None rather than a slice.
+                keep = min(n_search, self.max_actions - 1)
                 action_pred = self.predict_action(
                     obs_dict,
-                    actions=actions[:, -keep:],
-                    values=values[:, -keep:],
+                    actions=actions[:, -keep:] if keep else None,
+                    values=values[:, -keep:] if keep else None,
                     obs_features=obs_features,
                 )['action_pred']                                        # (B, H, Da)
-                # The executed action is a FURTHER sample, not one of the n candidates, so
-                # there is no candidate index to report. -1 marks "not a candidate" rather
-                # than pointing at an arbitrary slot a caller might plot as chosen.
-                pick = torch.full((actions.shape[0],), -1,
-                                  dtype=torch.long, device=actions.device)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
-        return {
+        out = {
             'action': action_pred[:, start:end],            # (B, n_action_steps, Da)
             'action_pred': action_pred,
-            'scores': scores,                               # (B, n) -- ALWAYS all n
-            # Which candidate was executed, in full-candidate coordinates; -1 under
-            # 'final_pass'. Returned so a caller can record the selection actually made
-            # instead of re-deriving it.
-            'pick': pick,                                   # (B,)
         }
+        # Omitted rather than None when nothing was scored: the env runners push this dict
+        # straight through dict_apply, which would call .detach() on a None.
+        if scores is not None:
+            out['scores'] = scores
+        return out
 

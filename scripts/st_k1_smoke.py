@@ -1,20 +1,23 @@
-"""Prove the search policy degenerates to plain BC at ``max_actions=1``.
+"""Prove the search transformer degenerates to a single-sample policy at k=1.
 
-The BC baselines reuse ``PushTDiffusionSearchPolicy`` rather than a separate BC class, so
-that encoder, backbone, normalizer, trainer and eval harness are byte-identical to the
-search arms and the ONLY difference is the search itself. ``max_actions=1`` gives
-``max_context_actions = 0``: every candidate is drawn with an empty context, so
+Width 1 is an OVERRIDE (`n_candidates=1`), not a separate config: encoder, backbone,
+normalizer, trainer and eval harness are then byte-identical to the k=16 arm and the only
+difference is the search itself. k=1 gives ``max_context_actions = 0``, so every candidate
+is drawn with an empty context:
 
-  * training  = plain denoising BC on the expert action, no candidates, no verifier;
-  * n=1 eval  = ordinary BC rollout;
-  * n>1 eval  = best-of-n over i.i.d. samples, i.e. BC handed the same test-time search
-    budget as the search arms. That is the comparison that isolates *learned* search
-    context from *test-time* sampling.
+  * training  = plain denoising on the expert action, no candidates, no verifier;
+  * n=1 eval  = a single ordinary sample;
+  * n>1 eval  = best-of-n over i.i.d. samples, i.e. width 1 handed the same test-time
+    search budget as the search arms. That is the comparison that isolates *learned*
+    search context from *test-time* sampling.
 
 This asserts all three actually hold, because a silently-degenerate baseline (identical
-candidates, or a verifier pool spawned per BC rollout) would look like a valid experiment.
+candidates, or a verifier pool spawned per rollout) would look like a valid experiment.
 
-    python scripts/bc_smoke.py
+NOTE ON NAMING: this arm is ST k=1, NOT "BC". In this repo BC means the diffusion UNet
+(`train_pusht_unet_bc`) and nothing else.
+
+    python scripts/st_k1_smoke.py
 """
 import sys
 import pathlib
@@ -35,7 +38,7 @@ torch.manual_seed(0)
 with initialize_config_dir(config_dir=str(pathlib.Path(ROOT, 'diffusion_policy/config')),
                            version_base=None):
     cfg = compose(config_name='train_pusht_diffusion_search',
-                  overrides=['policy.max_actions=1', 'training.device=cpu'])
+                  overrides=['n_candidates=1', 'training.device=cpu'])
 
 t0 = time.time()
 policy = hydra.utils.instantiate(cfg.policy)
@@ -71,10 +74,10 @@ policy.eval()
 with torch.no_grad():
     out = policy.predict_action(batch['obs'])
 print('  predict_action ->', {k: tuple(v.shape) for k, v in out.items()})
-assert policy.verifier._vec is None, 'BC rollout spawned the verifier pool'
-print('OK  trains and acts as plain BC; verifier never spawned')
+assert policy.verifier._vec is None, 'ST k=1 rollout spawned the verifier pool'
+print('OK  trains and acts as plain ST k=1; verifier never spawned')
 
-# best-of-n: candidates must be genuinely different draws, or "BC + search budget" is
+# best-of-n: candidates must be genuinely different draws, or "ST k=1 + search budget" is
 # a no-op and every n would score identically
 with torch.no_grad():
     acts, _, scores = policy.predict_n_actions(
@@ -87,4 +90,4 @@ assert acts.shape[1] == 4, f'expected 4 candidates, got {acts.shape[1]}'
 assert spread > 1e-3, 'candidates are identical -- best-of-n would be a no-op'
 print('OK  best-of-n draws distinct i.i.d. candidates at max_actions=1')
 
-print('\nSTAGE OK: max_actions=1 is a faithful BC baseline')
+print('\nSTAGE OK: max_actions=1 is a faithful ST k=1 baseline')

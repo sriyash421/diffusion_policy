@@ -7,10 +7,10 @@
 #SBATCH --mem=32G
 #SBATCH --time=0:40:00
 #SBATCH --output=/gscratch/robotics/harine/slurm_logs/%x-%j.out
-# One-off prep for the BC baselines, run on a compute node because the login node's shared
+# One-off prep for the ST k=1 arm, run on a compute node because the login node's shared
 # ~10G cgroup makes even an import-and-instantiate smoke test time out under contention.
 #   1. write the 25-episode split manifest (a PREFIX of the 100-episode train pool)
-#   2. prove the search policy degenerates to plain BC at max_actions=1
+#   2. prove the search policy degenerates to a single-sample policy at max_actions=1
 set -euo pipefail
 cd /mmfs1/home/harine/diffusion_policy_standalone
 source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
@@ -41,5 +41,5 @@ print(f"OK  val/test identical: {len(a['val'])} val, {len(a['test'])} test")
 EOF
 
 echo
-echo "=== 3. BC degenerate case (max_actions=1) ==="
-python scripts/bc_smoke.py
+echo "=== 3. ST k=1 degenerate case (max_actions=1) ==="
+python scripts/st_k1_smoke.py

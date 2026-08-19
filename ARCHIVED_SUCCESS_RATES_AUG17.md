@@ -2,7 +2,10 @@
 
 Everything below was produced BEFORE the search-procedure unification and the config
 changes of 2026-08-17, and is not comparable to anything measured after it. Preserved
-verbatim for provenance; `LATEST_SUCCESS_RATES.md` carries the current numbers.
+verbatim for provenance. The current numbers are in `LATEST_SUCCESS_RATES.md` (the 30-demo
+pair); this same content also now lives in `SUCCESS_RATES.md` section B, which is the
+canonical home for superseded generations -- this file is a redundant copy kept only so the
+2026-08-17 commit that created it stays self-contained.
 
 ## What invalidated these
 

@@ -6,7 +6,6 @@ defaults:
 
 name: train_pusht_unet_bc
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
-n_demos: 100
 obs_as_global_cond: True
 
 trainer: unet_bc
@@ -22,16 +21,26 @@ val_dataloader:
   num_workers: 4
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
+  # PushTUNetSearchPolicy IS DiffusionUnetImagePolicy plus the verifier and the shared
+  # search loop; training is byte-identical (compute_loss is the UNet's own, and the
+  # verifier is lazy so no worker pool spawns). It exists so the checkpoint can be
+  # evaluated at n>1 -- best-of-n here is n i.i.d. draws scored by the sim, with no
+  # learned selection, which is the baseline the search arms' test-time budget needs.
+  _target_: diffusion_policy.policy.pusht_unet_search_policy.PushTUNetSearchPolicy
   shape_meta: ${shape_meta}
+  # DDIM at 8 inference steps, byte-identical to the ST arms' scheduler. Was DDPM at 100:
+  # that made the sampler a second difference alongside architecture, so a gap could not be
+  # attributed to either. variance_type is dropped (DDPM-only); set_alpha_to_one and
+  # steps_offset are DDIM's, taken from train_pusht_diffusion_search.
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
     beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small
     clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
     prediction_type: epsilon
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
@@ -57,7 +66,14 @@ policy:
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
-  num_inference_steps: 100
+  num_inference_steps: 8   # matches both ST arms
+  # scalar verifier value only -- this policy has no context input for the wider modes
+  search_context: value
+  selection: argmax
+  verifier_n_envs: 32
+  verifier_legacy: False
+  verifier_use_async: True
+  verifier_steps: null
   obs_as_global_cond: ${obs_as_global_cond}
   # 256, NOT the upstream UNet recipe's 128 -- matched to the search transformer's `n_emb`,
   # which is the width its diffusion-timestep embedding is built at
@@ -90,7 +106,7 @@ ema:
 
 training:
   # the UNet workspace validates and samples on an epoch cadence, not a step one
-  val_every: 1
+  val_every: 10   # matches the ST arms, so both val_loss curves are sampled alike
   sample_every: 5
   rollout_every: null
   # NOT inherited from pusht_base's 1.0: this arm has never clipped, and the workspace does

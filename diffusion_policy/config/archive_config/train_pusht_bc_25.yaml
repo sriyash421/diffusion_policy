@@ -1,6 +1,6 @@
 # BC baseline at the SMALL data budget (25 demonstrations).
 #
-# Pairs with train_pusht_bc.yaml (100 demos); the only difference is n_demos, which selects
+# Paired with the 100-demo width-1 run; the only difference is n_demos, which selects
 # both the split manifest and the run directory. The 25-episode train set is a strict
 # subset of the 100-episode one and val/test are identical across the two manifests, so the
 # pair isolates data budget and nothing else.
@@ -10,7 +10,7 @@
 # 10-episode val split (train_ratio 0.2 of a 146-episode pool). Nothing was ever trained at
 # 25 before this. See AUDIT.md.
 defaults:
-  - train_pusht_bc
+  - train_pusht_diffusion_search
   - _self_
 
 name: train_pusht_bc_25
@@ -19,3 +19,6 @@ n_demos: 25
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "bc", "demos-${n_demos}"]
+
+# width 1 -- see above; the old width-1 parent config was deleted 2026-08-18.
+n_candidates: 1

@@ -226,18 +226,14 @@ class PushTSearchImageRunner(PushTImageRunner):
                 obs_dict = dict_apply(dict(obs),
                     lambda x: torch.from_numpy(x).to(device=device))
                 with torch.no_grad():
-                    if (self.n_search_actions == 1
-                            and getattr(policy, 'selection', 'argmax') == 'argmax'):
-                        # BC rollout: one sample, executed. Going through
-                        # predict_action_best would argmax over a single candidate -- the
-                        # same action -- but would still physics-simulate it in the
-                        # verifier, so the BC baseline would pay a search cost it does not
-                        # use and would spawn a worker pool it never needs.
-                        #
-                        # Only under 'argmax'. Under 'final_pass' n=1 is NOT the same
-                        # action: it is one scored candidate plus the extra conditioned
-                        # sample that actually gets executed, so shortcutting it here would
-                        # silently evaluate BC and label it as the search arm.
+                    if self.n_search_actions == 1:
+                        # BC rollout: one sample, executed. At n=1 every selection rule
+                        # returns this same action -- 'argmax'/'softmax' have a single
+                        # candidate to choose among, and 'final_pass' searches at n-1 = 0,
+                        # so its one generation is the empty-context conditional too.
+                        # Going through predict_action_best would still physics-simulate
+                        # in the verifier, so the BC baseline would pay a search cost it
+                        # does not use and spawn a worker pool it never needs.
                         action_dict = policy.predict_action(obs_dict)
                     else:
                         action_dict = policy.predict_action_best(

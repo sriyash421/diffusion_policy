@@ -60,6 +60,11 @@ dependencies:
     # - robosuite @ https://github.com/cheng-chi/robosuite/archive/277ab9588ad7a4f4b55cf75508b44aa67ec171f0.tar.gz
     - robomimic==0.2.0
     - pytorchvideo==0.1.5
+    # GPT2Model, for `cond_encoder: gpt2` on the PushT search transformer (and for
+    # search_policy / online_search_policy, which have always imported it at module scope
+    # without it being declared here). Pinned below 4.30 because 4.30+ hard-requires
+    # accelerate>=0.20.3 at import time and this env pins accelerate 0.13.2 for diffusers.
+    - transformers==4.29.2
     # pip package required for jpeg-xl
     - imagecodecs==2022.9.26
     # - r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz
