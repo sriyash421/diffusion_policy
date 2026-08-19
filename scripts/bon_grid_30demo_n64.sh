@@ -57,8 +57,13 @@ for arm in search bc; do
         continue
       fi
       echo "=== [$(date -Is)] $arm $step $sel ==="
-      if ! run_combo "$arm" "$ckpt" "$step" "$sel"; then
-        rc=$?
+      # Capture the status from a PLAIN call. `if ! run_combo; then rc=$?` sets rc to 0,
+      # not the command's status -- $? there is the status of the negation, which is 0
+      # precisely because the branch was taken. That silently disabled both the TIMEOUT
+      # log and the retry.
+      run_combo "$arm" "$ckpt" "$step" "$sel"
+      rc=$?
+      if [ $rc -ne 0 ]; then
         pkill -f 'multiprocessing.forkserver' 2>/dev/null   # reap the orphaned sim pool
         if [ "$rc" = 124 ]; then
           echo "=== [$(date -Is)] TIMEOUT: $arm $step $sel -- retrying once ==="
