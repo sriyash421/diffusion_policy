@@ -102,7 +102,7 @@ class SearchTransformerForDiffusion(nn.Module):
         #   'mlp'         -- the token-wise Mish MLP, i.e. no cross-token mixing at all.
         #                    Selected by n_cond_layers == 0 regardless of this setting,
         #                    which is the documented way to reclaim the trunk's parameters
-        #                    (25.20M at train_pusht_st_n1's n_emb 1024, for a 2-token memory).
+        #                    (25.20M at train_pusht_diffusion_search's n_emb 1024, for a 2-token memory).
         assert cond_encoder in COND_ENCODERS, \
             f"cond_encoder must be one of {COND_ENCODERS}, got {cond_encoder!r}"
         # n_cond_layers == 0 means "no encoder at all", and it outranks the trunk choice:

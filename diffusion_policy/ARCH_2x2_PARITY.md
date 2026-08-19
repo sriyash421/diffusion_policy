@@ -1,5 +1,12 @@
 # The architecture 2x2: what is held equal and what is not
 
+> **SUPERSEDED 2026-08-18 — naming and configs below are the retired generation.**
+> `train_pusht_st_n1{,_29,_drop001}` and `train_pusht_bc` have moved to
+> `diffusion_policy/config/archive_config/`. Width is now the override `n_candidates` on
+> the single `train_pusht_diffusion_search` config, and **BC means the diffusion UNet only**
+> (`train_pusht_unet_bc`) — below, "BC" still refers to the width-1 transformer.
+> The live comparison is in `LATEST_SUCCESS_RATES.md`.
+
 > **2026-08-17 — superseded numbers.** Everything measured before the search-procedure
 > unification of 2026-08-17 is archived in `ARCHIVED_SUCCESS_RATES_AUG17.md`, which lists
 > the seven changes that invalidated it. The parity notes below have been updated to the
@@ -118,7 +125,7 @@ demo budget. Two defects came out of that:
 
 Both now enforce the cap **mid-epoch**, and every config sets `training.max_gradient_steps`
 explicitly with `num_epochs: 100000` as a non-binding safety bound (the pattern
-`train_pusht_bc.yaml` already used). Changing the batch size or the demo budget no longer
+`train_pusht_diffusion_search n_candidates=1.yaml` already used). Changing the batch size or the demo budget no longer
 changes the run length, and no config comment carries arithmetic that can drift.
 
 The cap was **300000** when this section was written; it is **100000** on all four arms today,

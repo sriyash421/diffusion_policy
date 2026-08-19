@@ -33,19 +33,27 @@ name: train_pusht_diffusion_search
 # 1-3 predates this flip and is `offline`; their directories are under .../offline/ and are
 # not resumed by anything launched now.
 #
-# STILL SINGLE-STEP, deliberately: train_pusht_diffusion_search_single re-pins BOTH
-# `trainer: offline` and `_target_`, so train_pusht_bc* inherit the on-policy loop -- BC has
-# max_actions=1 and generates no candidates, so there is no search cost to amortize. The
-# train_pusht_st_n1* configs re-pin it for the same reason, and MUST: outer/inner asserts
-# max_actions > 1, because at width 1 generate_search_context returns (None, None) and there
-# is no context to buffer. Anything else that must stay on-policy should inherit
-# train_pusht_diffusion_search_single rather than re-pin by hand.
+# WIDTH 1 IS AN OVERRIDE, NOT A CONFIG. `n_candidates=1` is the whole of it: `trainer`,
+# `_target_` and `task.env_runner.n_search_actions` all derive from that one key, so the
+# width-1 arm cannot drift from the width-16 arm in anything else. There used to be a
+# separate train_pusht_bc.yaml for this; it moved to archive_config/ on 2026-08-18 because a
+# second file is a second place for the encoder, schedule or demo budget to diverge
+# silently. NOTE: "BC" now means the diffusion UNet (train_pusht_unet_bc) and nothing else.
+#
+# Anything that must stay on the on-policy loop at k>1 inherits train_pusht_diffusion_search_single
+# rather than re-pinning `trainer` by hand.
 #
 # Verify after touching any of this:
 #   python train.py --config-name=<cfg> --cfg job --resolve | grep -E 'trainer|_target_'
-#   -- and confirm train_pusht_bc* / train_pusht_st_n1* still say offline.
+#   -- and confirm n_candidates=1 still resolves to offline / TrainMLPImageWorkspace.
 # ---------------------------------------------------------------------------
-trainer: outer_inner             # {offline, outer_inner} -- paired with _target_ at the top
+# DERIVED FROM n_candidates, not set by hand. `outer_inner` exists to amortize generating
+# k-1 candidates per gradient step; at k=1 there are none to amortize and
+# TrainSearchOuterInnerWorkspace asserts max_actions > 1 outright, so width 1 MUST run the
+# offline loop. Deriving both keys from the one knob is what lets `n_candidates=1` be a
+# plain override instead of a separate config file -- there is no way to set the width and
+# forget the trainer, which is the failure this replaces.
+trainer: ${eval:'"offline" if ${n_candidates} == 1 else "outer_inner"'}
 
 search_context: value            # {value, subgoal, subgoal_value}
 
@@ -102,10 +110,10 @@ n_candidates: 16
 # by running jobs still resolve; drop those symlinks once nothing reads through them.
 run_name: ${arm}_k${n_candidates}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
-# Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
-# move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
-# actually selects the workspace.
-_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
+# Derived from n_candidates alongside `trainer` -- see the DEFAULT TRAINER block. `trainer`
+# is only a path component of hydra.run.dir; `_target_` is what actually selects the
+# workspace, so the two must agree and are now computed from the same expression.
+_target_: ${eval:'"diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace" if ${n_candidates} == 1 else "diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace"'}
 
 
 policy:
@@ -197,7 +205,7 @@ policy:
   # GPT-2's own triangular mask, and a padding mask as the only thing passed in.
   # `_build_encoder_mask` is not consulted on this path.
   #
-  # Motivated by the capacity arm's stated prediction (train_pusht_st_n1): if capacity is not what limits
+  # Motivated by the capacity arm's stated prediction (archive_config/train_pusht_st_n1): if capacity is not what limits
   # this policy, "what remains is conditioning bandwidth ... that points at the obs
   # projection and n_cond_layers, not at model size". This changes the trunk that bandwidth
   # flows through while holding the bandwidth's width fixed.

@@ -26,14 +26,14 @@ subgoal_clean|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-ch
 subgoal_corrupt|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=True,corrupt_obs_eval=False
 subgoalval_clean|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=False
 subgoalval_corrupt|train_pusht_diffusion_search|search_context=subgoal_value,arm=subgoal-value,corrupt_obs=True,corrupt_obs_eval=False
-value_clean_30|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False,n_demos=30
-subgoal_clean_30|train_pusht_diffusion_search|search_context=subgoal,arm=subgoal-chosen4value,corrupt_obs=False,n_demos=30
+value_clean_100|train_pusht_diffusion_search|search_context=value,arm=value,corrupt_obs=False,n_demos=100
 subgoal_only|train_pusht_diffusion_search_subgoal_only|
 subgoal_only_cd_k4|train_pusht_diffusion_search_subgoal_only_cd|n_candidates=4
-train_pusht_bc|train_pusht_bc|
-train_pusht_bc_30|train_pusht_bc|n_demos=30
+st_k16|train_pusht_diffusion_search|n_candidates=16
+st_k1|train_pusht_diffusion_search|n_candidates=1
+st_k1_100demo|train_pusht_diffusion_search|n_candidates=1,n_demos=100
+unet_bc|train_pusht_unet_bc|
 train_pusht_gaussian_search|train_pusht_gaussian_search|
-train_pusht_st_n1|train_pusht_st_n1|
 "
 fail=0
 for spec in $CONFIGS; do

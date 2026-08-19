@@ -9,13 +9,21 @@ exactly. Reads whatever has completed so far, so it is safe against an in-progre
 import argparse, os, re, sys
 
 NS = [1, 2, 4, 8, 16, 32, 64]
-ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'ST-diffusion-k1'))
+# log-arm -> row label. 'search'/'bc' are the original 4/4/256 pair (the 'bc' key predates
+# the rename and is the search transformer at max_actions=1, NOT the UNet baseline).
+ARMS = (
+    ('search',     'ST-diffusion-k16'),
+    ('bc',         'ST-diffusion-k1'),
+    ('unetbc',     'UNet-BC'),
+    ('st-k1-big',  'ST-diffusion-k1 6x8x1024'),
+    ('st-k16-big', 'ST-diffusion-k16 6x8x1024'),
+)
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
 
 def parse(path):
     txt = open(path).read()
-    secs = re.split(r'=== \S+ (\w+) (step_\d+) (\w+) ===', txt)
+    secs = re.split(r'=== \S+ ([\w-]+) (step_\d+) (\w+) ===', txt)
     out = {}
     for i in range(1, len(secs), 4):
         arm, step, sel, body = secs[i], secs[i+1], secs[i+2], secs[i+3]
@@ -37,7 +45,8 @@ def main():
     a = ap.parse_args()
     idx = 1 if a.metric == 'reward' else 0
     logs = a.log or ['logs/bon_grid_30demo.log', 'logs/bon_grid_30demo_n64.log',
-                     'logs/bon_grid_30demo_n64.log.part1']
+                     'logs/bon_grid_30demo_n64.log.part1',
+                     'logs/run_unetbc_30demo.log', 'logs/run_st_big_30demo.log']
     d = {}
     for path in logs:
         if os.path.exists(path):

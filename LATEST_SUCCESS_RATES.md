@@ -15,6 +15,14 @@ fixes, argmax and softmax at n=1 ran the identical policy on different RNG strea
 gap between those columns was a direct read of run-to-run variation (section C in
 `SUCCESS_RATES.md` has the numbers). Nothing below smaller than that is resolvable.
 
+## Naming
+
+**ST** = the search transformer (`PushTDiffusionSearchPolicy`), written with its trained
+width as `k` -- ST-k16, ST-k1. Width is the override `n_candidates`; there is no separate
+config per width. **BC** = the diffusion UNet (`train_pusht_unet_bc`) and nothing else. An
+older generation of this doc used "BC" for the width-1 transformer; every such run is in
+`SUCCESS_RATES.md` under that old label, and none of it is on this page.
+
 ## The two arms
 
 Both are `PushTDiffusionSearchPolicy` (DDIM at 8 steps) with a **byte-identical** obs
@@ -25,7 +33,7 @@ True`, `cond_encoder: gpt2`. **The only difference is `max_actions`: 16 vs 1.**
 
 | | ST-diffusion-k16 | ST-diffusion-k1 |
 |---|---|---|
-| config | `train_pusht_diffusion_search n_demos=30` | `train_pusht_bc n_demos=30` |
+| config | `train_pusht_diffusion_search n_demos=30` | `train_pusht_diffusion_search n_candidates=1 n_demos=30` |
 | `max_actions` | 16 | 1 |
 | trainer | `outer_inner` | `offline` |
 | run dir | `outer_inner/value_k16_corrupt-False_demos-30_seed-42` | `offline/bc_demos-30_seed-42` |

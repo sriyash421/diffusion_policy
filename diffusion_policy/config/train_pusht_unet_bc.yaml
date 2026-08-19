@@ -6,7 +6,6 @@ defaults:
 
 name: train_pusht_unet_bc
 _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
-n_demos: 100
 obs_as_global_cond: True
 
 trainer: unet_bc

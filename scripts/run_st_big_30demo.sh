@@ -29,10 +29,10 @@ fi
 
 # k=1 first: it is the cheap one (no candidate generation, offline trainer), so a result
 # lands before the k=16 run's much longer wall clock.
-run_one () {   # $1 config  $2 run_name  $3 out-subdir  $4 trainer-dir
-  echo "=== [$(date -Is)] TRAIN $1 ($2) ==="
+run_one () {   # $1 config  $2 run_name  $3 out-subdir  $4 trainer-dir  $5 extra overrides
+  echo "=== [$(date -Is)] TRAIN $1 ($2) [$5] ==="
   $PY -u train.py --config-name="$1" n_demos=30 training.max_gradient_steps=100000 \
-      $BIG "run_name=$2"
+      $BIG "run_name=$2" $5
   rc=$?; echo "=== [$(date -Is)] $1 train exited rc=$rc ==="
   [ $rc -ne 0 ] && return $rc
   for ckpt in $(ls "$ROOT/$4/$2/checkpoints/step_"*.ckpt | sort); do
@@ -45,6 +45,6 @@ run_one () {   # $1 config  $2 run_name  $3 out-subdir  $4 trainer-dir
   done
 }
 
-run_one train_pusht_bc               bc_arch-6x8x1024_demos-30_seed-42               st-k1-big  offline
-run_one train_pusht_diffusion_search value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42 st-k16-big outer_inner
+run_one train_pusht_diffusion_search value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42  st-k1-big  offline     n_candidates=1
+run_one train_pusht_diffusion_search value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42 st-k16-big outer_inner n_candidates=16
 echo "=== [$(date -Is)] st big done ==="

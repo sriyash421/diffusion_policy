@@ -62,7 +62,6 @@ name: train_pusht_bc
 # Run identity. `ctx-`/`corrupt-` are dropped from the name because neither applies to a
 # policy with no search context; the budget stays, since that is the variable under test.
 run_name: bc_demos-${n_demos}_seed-${training.seed}
-n_demos: 100
 
 policy:
   # THE knob: 1 candidate == empty context == BC.

@@ -33,9 +33,14 @@ exp_name: pusht_search
 # (splits/pusht_seed42_train${n_demos}.json) AND appears in the run name, so two budgets
 # can never land in the same output directory -- which is how the earlier 29-episode runs
 # would otherwise have been silently resumed by a 100-episode relaunch. The budgets nest:
-# the 25-episode train set is a strict subset of the 100-episode one, and val/test are
-# identical across manifests, so the two are directly comparable.
-n_demos: 100
+# the 30-episode train list is a strict subset of the 100-episode one, and val (30) and
+# test (50) are identical across manifests, so budgets are directly comparable.
+#
+# 30 IS THE CURRENT GENERATION, set here so every arm -- ST at any k, UNet BC, Gaussian --
+# gets it from one place and no arm can be on a different budget by omission. 100 and the
+# retired 25/29 budgets are legacy: their runs are kept for reference in SUCCESS_RATES.md
+# and are reachable with `n_demos=100`, but nothing is trained at them by default.
+n_demos: 30
 
 # Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
 # run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
@@ -84,7 +89,7 @@ training:
   # step 80,000, then HELD constant. decay_steps is measured from the END of warmup
   # (progress = (step - warmup)/decay_steps), so 3000 + 77000 puts the floor at exactly 80k.
   #
-  # This is the standard shared with the width-1 arms (train_pusht_st_n1*, train_pusht_unet_bc*)
+  # This is the standard shared with the width-1 arms (train_pusht_diffusion_search n_candidates=1, train_pusht_unet_bc)
   # so n=1 and n=16 results are directly comparable. It replaces warmup 500 / decay_steps
   # 10000, which was calibrated for the old 20k runs and left a 100k run at its 1e-5 floor
   # for 89% of training -- the defect recorded in
