@@ -27,7 +27,7 @@ True`, `cond_encoder: gpt2`. **The only difference is `max_actions`: 16 vs 1.**
 width-1 config with `num_inference_steps: 100` and was not part of these runs. The Gaussian
 arm (`train_pusht_gaussian_search`) exists in the tree but has never been run.
 
-| | ST-diffusion-k16 | ST-diffusion-k1 |
+| | ST-diffusion-k16 | BC |
 |---|---|---|
 | config | `train_pusht_diffusion_search n_demos=30` | `train_pusht_bc n_demos=30` |
 | `max_actions` | 16 | 1 |
@@ -46,24 +46,24 @@ Fired by the trainer at 20k-step intervals, on **EMA** weights. Argmax only, so 
 2026-08-18 fixes leave these untouched** — neither the selection generator nor the n
 semantics affects an argmax rollout.
 
-**Not a matched comparison**: ST-diffusion-k16 ran at eval n=16 (search active), ST-diffusion-k1 at n=1. Section 2 is
+**Not a matched comparison**: ST-diffusion-k16 ran at eval n=16 (search active), BC at n=1. Section 2 is
 the like-for-like reading.
 
 | arm | 20k | 40k | 60k | 80k | 100k |
 |---|---|---|---|---|---|
-| ST-k16 test | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
-| ST-k16 val  | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
-| ST-k1 test  | 0.4957 | 0.612 | 0.6029 | 0.6382 | - |
-| ST-k1 val   | 0.4577 | 0.5681 | 0.6342 | 0.6397 | - |
+| ST-diffusion-k16 test | 0.7208 | 0.7755 | 0.8023 | 0.745 | 0.6143 |
+| ST-diffusion-k16 val  | 0.8143 | 0.7574 | 0.7539 | 0.7708 | 0.7362 |
+| BC test  | 0.4957 | 0.612 | 0.6029 | 0.6382 | - |
+| BC val   | 0.4577 | 0.5681 | 0.6342 | 0.6397 | - |
 
-ST-diffusion-k1's 100k row is blank because **the offline trainer skips its final rollout**: its rollouts
+BC's 100k row is blank because **the offline trainer skips its final rollout**: its rollouts
 drift +1 per fire (20001, 40002, 60003, 80004) so the next trigger lands at 100005, past the
 `max_gradient_steps: 100000` cap. Evaluated separately from `step_0100000.ckpt`: test mean
 reward 0.593, success 0.240. `TrainSearchOuterInnerWorkspace` hits its boundaries exactly
 and does not have this bug.
 
 **Both arms are over-trained at 100k.** ST-diffusion-k16 peaks at 60k and falls 19pp by
-100k; ST-diffusion-k1 peaks at 80k. 60-80k would have been the right budget at this demo count.
+100k; BC peaks at 80k. 60-80k would have been the right budget at this demo count.
 
 **Open discrepancy:** the same ST-diffusion-k16 checkpoint at n=16 scored **0.8023** here but **0.724**
 in the standalone sweep. Same weights, same n. Most likely EMA vs raw weights — these
@@ -74,13 +74,13 @@ resolved, treat this table and section 2 as measuring different things.
 
 ## 2. Best-of-n grid -- policy x checkpoint x selection
 
-Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **14/60 combos complete -- sweep still running, table is partial.**
+Every `step_*.ckpt` on the 10k grid x {argmax, softmax, final_pass} x n in {1,2,4,8,16}, both arms. **48/60 combos complete -- sweep still running, table is partial.**
 
 Pick a checkpoint on **val** and read **test** at the same row; this grid exists so a checkpoint never has to be pre-selected. Selecting by maximising test inflates the reported number by 1-2 SE.
 
 **n counts GENERATIONS, identically under all three rules**, so the columns are matched on compute. At n=1 there is nothing to select, so all three rules run the same empty-context conditional and their n=1 cells must agree exactly -- a disagreement there is a bug, not a result.
 
-A policy label carries its TRAINED width as `k` (`max_actions`, matching the run dirs); the columns are the EVAL width `n`. `ST-diffusion-k1` read at n=16 is a BC checkpoint sampled 16 times i.i.d., since at k=1 there is no context to condition on.
+A policy label carries its TRAINED width as `k` (`max_actions`, matching the run dirs); the columns are the EVAL width `n`. `BC` (trained width 1) read at n=16 is sampled 16 times i.i.d., since at its trained width of 1 there is no context to condition on.
 
 ### TEST  --  reward
 
@@ -99,6 +99,40 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | softmax | 0.576 | 0.654 | 0.696 | 0.693 | 0.690 |
 |  |  | final_pass | 0.576 | 0.621 | 0.656 | 0.676 | 0.682 |
 |  | 50,000 | argmax | 0.585 | 0.650 | 0.709 | 0.771 | 0.772 |
+|  |  | softmax | 0.585 | 0.635 | 0.709 | 0.765 | 0.739 |
+|  |  | final_pass | 0.585 | 0.616 | 0.735 | 0.629 | 0.739 |
+|  | 60,000 | argmax | 0.599 | 0.670 | 0.757 | 0.707 | 0.724 |
+|  |  | softmax | 0.599 | 0.651 | 0.745 | 0.741 | 0.705 |
+|  |  | final_pass | 0.599 | 0.663 | 0.710 | 0.755 | 0.742 |
+|  | 70,000 | argmax | 0.605 | 0.639 | 0.745 | 0.646 | 0.771 |
+|  |  | softmax | 0.605 | 0.627 | 0.656 | 0.754 | 0.725 |
+|  |  | final_pass | 0.605 | 0.658 | 0.734 | 0.691 | 0.736 |
+|  | 80,000 | argmax | 0.669 | 0.687 | 0.717 | 0.731 | 0.774 |
+|  |  | softmax | 0.669 | 0.700 | 0.697 | 0.747 | 0.740 |
+|  |  | final_pass | 0.669 | 0.648 | 0.680 | 0.707 | 0.715 |
+|  | 90,000 | argmax | 0.598 | 0.675 | 0.733 | 0.741 | 0.746 |
+|  |  | softmax | 0.598 | 0.704 | 0.691 | 0.727 | 0.696 |
+|  |  | final_pass | 0.598 | 0.653 | 0.697 | 0.694 | 0.725 |
+|  | 100,000 | argmax | 0.599 | 0.640 | 0.721 | 0.720 | 0.727 |
+|  |  | softmax | 0.599 | 0.699 | 0.626 | 0.665 | 0.762 |
+|  |  | final_pass | 0.599 | 0.611 | 0.704 | 0.665 | 0.722 |
+| BC | 10,000 | argmax | 0.353 | 0.422 | 0.612 | 0.702 | 0.826 |
+|  |  | softmax | 0.353 | 0.438 | 0.479 | 0.528 | 0.527 |
+|  |  | final_pass | 0.353 | 0.374 | 0.379 | 0.367 | 0.403 |
+|  | 20,000 | argmax | 0.456 | 0.623 | 0.647 | 0.673 | 0.704 |
+|  |  | softmax | 0.456 | 0.481 | 0.578 | 0.494 | 0.617 |
+|  |  | final_pass | 0.456 | 0.530 | 0.505 | 0.487 | 0.482 |
+|  | 30,000 | argmax | 0.552 | 0.649 | 0.659 | 0.701 | 0.734 |
+|  |  | softmax | 0.552 | 0.631 | 0.573 | 0.660 | 0.619 |
+|  |  | final_pass | 0.552 | 0.602 | 0.575 | 0.580 | 0.525 |
+|  | 40,000 | argmax | 0.619 | 0.666 | 0.702 | 0.699 | 0.719 |
+|  |  | softmax | 0.619 | 0.612 | 0.618 | 0.679 | 0.653 |
+|  |  | final_pass | 0.619 | 0.530 | 0.587 | 0.590 | 0.606 |
+|  | 50,000 | argmax | 0.612 | 0.675 | 0.733 | 0.709 | 0.710 |
+|  |  | softmax | 0.612 | 0.629 | 0.685 | 0.743 | 0.633 |
+|  |  | final_pass | 0.612 | 0.638 | 0.624 | 0.621 | 0.625 |
+|  | 60,000 | argmax | 0.625 | 0.640 | 0.689 | 0.664 | 0.680 |
+|  |  | softmax | 0.625 | 0.676 | 0.640 | 0.678 | 0.680 |
 
 ### TEST  --  success
 
@@ -117,6 +151,40 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | softmax | 0.300 | 0.220 | 0.340 | 0.260 | 0.240 |
 |  |  | final_pass | 0.300 | 0.160 | 0.200 | 0.180 | 0.160 |
 |  | 50,000 | argmax | 0.040 | 0.260 | 0.320 | 0.320 | 0.420 |
+|  |  | softmax | 0.040 | 0.120 | 0.380 | 0.220 | 0.120 |
+|  |  | final_pass | 0.040 | 0.180 | 0.160 | 0.180 | 0.260 |
+|  | 60,000 | argmax | 0.120 | 0.200 | 0.340 | 0.180 | 0.300 |
+|  |  | softmax | 0.120 | 0.180 | 0.260 | 0.280 | 0.140 |
+|  |  | final_pass | 0.120 | 0.120 | 0.140 | 0.240 | 0.140 |
+|  | 70,000 | argmax | 0.180 | 0.180 | 0.180 | 0.180 | 0.300 |
+|  |  | softmax | 0.180 | 0.240 | 0.120 | 0.320 | 0.200 |
+|  |  | final_pass | 0.180 | 0.180 | 0.160 | 0.180 | 0.180 |
+|  | 80,000 | argmax | 0.240 | 0.260 | 0.200 | 0.240 | 0.360 |
+|  |  | softmax | 0.240 | 0.280 | 0.180 | 0.240 | 0.280 |
+|  |  | final_pass | 0.240 | 0.240 | 0.180 | 0.240 | 0.120 |
+|  | 90,000 | argmax | 0.160 | 0.200 | 0.260 | 0.180 | 0.200 |
+|  |  | softmax | 0.160 | 0.140 | 0.240 | 0.240 | 0.280 |
+|  |  | final_pass | 0.160 | 0.200 | 0.260 | 0.060 | 0.160 |
+|  | 100,000 | argmax | 0.220 | 0.220 | 0.220 | 0.300 | 0.280 |
+|  |  | softmax | 0.220 | 0.060 | 0.280 | 0.180 | 0.200 |
+|  |  | final_pass | 0.220 | 0.160 | 0.160 | 0.160 | 0.140 |
+| BC | 10,000 | argmax | 0.000 | 0.060 | 0.060 | 0.200 | 0.460 |
+|  |  | softmax | 0.000 | 0.080 | 0.020 | 0.120 | 0.060 |
+|  |  | final_pass | 0.000 | 0.040 | 0.040 | 0.000 | 0.000 |
+|  | 20,000 | argmax | 0.060 | 0.180 | 0.280 | 0.280 | 0.420 |
+|  |  | softmax | 0.060 | 0.120 | 0.180 | 0.220 | 0.200 |
+|  |  | final_pass | 0.060 | 0.120 | 0.100 | 0.080 | 0.060 |
+|  | 30,000 | argmax | 0.100 | 0.160 | 0.300 | 0.300 | 0.360 |
+|  |  | softmax | 0.100 | 0.240 | 0.260 | 0.340 | 0.200 |
+|  |  | final_pass | 0.100 | 0.120 | 0.160 | 0.160 | 0.220 |
+|  | 40,000 | argmax | 0.240 | 0.220 | 0.300 | 0.420 | 0.380 |
+|  |  | softmax | 0.240 | 0.160 | 0.200 | 0.280 | 0.380 |
+|  |  | final_pass | 0.240 | 0.060 | 0.180 | 0.220 | 0.160 |
+|  | 50,000 | argmax | 0.260 | 0.140 | 0.300 | 0.300 | 0.460 |
+|  |  | softmax | 0.260 | 0.220 | 0.280 | 0.380 | 0.260 |
+|  |  | final_pass | 0.260 | 0.240 | 0.220 | 0.160 | 0.180 |
+|  | 60,000 | argmax | 0.140 | 0.380 | 0.320 | 0.340 | 0.220 |
+|  |  | softmax | 0.140 | 0.320 | 0.240 | 0.260 | 0.320 |
 
 ### VAL  --  reward
 
@@ -135,6 +203,40 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | softmax | 0.687 | 0.653 | 0.665 | 0.758 | 0.715 |
 |  |  | final_pass | 0.687 | 0.655 | 0.722 | 0.720 | 0.720 |
 |  | 50,000 | argmax | 0.655 | 0.722 | 0.766 | 0.727 | 0.806 |
+|  |  | softmax | 0.655 | 0.753 | 0.712 | 0.721 | 0.769 |
+|  |  | final_pass | 0.655 | 0.689 | 0.735 | 0.719 | 0.679 |
+|  | 60,000 | argmax | 0.680 | 0.743 | 0.783 | 0.739 | 0.780 |
+|  |  | softmax | 0.680 | 0.729 | 0.753 | 0.765 | 0.742 |
+|  |  | final_pass | 0.680 | 0.723 | 0.762 | 0.709 | 0.757 |
+|  | 70,000 | argmax | 0.713 | 0.655 | 0.696 | 0.807 | 0.819 |
+|  |  | softmax | 0.713 | 0.776 | 0.817 | 0.780 | 0.770 |
+|  |  | final_pass | 0.713 | 0.739 | 0.725 | 0.721 | 0.794 |
+|  | 80,000 | argmax | 0.634 | 0.818 | 0.746 | 0.783 | 0.789 |
+|  |  | softmax | 0.634 | 0.690 | 0.708 | 0.758 | 0.667 |
+|  |  | final_pass | 0.634 | 0.741 | 0.797 | 0.794 | 0.733 |
+|  | 90,000 | argmax | 0.686 | 0.697 | 0.675 | 0.683 | 0.749 |
+|  |  | softmax | 0.686 | 0.709 | 0.773 | 0.827 | 0.776 |
+|  |  | final_pass | 0.686 | 0.740 | 0.815 | 0.767 | 0.763 |
+|  | 100,000 | argmax | 0.669 | 0.741 | 0.674 | 0.731 | 0.734 |
+|  |  | softmax | 0.669 | 0.707 | 0.781 | 0.781 | 0.771 |
+|  |  | final_pass | 0.669 | 0.803 | 0.715 | 0.779 | 0.728 |
+| BC | 10,000 | argmax | 0.500 | 0.529 | 0.673 | 0.828 | 0.829 |
+|  |  | softmax | 0.500 | 0.514 | 0.530 | 0.594 | 0.651 |
+|  |  | final_pass | 0.500 | 0.390 | 0.412 | 0.289 | 0.383 |
+|  | 20,000 | argmax | 0.481 | 0.544 | 0.773 | 0.838 | 0.788 |
+|  |  | softmax | 0.481 | 0.592 | 0.613 | 0.684 | 0.757 |
+|  |  | final_pass | 0.481 | 0.549 | 0.589 | 0.543 | 0.525 |
+|  | 30,000 | argmax | 0.541 | 0.674 | 0.759 | 0.744 | 0.821 |
+|  |  | softmax | 0.541 | 0.730 | 0.637 | 0.764 | 0.818 |
+|  |  | final_pass | 0.541 | 0.643 | 0.696 | 0.648 | 0.656 |
+|  | 40,000 | argmax | 0.662 | 0.684 | 0.770 | 0.829 | 0.856 |
+|  |  | softmax | 0.662 | 0.709 | 0.782 | 0.664 | 0.771 |
+|  |  | final_pass | 0.662 | 0.650 | 0.656 | 0.711 | 0.675 |
+|  | 50,000 | argmax | 0.625 | 0.680 | 0.690 | 0.779 | 0.764 |
+|  |  | softmax | 0.625 | 0.657 | 0.728 | 0.702 | 0.741 |
+|  |  | final_pass | 0.625 | 0.539 | 0.635 | 0.613 | 0.648 |
+|  | 60,000 | argmax | 0.621 | 0.728 | 0.711 | 0.764 | 0.714 |
+|  |  | softmax | 0.621 | 0.707 | 0.739 | 0.643 | 0.752 |
 
 ### VAL  --  success
 
@@ -153,6 +255,40 @@ A policy label carries its TRAINED width as `k` (`max_actions`, matching the run
 |  |  | softmax | 0.067 | 0.233 | 0.233 | 0.233 | 0.267 |
 |  |  | final_pass | 0.067 | 0.233 | 0.067 | 0.167 | 0.133 |
 |  | 50,000 | argmax | 0.233 | 0.133 | 0.267 | 0.233 | 0.300 |
+|  |  | softmax | 0.233 | 0.233 | 0.267 | 0.333 | 0.233 |
+|  |  | final_pass | 0.233 | 0.267 | 0.167 | 0.233 | 0.167 |
+|  | 60,000 | argmax | 0.333 | 0.233 | 0.333 | 0.200 | 0.233 |
+|  |  | softmax | 0.333 | 0.233 | 0.300 | 0.233 | 0.200 |
+|  |  | final_pass | 0.333 | 0.133 | 0.167 | 0.200 | 0.133 |
+|  | 70,000 | argmax | 0.233 | 0.167 | 0.267 | 0.333 | 0.333 |
+|  |  | softmax | 0.233 | 0.300 | 0.300 | 0.233 | 0.267 |
+|  |  | final_pass | 0.233 | 0.200 | 0.200 | 0.167 | 0.200 |
+|  | 80,000 | argmax | 0.167 | 0.133 | 0.233 | 0.200 | 0.400 |
+|  |  | softmax | 0.167 | 0.133 | 0.267 | 0.233 | 0.167 |
+|  |  | final_pass | 0.167 | 0.200 | 0.167 | 0.167 | 0.167 |
+|  | 90,000 | argmax | 0.200 | 0.333 | 0.133 | 0.167 | 0.300 |
+|  |  | softmax | 0.200 | 0.167 | 0.133 | 0.133 | 0.300 |
+|  |  | final_pass | 0.200 | 0.167 | 0.267 | 0.200 | 0.233 |
+|  | 100,000 | argmax | 0.167 | 0.167 | 0.167 | 0.233 | 0.200 |
+|  |  | softmax | 0.167 | 0.200 | 0.233 | 0.233 | 0.167 |
+|  |  | final_pass | 0.167 | 0.200 | 0.167 | 0.200 | 0.167 |
+| BC | 10,000 | argmax | 0.000 | 0.133 | 0.200 | 0.467 | 0.567 |
+|  |  | softmax | 0.000 | 0.033 | 0.067 | 0.133 | 0.067 |
+|  |  | final_pass | 0.000 | 0.000 | 0.033 | 0.000 | 0.000 |
+|  | 20,000 | argmax | 0.033 | 0.167 | 0.367 | 0.367 | 0.400 |
+|  |  | softmax | 0.033 | 0.100 | 0.233 | 0.333 | 0.200 |
+|  |  | final_pass | 0.033 | 0.267 | 0.133 | 0.133 | 0.067 |
+|  | 30,000 | argmax | 0.133 | 0.333 | 0.400 | 0.267 | 0.500 |
+|  |  | softmax | 0.133 | 0.133 | 0.300 | 0.333 | 0.367 |
+|  |  | final_pass | 0.133 | 0.167 | 0.167 | 0.133 | 0.267 |
+|  | 40,000 | argmax | 0.167 | 0.267 | 0.300 | 0.433 | 0.400 |
+|  |  | softmax | 0.167 | 0.233 | 0.333 | 0.167 | 0.367 |
+|  |  | final_pass | 0.167 | 0.233 | 0.167 | 0.133 | 0.067 |
+|  | 50,000 | argmax | 0.100 | 0.200 | 0.267 | 0.300 | 0.200 |
+|  |  | softmax | 0.100 | 0.233 | 0.233 | 0.200 | 0.167 |
+|  |  | final_pass | 0.100 | 0.167 | 0.300 | 0.100 | 0.100 |
+|  | 60,000 | argmax | 0.033 | 0.233 | 0.267 | 0.167 | 0.300 |
+|  |  | softmax | 0.033 | 0.267 | 0.300 | 0.233 | 0.233 |
 
 Regenerate: `python scripts/update_latest_with_grid.py`
 

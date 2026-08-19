@@ -9,7 +9,7 @@ exactly. Reads whatever has completed so far, so it is safe against an in-progre
 import argparse, re, sys
 
 NS = [1, 2, 4, 8, 16]
-ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'ST-diffusion-k1'))
+ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'BC'))
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
 
