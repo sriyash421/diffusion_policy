@@ -4,6 +4,8 @@ Three policy families x two demo budgets, plus three 30-demo additions (a diffus
 
 Regenerate with `python scripts/build_30_100_success_doc.py`. Source of truth is each run's `bon_search/success_curves.jsonl`.
 
+Arm labels carry `(n_layer/n_head/n_emb, total params)` — the transformer shape and the whole policy's parameter count including the shared 11.2M ResNet-18 encoder, counted from each run's checkpoint. The trunk alone is 5.9M at 4/4/256, 126.6M at 6/8/1024, and 282.2M for the UNet.
+
 ## What the numbers mean
 
 `n` is the **search width**: n action candidates are generated for the current observation, each is rolled out in a PushT simulator (the "verifier") to a scalar value, and one is executed. So n is a *test-time compute* axis — the same weights are read out n different ways.
@@ -37,7 +39,7 @@ At n>1 **both** are plain best-of-n over i.i.d. samples scored by the same verif
 
 The 30-demo train set is the first 30 episodes of the 100-demo train list in its own order; val (30) and test (50) are copied verbatim between them, so 30-vs-100 isolates training-set size alone. Manifests: `config/splits/pusht_seed42_train{30,100}.json`.
 
-## ST-diffusion — 30 demos
+## ST-diffusion k=16 (4/4/256, 17.1M) — 30 demos
 
 `outer_inner/value_k16_corrupt-False_demos-30_seed-42` — search transformer, diffusion head
 
@@ -73,7 +75,7 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.628 | 0.576 | 0.612 | 0.616 | 0.672 | 0.706 | 0.650 |
 | 100,000 | 0.605 | 0.644 | 0.594 | 0.709 | 0.649 | 0.646 | 0.614 |
 
-## ST-diffusion — 100 demos
+## ST-diffusion k=16 (4/4/256, 17.1M) — 100 demos
 
 `outer_inner/value_k16_corrupt-False_demos-100_seed-42` — search transformer, diffusion head
 
@@ -109,7 +111,7 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.912 | 0.948 | 0.927 | 0.951 | 0.953 | 0.954 | 0.975 |
 | 100,000 | 0.912 | 0.910 | 0.949 | 0.943 | 0.957 | 0.953 | 0.955 |
 
-## ST-gaussian — 30 demos
+## ST-gaussian k=16 (4/4/256, 14.6M) — 30 demos
 
 `offline/gaussian_k16_corrupt-False_demos-30_seed-42` — search transformer, Gaussian head
 
@@ -141,7 +143,7 @@ _8/10 checkpoints written, 8 fully swept._
 | 70,000 | 0.553 | 0.549 | 0.627 | 0.586 | 0.561 | 0.545 | 0.548 |
 | 80,000 | 0.575 | 0.554 | 0.558 | 0.568 | 0.557 | 0.590 | 0.578 |
 
-## ST-gaussian — 100 demos
+## ST-gaussian k=16 (4/4/256, 14.6M) — 100 demos
 
 `offline/gaussian_k16_corrupt-False_demos-100_seed-42` — search transformer, Gaussian head
 
@@ -165,9 +167,9 @@ _4/10 checkpoints written, 4 fully swept._
 | 30,000 | 0.944 | 0.909 | 0.933 | 0.937 | 0.953 | 0.977 | 0.943 |
 | 40,000 | 0.922 | 0.925 | 0.953 | 0.921 | 0.960 | 0.956 | 0.944 |
 
-## ST k=1 — 30 demos
+## ST-diffusion k=1 (4/4/256, 17.1M) — 30 demos
 
-`offline/bc_demos-30_seed-42` — same policy class as ST-diffusion k16, width 1 (empty search context)
+`offline/bc_demos-30_seed-42` — same class as k=16, width 1 (empty search context)
 
 _10/10 checkpoints written, 10 fully swept._
 
@@ -201,9 +203,9 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.607 | 0.581 | 0.656 | 0.635 | 0.633 | 0.640 | 0.679 |
 | 100,000 | 0.591 | 0.602 | 0.585 | 0.679 | 0.655 | 0.698 | 0.659 |
 
-## ST k=1 — 100 demos
+## ST-diffusion k=1 (4/4/256, 17.1M) — 100 demos
 
-`offline/bc_demos-100_seed-42` — same policy class as ST-diffusion k16, width 1 (empty search context)
+`offline/bc_demos-100_seed-42` — same class as k=16, width 1 (empty search context)
 
 _10/10 checkpoints written, 10 fully swept._
 
@@ -237,7 +239,7 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.930 | 0.902 | 0.937 | 0.968 | 0.971 | 0.938 | 0.995 |
 | 100,000 | 0.967 | 0.938 | 0.936 | 0.958 | 0.958 | 0.931 | 0.974 |
 
-## UNet BC — 30 demos
+## UNet BC (293.4M) — 30 demos
 
 `unet_bc/unetbc_demos-30_seed-42` — diffusion UNet, i.i.d. best-of-n (no search context)
 
@@ -273,9 +275,9 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.729 | 0.710 | 0.711 | 0.769 | 0.736 | 0.763 | 0.792 |
 | 100,000 | 0.683 | 0.663 | 0.776 | 0.746 | 0.744 | 0.770 | 0.796 |
 
-## ST-big k=1 — 30 demos
+## ST-diffusion k=1 (6/8/1024, 137.8M) — 30 demos
 
-`offline/value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42` — search transformer 6/8/1024 (~75M trunk), width 1
+`offline/value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42` — the wide trunk at width 1
 
 _10/10 checkpoints written, 10 fully swept._
 
@@ -309,9 +311,9 @@ _10/10 checkpoints written, 10 fully swept._
 | 90,000 | 0.628 | 0.662 | 0.609 | 0.618 | 0.678 | 0.665 | 0.736 |
 | 100,000 | 0.651 | 0.647 | 0.667 | 0.688 | 0.669 | 0.683 | 0.740 |
 
-## ST-big k=16 — 30 demos
+## ST-diffusion k=16 (6/8/1024, 137.8M) — 30 demos
 
-`outer_inner/value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42` — search transformer 6/8/1024 (~75M trunk), width 16
+`outer_inner/value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42` — the wide trunk at width 16
 
 _3/10 checkpoints written, 3 fully swept._
 
@@ -335,14 +337,14 @@ _3/10 checkpoints written, 3 fully swept._
 
 | arm | demos | checkpoints | fully swept | pending |
 |---|---:|---:|---:|---|
-| ST-diffusion | 30 | 10/10 | 10 | — |
-| ST-diffusion | 100 | 10/10 | 10 | — |
-| ST-gaussian | 30 | 8/10 | 8 | — |
-| ST-gaussian | 100 | 4/10 | 4 | — |
-| ST k=1 | 30 | 10/10 | 10 | — |
-| ST k=1 | 100 | 10/10 | 10 | — |
-| UNet BC | 30 | 10/10 | 10 | — |
-| ST-big k=1 | 30 | 10/10 | 10 | — |
-| ST-big k=16 | 30 | 3/10 | 3 | — |
+| ST-diffusion k=16 (4/4/256, 17.1M) | 30 | 10/10 | 10 | — |
+| ST-diffusion k=16 (4/4/256, 17.1M) | 100 | 10/10 | 10 | — |
+| ST-gaussian k=16 (4/4/256, 14.6M) | 30 | 8/10 | 8 | — |
+| ST-gaussian k=16 (4/4/256, 14.6M) | 100 | 4/10 | 4 | — |
+| ST-diffusion k=1 (4/4/256, 17.1M) | 30 | 10/10 | 10 | — |
+| ST-diffusion k=1 (4/4/256, 17.1M) | 100 | 10/10 | 10 | — |
+| UNet BC (293.4M) | 30 | 10/10 | 10 | — |
+| ST-diffusion k=1 (6/8/1024, 137.8M) | 30 | 10/10 | 10 | — |
+| ST-diffusion k=16 (6/8/1024, 137.8M) | 30 | 3/10 | 3 | — |
 
 _No checkpoint or n is nominated as best: every evaluated cell is printed and selection is never done on the test split._

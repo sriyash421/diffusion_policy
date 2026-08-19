@@ -20,15 +20,15 @@ NS = [1, 2, 4, 8, 16, 32, 64]
 STEPS = [10000 * k for k in range(1, 11)]
 
 FAMILIES = [
-    ('ST-diffusion', 'Search transformer, diffusion head. Candidate k is conditioned on '
+    ('ST-diffusion k=16 <span class="arch">4/4/256 · 17.1M</span>', 'Search transformer, diffusion head. Candidate k is conditioned on '
                      'candidates 0..k-1 and their verifier values.',
      {30: BASE / 'outer_inner' / 'value_k16_corrupt-False_demos-30_seed-42',
       100: BASE / 'outer_inner' / 'value_k16_corrupt-False_demos-100_seed-42'}),
-    ('ST-gaussian', 'Same search procedure, Gaussian head: a candidate is one rsample '
+    ('ST-gaussian k=16 <span class="arch">4/4/256 · 14.6M</span>', 'Same search procedure, Gaussian head: a candidate is one rsample '
                     'rather than a denoising loop.',
      {30: BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-30_seed-42',
       100: BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-100_seed-42'}),
-    ('ST k=1', 'The same policy class as ST-diffusion k16, trained at width 1 — the search '
+    ('ST-diffusion k=1 <span class="arch">4/4/256 · 17.1M</span>', 'The same policy class as k=16, trained at width 1 — the search '
               'context is always empty, so n>1 is best-of-n over i.i.d. samples at a '
               'matched compute budget.',
      {30: BASE / 'offline' / 'bc_demos-30_seed-42',
@@ -39,13 +39,13 @@ FAMILIES = [
 # 100-demo budget). Same manifest, seed, protocol and n grid, so the numbers compare
 # directly with the 30-demo column.
 EXTRA = [
-    ('UNet BC', 'A different architecture: the diffusion UNet, not a transformer. No '
+    ('UNet BC <span class="arch">293.4M</span>', 'A different architecture: the diffusion UNet, not a transformer. No '
                 'search context at all, so every n is i.i.d. best-of-n.',
      BASE / 'unet_bc' / 'unetbc_demos-30_seed-42'),
-    ('ST-big k=1', 'Search transformer widened to 6/8/1024 — a ~75M trunk against the '
-                   '~3M above — trained at width 1.',
+    ('ST-diffusion k=1 <span class="arch">6/8/1024 · 137.8M</span>', 'The same search transformer widened to a 126.6M trunk against the '
+                   '5.9M above, trained at width 1.',
      BASE / 'offline' / 'value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
-    ('ST-big k=16', 'The same ~75M trunk trained at width 16. Against k=1 it isolates '
+    ('ST-diffusion k=16 <span class="arch">6/8/1024 · 137.8M</span>', 'The same wide trunk trained at width 16. Against k=1 it isolates '
                     'search from capacity.',
      BASE / 'outer_inner' / 'value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
 ]
@@ -107,6 +107,11 @@ def cell(v):
             f'{v:.2f}</td>')
 
 
+def _plain(label):
+    """Labels carry an inline <span> for the arch chip; the a11y caption wants text."""
+    return re.sub(r'<[^>]+>', '', label)
+
+
 def matrix(run, label):
     rows = read_rows(run)
     g = grid(rows)
@@ -121,7 +126,7 @@ def matrix(run, label):
         tds = ''.join(cell(g[s].get(n)) for n in NS)
         body.append(f'<tr><th scope="row">{s // 1000}k</th>{tds}</tr>')
     return (f'<table class="mx"><caption class="vh">Success rate by checkpoint and search '
-            f'width for {label}</caption><thead><tr><th scope="col" class="corner">'
+            f'width for {_plain(label)}</caption><thead><tr><th scope="col" class="corner">'
             f'<span class="vh">gradient step</span></th>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table>')
 
@@ -271,6 +276,9 @@ header h1 em{{font-style:italic; color:var(--accent);}}
 
 .arm-grid-3{{grid-template-columns:repeat(3,minmax(0,1fr));}}
 @media (max-width:1000px){{.arm-grid-3{{grid-template-columns:1fr;}}}}
+.arch{{display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:11.5px;
+  font-weight:400; color:var(--ink-3); letter-spacing:0.01em; margin-left:7px;
+  white-space:nowrap;}}
 .blurb{{margin:0; font-size:12.5px; color:var(--ink-3); line-height:1.45;}}
 .cell{{border:1px solid var(--rule); border-radius:3px; background:var(--panel);
   padding:14px 14px 12px; display:flex; flex-direction:column; gap:10px;
@@ -351,6 +359,13 @@ on the test split.</p>
     <code>eta = 0.0</code> — the deterministic ODE, no noise injected while denoising.
     The initial latent is a fresh draw per candidate, which is what makes the
     <span class="mono">n</span> candidates differ.</p>
+  </div>
+  <div class="note">
+    <h3>Arm labels</h3>
+    <p>Each label carries <code>n_layer/n_head/n_emb</code> and the whole policy's
+    parameter count, read off the checkpoints. Every arm shares the same 11.2M
+    ResNet-18 encoder, so the trunk alone is 5.9M at 4/4/256, 126.6M at 6/8/1024
+    and 282.2M for the UNet — these arms are <em>not</em> parameter-matched.</p>
   </div>
   <div class="note">
     <h3>Data</h3>

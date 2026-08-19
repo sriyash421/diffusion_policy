@@ -27,26 +27,26 @@ STEPS = [10000 * k for k in range(1, 11)]
 # (label, family, demos, run dir). The trainer is part of the path: the diffusion arm
 # amortizes its search context over an outer/inner loop, the other two do not.
 ARMS = [
-    ('ST-diffusion', 'search transformer, diffusion head', 30,
+    ('ST-diffusion k=16 (4/4/256, 17.1M)', 'search transformer, diffusion head', 30,
      BASE / 'outer_inner' / 'value_k16_corrupt-False_demos-30_seed-42'),
-    ('ST-diffusion', 'search transformer, diffusion head', 100,
+    ('ST-diffusion k=16 (4/4/256, 17.1M)', 'search transformer, diffusion head', 100,
      BASE / 'outer_inner' / 'value_k16_corrupt-False_demos-100_seed-42'),
-    ('ST-gaussian', 'search transformer, Gaussian head', 30,
+    ('ST-gaussian k=16 (4/4/256, 14.6M)', 'search transformer, Gaussian head', 30,
      BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-30_seed-42'),
-    ('ST-gaussian', 'search transformer, Gaussian head', 100,
+    ('ST-gaussian k=16 (4/4/256, 14.6M)', 'search transformer, Gaussian head', 100,
      BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-100_seed-42'),
-    ('ST k=1', 'same policy class as ST-diffusion k16, width 1 (empty search context)', 30,
+    ('ST-diffusion k=1 (4/4/256, 17.1M)', 'same class as k=16, width 1 (empty search context)', 30,
      BASE / 'offline' / 'bc_demos-30_seed-42'),
-    ('ST k=1', 'same policy class as ST-diffusion k16, width 1 (empty search context)', 100,
+    ('ST-diffusion k=1 (4/4/256, 17.1M)', 'same class as k=16, width 1 (empty search context)', 100,
      BASE / 'offline' / 'bc_demos-100_seed-42'),
     # 30-demo additions. A different ARCHITECTURE (UNet) and a ~24x wider transformer
     # trunk at both search widths, all on the same manifest/seed/protocol as the six
     # above, so they drop straight into the same tables.
-    ('UNet BC', 'diffusion UNet, i.i.d. best-of-n (no search context)', 30,
+    ('UNet BC (293.4M)', 'diffusion UNet, i.i.d. best-of-n (no search context)', 30,
      BASE / 'unet_bc' / 'unetbc_demos-30_seed-42'),
-    ('ST-big k=1', 'search transformer 6/8/1024 (~75M trunk), width 1', 30,
+    ('ST-diffusion k=1 (6/8/1024, 137.8M)', 'the wide trunk at width 1', 30,
      BASE / 'offline' / 'value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
-    ('ST-big k=16', 'search transformer 6/8/1024 (~75M trunk), width 16', 30,
+    ('ST-diffusion k=16 (6/8/1024, 137.8M)', 'the wide trunk at width 16', 30,
      BASE / 'outer_inner' / 'value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42'),
 ]
 
@@ -115,6 +115,10 @@ def main():
     L.append('Regenerate with `python scripts/build_30_100_success_doc.py`. '
              'Source of truth is each run\'s `bon_search/success_curves.jsonl`.\n')
 
+    L.append('Arm labels carry `(n_layer/n_head/n_emb, total params)` — the transformer '
+             'shape and the whole policy\'s parameter count including the shared 11.2M '
+             'ResNet-18 encoder, counted from each run\'s checkpoint. The trunk alone is '
+             '5.9M at 4/4/256, 126.6M at 6/8/1024, and 282.2M for the UNet.\n')
     L.append('## What the numbers mean\n')
     L.append('`n` is the **search width**: n action candidates are generated for the '
              'current observation, each is rolled out in a PushT simulator (the '
