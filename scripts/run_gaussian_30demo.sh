@@ -14,21 +14,23 @@ set -u
 cd "$(dirname "$0")/.."
 export DP_OUTPUT_ROOT="${DP_OUTPUT_ROOT:-/home/harine/diffusion_policy_outputs}"
 PY=/home/harine/miniconda3/envs/robodiff2/bin/python
-GRID_LOG=logs/bon_grid_30demo.log
+# wait on the n=64 EXTENSION, which itself waits on the n<=16 grid -- so this is
+# last in the chain and never contends with either sweep
+GRID_LOG=logs/bon_grid_30demo_n64.log
 mkdir -p logs
 
-if [ -f "$GRID_LOG" ] && ! grep -q 'grid done' "$GRID_LOG"; then
-  echo "=== [$(date -Is)] waiting for the grid to finish before starting ==="
+if [ -f "$GRID_LOG" ] && ! grep -q 'n64 done' "$GRID_LOG"; then
+  echo "=== [$(date -Is)] waiting for the n=64 grid extension to finish before starting ==="
   # poll the marker, not the process: the launcher can die without writing it, and in that
   # case we should still not start on top of a half-finished sweep someone may resume
-  while ! grep -q 'grid done' "$GRID_LOG"; do
-    if ! ps -eo args --no-headers | awk '/bon_grid_30demo\.sh/ && !/awk/' | grep -q .; then
-      echo "grid launcher is gone and 'grid done' was never written -- refusing to start" >&2
+  while ! grep -q 'n64 done' "$GRID_LOG"; do
+    if ! ps -eo args --no-headers | awk '/bon_grid_30demo_n64\.sh/ && !/awk/' | grep -q .; then
+      echo "n64 launcher is gone and 'n64 done' was never written -- refusing to start" >&2
       exit 1
     fi
     sleep 60
   done
-  echo "=== [$(date -Is)] grid finished, starting gaussian ==="
+  echo "=== [$(date -Is)] n=64 extension finished, starting gaussian ==="
 fi
 
 echo "=== [$(date -Is)] GAUSSIAN search (n_candidates=16, 30 demos) ==="

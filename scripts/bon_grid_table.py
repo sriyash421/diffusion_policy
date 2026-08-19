@@ -8,7 +8,7 @@ exactly. Reads whatever has completed so far, so it is safe against an in-progre
 """
 import argparse, re, sys
 
-NS = [1, 2, 4, 8, 16]
+NS = [1, 2, 4, 8, 16, 32, 64]
 ARMS = (('search', 'ST-diffusion-k16'), ('bc', 'BC'))
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
