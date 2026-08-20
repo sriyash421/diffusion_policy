@@ -26,7 +26,9 @@ mkdir -p logs
 if [ -f "$N64_LOG" ] && ! grep -q 'n64 done' "$N64_LOG"; then
   echo "=== [$(date -Is)] waiting for the n=32,64 sweep to finish ==="
   while ! grep -q 'n64 done' "$N64_LOG"; do
-    if ! ps -eo args --no-headers | awk '/bon_grid_30demo_n64\.sh/ && !/awk/' | grep -q .; then
+    # either the main sweep or the finisher that fills its last cell may be the writer
+    if ! ps -eo args --no-headers \
+         | awk '/bon_grid_30demo_n64\.sh|finish_n64_then_big\.sh/ && !/awk/' | grep -q .; then
       echo "n64 launcher gone without writing 'n64 done' -- refusing to start" >&2; exit 1
     fi
     sleep 60
