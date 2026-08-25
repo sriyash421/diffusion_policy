@@ -13,8 +13,8 @@ three things differ, so the maze path is left untouched:
 3. Search context (``search_context``) -- what feedback each already-generated candidate
    contributes to the context the next candidate is conditioned on:
 
-   * ``'value'``   (default): the verifier scalar ``-mean_kp dist(goal, achieved)``.
-     This is the original behaviour.
+   * ``'value'``   (default): the verifier scalar, whichever of ``VALUE_FNS`` the run
+     selected via ``verifier_value`` (see pusht_verifier). This is the original behaviour.
    * ``'subgoal'`` : the **rendered subgoal observation** the chunk lands on -- image plus
      the low_dim keys, pushed through this policy's own obs encoder -- i.e. the candidate
      reports back "here is what the world looks like afterwards", in the same feature
@@ -45,8 +45,11 @@ import torch
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.policy.diffusion_transformer_search_policy import (
     DiffusionTransformerSearchPolicy)
-from diffusion_policy.env.pusht.pusht_verifier import PushTVerifier
-from diffusion_policy.env.pusht.feedback_util import N_KEYPOINTS
+from diffusion_policy.env.pusht.pusht_verifier import (
+    PushTVerifier, VALUE_FNS, DEFAULT_VALUE_FN, VERIFIER_VALUES,
+    CROSS_CANDIDATE_VALUES, base_value_fn, value_terms_from_state,
+    T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE)
+from diffusion_policy.env.pusht.feedback_util import GOAL_KEYPOINTS, N_KEYPOINTS
 
 # obs keys that ride in the obs dict but must never reach the encoder/normalizer
 _NON_ENCODED_OBS_KEYS = ('attention_mask',)
@@ -72,13 +75,72 @@ class PushTSearchMixin:
     Requires of the host policy: ``normalizer``, ``obs_encoder``, ``n_obs_steps``,
     ``n_action_steps``, ``kwargs``, and ``_encode_obs`` (normalized obs dict -> features).
     """
+
+    # Does this policy feed the verifier scalar back into the MODEL as search context?
+    # True for the ST and Gaussian arms; PushTUNetSearchPolicy overrides it to False.
+    #
+    # It cannot be inferred from `search_context`: the UNet arm declares 'value' like the
+    # others and then discards it (see its predict_action docstring). This attribute is the
+    # only honest discriminator, and it gates the cross-candidate values, whose statistic
+    # over all n candidates does not exist at the time a causal context is built.
+    consumes_search_context = True
+
+    def _check_cross_candidate_value(self, mode):
+        """A cross-candidate value cannot coexist with a consumed search context.
+
+        The context is CAUSAL: search_candidates generates candidate k conditioned on
+        `values[:, :k]`, so when candidate k is scored the later candidates do not exist
+        yet and no statistic over all n is available to put in its context. Approximating
+        it with the base value would condition the model on a different ranking than the
+        selector applies -- the exact failure _normalize_value's docstring warns about.
+
+        So this raises rather than silently approximating. To relax it later, give the
+        model a CAUSAL context -- z-scored over `values[:, :k]` rather than all n -- and
+        gate on that instead.
+        """
+        if mode in CROSS_CANDIDATE_VALUES and self.consumes_search_context:
+            raise ValueError(
+                f'{type(self).__name__} feeds the verifier scalar back into the model as '
+                f'search context, and that context is causal: candidate k is conditioned '
+                f'on candidates < k, so a statistic over all n candidates does not exist '
+                f'when k is scored. {mode!r} is therefore selection-only for now. Rank '
+                f'with {base_value_fn(mode)!r}, or give this policy a prefix-standardized '
+                f'context first.')
+
+    def _fuses_scores(self) -> bool:
+        return self._verifier_value_mode(self.kwargs) in CROSS_CANDIDATE_VALUES
+
+    def _fuse_scores(self, scores, terms):
+        """Re-rank the whole candidate set under a cross-candidate value. (B,n),(B,n,K)->(B,n)."""
+        mode = self._verifier_value_mode(self.kwargs)
+        # re-checked here, not only at construction: eval_search_pusht.py's
+        # --verifier-value override swaps the value on an ALREADY-BUILT policy.
+        self._check_cross_candidate_value(mode)
+        return CROSS_CANDIDATE_VALUES[mode](terms)
+
     def _build_verifier(self, **kwargs):
+        self._check_cross_candidate_value(self._verifier_value_mode(kwargs))
         return PushTVerifier(
             n_envs=kwargs.get('verifier_n_envs', 32),
             legacy=kwargs.get('verifier_legacy', False),
             use_async=kwargs.get('verifier_use_async', True),
             verifier_steps=kwargs.get('verifier_steps', None),
+            value_fn=self._verifier_value_mode(kwargs),
         )
+
+    @staticmethod
+    def _verifier_value_mode(kwargs) -> str:
+        """Which value the verifier scores with -- a key of ``VALUE_FNS``.
+
+        Read from kwargs rather than off the built verifier because ``_normalize_value``
+        needs it too, and on the UNet arm the verifier is built lazily (so asking it would
+        fork the sim pool). The default is the pre-cutover value; see
+        ``pusht_verifier.DEFAULT_VALUE_FN`` for why that direction.
+        """
+        mode = kwargs.get('verifier_value', DEFAULT_VALUE_FN) or DEFAULT_VALUE_FN
+        assert mode in VERIFIER_VALUES, \
+            f'verifier_value must be one of {sorted(VERIFIER_VALUES)}, got {mode!r}'
+        return mode
 
     @staticmethod
     def _search_context_mode(kwargs) -> str:
@@ -125,14 +187,32 @@ class PushTSearchMixin:
     def _normalize_value(self, state: torch.Tensor) -> torch.Tensor:
         """The verifier scalar rescaled onto the fitted feedback scale -> (B,).
 
-        The raw scalar is ``-mean_kp ||feedback||`` in pixels (~0 to -300), which would sit
-        about two orders of magnitude above the normalized state / subgoal embedding it is
-        concatenated with, dominating ``action_value_emb``'s input.
+        MIRRORS ``verifier.value_fn`` and must branch with it -- the two are the same
+        scalar at two scales, and if they disagree the model is conditioned on a different
+        ranking than the selector applies.
 
-        It is recomputed from SCALE-normalized feedback so the fitted statistics do the
-        rescaling (no magic constant). The normalizer's *offset* is deliberately omitted:
-        the value's defining property is that it is 0 exactly at the goal, and an offset
-        would make ||feedback|| nonzero there and destroy that.
+        Under ``armTn`` the per-term normalization is already done, so the fitted PIXEL
+        scale does not apply; that branch divides by ``ARM_TN_CONTEXT_SCALE`` instead to
+        reach O(1). The other two are raw pixels -- ~0 to -800 (``armT``), ~0 to -300 (``t_goal``) -- which would sit
+        orders of magnitude above the normalized state / subgoal embedding they are
+        concatenated with, dominating ``action_value_emb``'s input, so those are rescaled.
+
+        This RECOMPUTES the verifier's value in torch from the reached state rather than
+        reading the scalar, so it must mirror ``PushTVerifier.rollout`` exactly -- which it
+        can, because both terms are functions of ``[agent_pos, feedback]`` alone
+        (``achieved_kp = GOAL_KEYPOINTS - feedback``, an exact identity; no pose fit).
+
+        ONE shared scalar factor rescales the whole sum, deliberately. Scaling the two
+        terms by different factors (e.g. the `feedback` scale for one and the `agent_pos`
+        scale for the other) would reweight them against each other, so this context scalar
+        would no longer be a monotone function of the raw scalar `argmax` ranks on -- the
+        model and the selector would disagree about which candidate is better. With one
+        factor ``context == raw * s``: ordering preserved, still exactly 0 at "T on goal,
+        arm at the T's centre", still O(1).
+
+        The factor is the MEAN of the fitted `feedback` scale, so the fitted statistics
+        still do the rescaling (no magic constant). Its *offset* stays omitted: the value's
+        defining property is that it is 0 at the goal, and an offset would destroy that.
 
         Only the CONTEXT copy is rescaled -- the raw scalar still ranks candidates, so
         predict_action_best and the train_action_value* metrics are unchanged.
@@ -140,8 +220,37 @@ class PushTSearchMixin:
         agent_dim = PushTVerifier.AGENT_DIM
         feedback = state[..., agent_dim:]              # (B, 2*N_KEYPOINTS), raw pixels
         scale = self.normalizer['feedback'].params_dict['scale'].to(feedback)
-        kp = (feedback * scale).reshape(*feedback.shape[:-1], N_KEYPOINTS, 2)
-        return -kp.norm(dim=-1).mean(dim=-1)           # (B,)
+
+        base = base_value_fn(self._verifier_value_mode(self.kwargs))
+        if base == 't_goal':
+            # THE PRE-2026-08-19 BODY, VERBATIM. Not re-derived in the armT form below with
+            # the arm term dropped: a checkpoint from that era was trained on the context
+            # this exact expression produced (per-dim scale applied BEFORE the norm, which
+            # warps each keypoint's contribution by its own coordinate range), so anything
+            # that changes the number -- however defensibly -- makes the eval unfaithful.
+            kp = (feedback * scale).reshape(*feedback.shape[:-1], N_KEYPOINTS, 2)
+            return -kp.norm(dim=-1).mean(dim=-1)       # (B,)
+
+        # one shared torch mirror of the two numpy distance fns; also used by
+        # _score_candidates to build the per-candidate `terms` a cross-candidate value fuses
+        t_goal, arm_t = value_terms_from_state(state).unbind(dim=-1)  # (B,), (B,) px
+
+        if base == 'armTn':
+            # Per-term normalization is already done by value_arm_t_norm, so the fitted
+            # feedback scale (a PIXEL scale) does not apply here -- but spread-normalized
+            # units are not O(1) either: the value runs to about -32. Divide by the measured
+            # dataset mean instead, which lands the context copy at ~-1 and, being a positive
+            # constant, leaves the ranking identical to the raw scalar.
+            return -(t_goal / T_GOAL_SPREAD
+                     + arm_t / ARM_T_SPREAD) / ARM_TN_CONTEXT_SCALE  # (B,)
+
+        # 'armT': the raw pixel sum, rescaled by one shared fitted factor.
+        # Asserted, not left as a bare fallthrough: without this a NEWLY added value would
+        # silently inherit the RETIRED armT body just by not matching a branch above.
+        assert base == 'armT', \
+            f'_normalize_value has no branch for {base!r}; add one rather than letting it ' \
+            f'fall through to the retired armT rescale.'
+        return -(t_goal + arm_t) * scale.mean()        # (B,)
 
     def _encode_subgoal(self, image: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         """Encode the reached observation -> (B, obs_feature_dim).
@@ -202,7 +311,13 @@ class PushTSearchMixin:
         if want_subgoals:
             # logging only -- never fed back into the search
             subgoal = {'image': image, 'value': value}
-        return context, value, subgoal
+
+        # The undecomposed components, for a CROSS-CANDIDATE value to re-weight once all n
+        # candidates exist (SearchProcedureMixin._fuse_scores). Derived from `state`, which
+        # rollout already sliced to the real rows, so the sim pool's tail-chunk padding can
+        # never reach a statistic taken across candidates. Costs ~20 flops per candidate.
+        terms = value_terms_from_state(state)        # (B, 2) raw px
+        return context, value, subgoal, terms
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         # Filtering happens here rather than in encode_obs_cond because the search loop

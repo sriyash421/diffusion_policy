@@ -33,6 +33,7 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -42,6 +43,11 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
+        # The UNet BC arm (train_pusht_unet_bc.yaml) trains through THIS workspace, not
+        # TrainMLPImageWorkspace, so without this call a `verifier_value` typo or omission
+        # would train against the default t_goal while the run dir said ver-armTn. No-op
+        # for the non-PushT configs, which declare no `verifier_tag`.
+        check_verifier_value(cfg)
 
         # set seed
         seed = cfg.training.seed
@@ -367,7 +373,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         # Stop on the exact step. Placed AFTER the checkpoint and rollout
                         # blocks above so the final step is still saved, and it leaves the
                         # end-of-epoch block below to run once on the truncated epoch -- so
-                        # a capped run still ends with a val_loss and a topk checkpoint.
+                        # a capped run still ends with a val_loss and a final rollout.
                         if max_gradient_steps is not None \
                             and self.global_step >= max_gradient_steps:
                             stop_training = True
@@ -472,8 +478,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     self.global_step += 1
                 self.epoch += 1
 
-                # The batch loop already ran its end-of-epoch validation, sampling and topk
-                # checkpoint above, so the run ends fully evaluated rather than mid-epoch.
+                # The batch loop already ran its end-of-epoch validation and sampling
+                # above, so the run ends fully evaluated rather than mid-epoch.
                 if stop_training:
                     print(f'Reached max_gradient_steps={max_gradient_steps}, stopping.')
                     break

@@ -44,7 +44,7 @@ context_decay: 0.9
 
 # K and the decay are both part of the run identity: they change the objective, and
 # `training.resume` locates latest.ckpt by this path, so two settings must never share a dir.
-run_name: ${arm}_k${n_candidates}_cd${context_decay}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_cd${context_decay}_ver-${verifier_tag}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
 logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass", "context_decay"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "subgoal_env", "final_pass", "context_decay"]

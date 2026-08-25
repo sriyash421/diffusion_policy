@@ -9,7 +9,7 @@ _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainD
 obs_as_global_cond: True
 
 trainer: unet_bc
-run_name: unetbc_demos-${n_demos}_seed-${training.seed}
+run_name: unetbc_ver-${verifier_tag}_demos-${n_demos}_seed-${training.seed}
 
 task:
   env_runner:
@@ -74,6 +74,9 @@ policy:
   verifier_legacy: False
   verifier_use_async: True
   verifier_steps: null
+  # Which value the verifier scores with -- ${verifier_tag}, so the run DIRECTORY and
+  # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
+  verifier_value: ${verifier_tag}
   obs_as_global_cond: ${obs_as_global_cond}
   # 256, NOT the upstream UNet recipe's 128 -- matched to the search transformer's `n_emb`,
   # which is the width its diffusion-timestep embedding is built at

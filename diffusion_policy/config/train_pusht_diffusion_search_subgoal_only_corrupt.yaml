@@ -24,4 +24,4 @@ corrupt_obs_eval: False
 arm: subgoal-only
 
 logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass", "corrupt_obs"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "subgoal_env", "final_pass", "corrupt_obs"]

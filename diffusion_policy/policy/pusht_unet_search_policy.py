@@ -28,10 +28,18 @@ _UNBOUNDED = 1 << 20
 
 
 class PushTUNetSearchPolicy(PushTSearchMixin, SearchProcedureMixin, DiffusionUnetImagePolicy):
+    # THE ONLY ARM where this is False: predict_action below takes no context input and
+    # drops `values` on the floor, so the verifier scalar never reaches the model. That is
+    # what makes the cross-candidate verifier values (armTd) usable here and nowhere else --
+    # they have no per-candidate value to put in a causal context. See
+    # PushTSearchMixin._check_cross_candidate_value.
+    consumes_search_context = False
+
     def __init__(self, *args, **kwargs):
         search_kwargs = {k: kwargs.pop(k) for k in (
             'selection', 'selection_temperature', 'selection_seed', 'search_context',
             'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
+            'verifier_value',
         ) if k in kwargs}
         super().__init__(*args, **kwargs)
         # NOT self.kwargs -- DiffusionUnetImagePolicy already owns that name for the
@@ -59,6 +67,17 @@ class PushTUNetSearchPolicy(PushTSearchMixin, SearchProcedureMixin, DiffusionUne
         """Always 'value'. Overridden because the mixin reads it off ``self.kwargs``,
         which on this class is the UNet's scheduler kwargs, not the search knobs."""
         return 'value'
+
+    def _verifier_value_mode(self, kwargs=None) -> str:
+        """Which verifier value to score with, from the SEARCH kwargs.
+
+        Overridden for the same reason as _search_context_mode above: the mixin reads this
+        off ``self.kwargs``, which on this class is the DDIM scheduler kwargs. Without the
+        override `_normalize_value` -- which `_score_candidates` calls in every mode, so it
+        is live here -- would silently fall back to the default and could disagree with the
+        verifier this policy actually built.
+        """
+        return PushTSearchMixin._verifier_value_mode(self._search_kwargs)
 
     def _encode_obs_features(self, obs_dict):
         """No-op: predict_action below ignores the cached features and re-encodes.

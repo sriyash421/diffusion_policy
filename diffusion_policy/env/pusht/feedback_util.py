@@ -7,6 +7,11 @@ block pose equals the goal pose.
 
 Kept import-light so the dataset can produce the exact same signal from the stored
 ``block_pos`` that the live env wrapper produces from its pymunk body.
+
+It also owns the scalar distances derived from that signal, so the verifier, the env
+runner's logged metrics and the offline analysis scripts all read one definition:
+``t_goal_distance`` (T-to-goal, the task-progress term) and ``arm_to_t_distance``
+(arm-to-T, the approach term). The verifier value is the negated sum of the two.
 """
 import numpy as np
 
@@ -46,6 +51,65 @@ def keypoints_at_pose(pose):
     kx = cos * vx - sin * vy + x[..., None]   # (..., N)
     ky = sin * vx + cos * vy + y[..., None]
     return np.stack([kx, ky], axis=-1)         # (..., N, 2)
+
+
+# The goal T's keypoints. Constant, so it is hoisted rather than recomputed at every call
+# site; every function below is defined relative to it.
+GOAL_KEYPOINTS = keypoints_at_pose(GOAL_POSE)   # (N_KEYPOINTS, 2)
+
+
+def keypoints_from_feedback(feedback):
+    """(..., FEEDBACK_DIM) -> (..., N_KEYPOINTS, 2) achieved T keypoints.
+
+    ``feedback = goal_kp - achieved_kp`` by definition, so ``achieved_kp = goal_kp -
+    feedback`` -- an exact identity, no pose fit needed (unlike ``block_pose_from_feedback``,
+    which recovers the *pose* and needs a Kabsch solve). Everything that only needs the
+    achieved geometry should come through here.
+    """
+    feedback = np.asarray(feedback, dtype=np.float32)
+    return GOAL_KEYPOINTS - feedback.reshape(*feedback.shape[:-1], N_KEYPOINTS, 2)
+
+
+def t_goal_distance(feedback):
+    """Mean per-keypoint distance of the achieved T from the goal T, in pixels.
+
+    Args:
+        feedback: (..., FEEDBACK_DIM) goal-vs-achieved keypoint displacement.
+    Returns:
+        (...) mean over keypoints of the per-keypoint EUCLIDEAN distance (not squared).
+        ``0`` iff the block is at the goal pose. This is the task-progress half of the
+        verifier value (see pusht_verifier).
+    """
+    feedback = np.asarray(feedback, dtype=np.float32)
+    disp = feedback.reshape(*feedback.shape[:-1], N_KEYPOINTS, 2)
+    return np.linalg.norm(disp, axis=-1).mean(axis=-1)
+
+
+def t_center_from_feedback(feedback):
+    """(..., FEEDBACK_DIM) -> (..., 2) centre of the achieved T, in pixels.
+
+    The centre is the CENTROID of the achieved keypoints, not the pymunk body origin: the
+    body origin sits at the bar/stem junction (block-local (0, 0)) while the vertex
+    centroid is at block-local (0, 45), nearer the middle of the shape. Defining it off
+    ``feedback`` -- rather than off the block pose -- is what lets the torch-side rescale
+    in PushTSearchMixin._normalize_value mirror this exactly from the same inputs.
+    """
+    return keypoints_from_feedback(feedback).mean(axis=-2)
+
+
+def arm_to_t_distance(agent_pos, feedback):
+    """Distance from the arm (end-effector) to the centre of the achieved T, in pixels.
+
+    Args:
+        agent_pos: (..., 2) arm position in the 512-px env frame.
+        feedback: (..., FEEDBACK_DIM) goal-vs-achieved keypoint displacement.
+    Returns:
+        (...) Euclidean distance. This is the approach half of the verifier value: it is
+        the only term that varies while the arm has not yet reached the block, which is
+        the whole reason it exists (see pusht_verifier).
+    """
+    agent_pos = np.asarray(agent_pos, dtype=np.float32)
+    return np.linalg.norm(agent_pos - t_center_from_feedback(feedback), axis=-1)
 
 
 def compute_feedback_from_pose(block_pose3, goal_pose=GOAL_POSE):

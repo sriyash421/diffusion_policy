@@ -8,8 +8,19 @@ Differs from ``PushTImageRunner`` in two ways:
    different signature (``obs_dict, verifier, n_actions``) than the standard one.
 
 Metrics per split: ``mean_score`` (mean max reward), ``success_rate`` (fraction with max
-coverage >= threshold, i.e. max reward >= 1.0), and ``T_distance`` (final-step mean
-per-keypoint distance of the achieved T from the goal T, read from ``obs['feedback']``).
+coverage >= threshold, i.e. max reward >= 1.0), and the final-step distances read from
+``obs['agent_pos']`` / ``obs['feedback']``:
+
+* ``T_goal_distance`` -- mean per-keypoint distance of the achieved T from the goal T.
+  (Logged as ``T_distance`` before 2026-08-19; renamed when the verifier value gained the
+  approach term, so a panel cannot silently mix the two eras.)
+* ``arm_T_distance`` -- distance from the arm to the centre of the achieved T.
+* ``verifier_distance`` -- their sum, i.e. exactly ``-value`` under the ``armT`` verifier
+  (under ``t_goal`` the value is ``-T_goal_distance`` alone; see pusht_verifier.VALUE_FNS).
+
+All three are logged in BOTH verifier modes -- they are facts about the final state, not
+about the scoring rule -- so the components stay comparable across the 2026-08-19 cutover
+even though the value built from them does not.
 
 The best-of-N-search *success curve* (n=1..64) is a separate, test-only artifact produced
 by ``eval_search_pusht.py`` -- not here.
@@ -26,7 +37,8 @@ import wandb.sdk.data_types.video as wv
 
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
-from diffusion_policy.env.pusht.feedback_util import N_KEYPOINTS
+from diffusion_policy.env.pusht.feedback_util import (
+    t_goal_distance, arm_to_t_distance)
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import (
@@ -38,12 +50,6 @@ from diffusion_policy.dataset.pusht_image_dataset import (
     get_split_masks, get_split_masks_3way, get_episode_init_states,
     load_split_manifest, masks_from_manifest)
 from diffusion_policy.env_runner.pusht_image_runner import PushTImageRunner
-
-
-def _feedback_to_tdistance(feedback):
-    """(..., 16) goal-vs-achieved keypoint displacement -> (...) mean per-keypoint dist."""
-    disp = np.asarray(feedback).reshape(*feedback.shape[:-1], N_KEYPOINTS, 2)
-    return np.linalg.norm(disp, axis=-1).mean(axis=-1)
 
 
 class PushTSearchImageRunner(PushTImageRunner):
@@ -198,7 +204,9 @@ class PushTSearchImageRunner(PushTImageRunner):
 
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        all_tdistance = [np.nan] * n_inits
+        # the two halves of the verifier value, at the final step of each episode
+        all_t_goal_dist = [np.nan] * n_inits
+        all_arm_t_dist = [np.nan] * n_inits
 
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
@@ -248,16 +256,22 @@ class PushTSearchImageRunner(PushTImageRunner):
 
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
-            # final-step feedback -> T-distance for the active envs in this chunk
-            final_feedback = np.asarray(last_obs['feedback'])[this_local_slice, -1]  # (m, 16)
-            all_tdistance[this_global_slice] = list(_feedback_to_tdistance(final_feedback))
+            # final-step obs -> the verifier's two distance terms, for the active envs in
+            # this chunk. Same functions the verifier scores candidates with, so these are
+            # directly comparable to the scores argmax ranked on.
+            final_feedback = np.asarray(last_obs['feedback'])[this_local_slice, -1]   # (m, 16)
+            final_agent = np.asarray(last_obs['agent_pos'])[this_local_slice, -1]     # (m, 2)
+            all_t_goal_dist[this_global_slice] = list(t_goal_distance(final_feedback))
+            all_arm_t_dist[this_global_slice] = list(
+                arm_to_t_distance(final_agent, final_feedback))
 
         _ = env.reset()
 
         # per-split aggregation
         max_rewards = collections.defaultdict(list)
         successes = collections.defaultdict(list)
-        tdistances = collections.defaultdict(list)
+        t_goal_dists = collections.defaultdict(list)
+        arm_t_dists = collections.defaultdict(list)
         log_data = dict()
         for i in range(n_inits):
             episode_idx = self.env_seeds[i]
@@ -265,7 +279,8 @@ class PushTSearchImageRunner(PushTImageRunner):
             max_reward = float(np.max(all_rewards[i]))
             max_rewards[prefix].append(max_reward)
             successes[prefix].append(1.0 if max_reward >= 1.0 else 0.0)
-            tdistances[prefix].append(all_tdistance[i])
+            t_goal_dists[prefix].append(all_t_goal_dist[i])
+            arm_t_dists[prefix].append(all_arm_t_dist[i])
             log_data[prefix + f'sim_max_reward_ep{episode_idx}'] = max_reward
 
         # tile the first n_vis rollouts (per split) side-by-side into one video
@@ -284,6 +299,11 @@ class PushTSearchImageRunner(PushTImageRunner):
         for prefix in max_rewards:
             log_data[prefix + 'mean_score'] = float(np.mean(max_rewards[prefix]))
             log_data[prefix + 'success_rate'] = float(np.mean(successes[prefix]))
-            log_data[prefix + 'T_distance'] = float(np.mean(tdistances[prefix]))
+            t_goal = float(np.mean(t_goal_dists[prefix]))
+            arm_t = float(np.mean(arm_t_dists[prefix]))
+            log_data[prefix + 'T_goal_distance'] = t_goal
+            log_data[prefix + 'arm_T_distance'] = arm_t
+            # == -value under the armT verifier; -T_goal_distance alone under t_goal
+            log_data[prefix + 'verifier_distance'] = t_goal + arm_t
 
         return log_data

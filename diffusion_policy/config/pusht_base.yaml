@@ -43,6 +43,40 @@ exp_name: pusht_search
 # and are reachable with `n_demos=100`, but nothing is trained at them by default.
 n_demos: 30
 
+# Which verifier value the run is trained/evaluated against. Both a policy knob AND the run
+# IDENTITY: it selects the scoring rule in the code and names the run, so runs from either
+# side of the 2026-08-19 change are distinguishable on sight in the wandb name, the wandb
+# tags and the output directory:
+#
+#   t_goal   value = -(T-to-goal distance)                        <- pre-2026-08-19
+#   armT     value = -(T-to-goal + arm-to-T)                      <- superseded, see below
+#   armTn    value = -(T-to-goal/13.6 + arm-to-T/52.1)            <- current
+#   armTd    same, but each term divided by the spread measured across the n candidates
+#            of THAT control step instead of the two constants.  <- EVAL-ONLY, never a
+#            verifier_tag: it is defined only over a candidate SET, so it has no
+#            per-candidate scalar to train against and cannot feed the search context
+#            (which is causal -- candidate k is conditioned on candidates < k, so a
+#            statistic over all n does not exist yet when k is scored). Train under
+#            armTn; select with `eval_search_pusht.py --verifier-value armTd`.
+#
+# armT summed the two terms RAW. Their marginal scales are comparable (80 vs 91 px), but the
+# spread that argmax actually sees -- across candidates within one control step -- is not
+# (13.6 vs 52.1), so the arm term outvoted task progress ~4:1 and cost the UNet BC arm its
+# best-of-n gain (0.460 -> 0.060 at n=8). armTn divides each term by its own within-step
+# spread, keeping the pre-contact tie-break the arm term was added for without letting it
+# override real progress. See pusht_verifier.value_arm_t_norm.
+#
+# These are the keys of pusht_verifier.VALUE_FNS, and each config interpolates this into
+# `policy.verifier_value`, so the tag IS the scoring rule -- not a label alongside it. The
+# workspace asserts the two agree. Directories from before the cutover carry no `ver-`
+# component at all; they were trained under `t_goal`.
+#
+# The approach term is what makes the value vary before the arm touches the block; without it
+# every candidate scored identically there and argmax ranked at random. Runs across the two
+# are NOT comparable, which is exactly why this is in run_name -- a new run must never resume
+# or merge into a pre-change directory.
+verifier_tag: armTn
+
 # Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
 # run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
 # own. Putting the whole run dir there -- not just a symlinked checkpoints/ -- means wandb
@@ -110,7 +144,7 @@ training:
   # that could reach the budget: an epoch is ceil(n_windows/batch_size) steps, so at 29 demos
   # it is ~110 steps and the old `num_epochs: 1000` was only ~110k -- close enough to bind
   # first and silently become the real limit. Kept rather than removed because the loop is
-  # `range(num_epochs)` and self.epoch feeds the topk format_str.
+  # `range(num_epochs)`.
   num_epochs: 100000
   # 100k. The old 20k cap dates from the pre-augmentation runs that overfit by ~3k steps;
   # with crop augmentation and EMA in place val_loss keeps improving much longer. Matches
@@ -180,26 +214,30 @@ logging:
   project: pushT_diffusion_search
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
-  tags: ["${name}", "${task_name}", "${exp_name}"]
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_ver-${verifier_tag}
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}"]
   id: null
   group: null
 
 checkpoint:
-  # Keep the k best-by-val_loss checkpoints. This is a SAFETY NET, not the final selector:
-  # the previous run's val_loss bottomed at step ~3k and then rose 3x while training
-  # continued to 100k, and because nothing tracked it the good model was overwritten and
-  # every evaluated checkpoint came from the overfit regime.
+  # NOTHING HERE NOMINATES A BEST CHECKPOINT. Every `checkpoints/step_*.ckpt` written at
+  # `checkpoint_every` is retained permanently and none is ever deleted, so the full
+  # training trajectory stays on disk and any step can be re-evaluated after the fact.
   #
-  # Any checkpoint choice should come from real eval, not from val_loss -- eval_search_pusht.py
-  # --watch evaluates each checkpoints/step_*.ckpt into bon_search/success_curves.jsonl, and
-  # you pick from that curve. topk just guarantees the low-val_loss weights still exist by the
-  # time that runs.
-  topk:
-    monitor_key: val_loss
-    mode: min
-    k: 5
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.4f}.ckpt'
+  # Checkpoint choice comes from real eval, never from val_loss: `eval_search_pusht.py
+  # --watch` evaluates each step_*.ckpt into bon_search/success_curves.jsonl, and you pick
+  # from that curve with the step named explicitly.
+  #
+  # The `topk` block that used to sit here (k=5 by min val_loss) was removed 2026-08-19. It
+  # was wrong twice over. It picked on val_loss, which is not the metric anything is chosen
+  # on; and TopKCheckpointManager keeps its ranking in an in-memory dict that
+  # save_checkpoint never serializes, so after every resume the map restarted empty -- the
+  # first k post-resume epochs were saved unconditionally whatever their value, and the
+  # pre-resume files were no longer deletion candidates. `k: 5` was not held (one run
+  # carried 10) and the retained set was not the top-5 by val_loss either. It also cost
+  # 48 GB across the output tree that no eval path ever read.
+  #
+  # save_last_ckpt writes checkpoints/latest.ckpt, which `training.resume` reads. Keep it.
   save_last_ckpt: True
   save_last_snapshot: False
 

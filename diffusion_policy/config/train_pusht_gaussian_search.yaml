@@ -26,7 +26,7 @@ corrupt_obs_eval: null
 selection: argmax                # {argmax, softmax, final_pass}
 arm: gaussian
 n_candidates: 16
-run_name: ${arm}_k${n_candidates}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
 policy:
   _target_: diffusion_policy.policy.pusht_gaussian_search_policy.PushTGaussianSearchPolicy
@@ -70,6 +70,9 @@ policy:
   verifier_legacy: False
   verifier_use_async: True
   verifier_steps: null
+  # Which value the verifier scores with -- ${verifier_tag}, so the run DIRECTORY and
+  # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
+  verifier_value: ${verifier_tag}
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "gaussian", "demos-${n_demos}"]

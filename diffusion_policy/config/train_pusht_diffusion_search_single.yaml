@@ -36,4 +36,4 @@ trainer: offline
 _target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
 
 logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "single_step"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "single_step"]

@@ -60,4 +60,4 @@ slot_weight_decay: 0.9
 # rollout_every_steps: 4000, which predated the 10k eval grid.
 
 logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_env", "final_pass"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "subgoal_env", "final_pass"]
