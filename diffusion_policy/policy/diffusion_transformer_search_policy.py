@@ -599,11 +599,12 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         #                   'final_pass' cannot isolate (that one also changes WHO
         #                   synthesizes the action).
         self._init_selection(**kwargs)
-        # Geometric decay of the per-candidate-slot loss weight, counting BACK from the
-        # last slot: w_k ∝ decay^(K-1-k), so the full-context slot carries the most weight
-        # and each earlier slot a factor `decay` less (see _slot_weights / _compute_loss).
-        # 1.0 == uniform == the unweighted objective, bit-identical.
-        self._init_slot_weighting(kwargs.get('slot_weight_decay', False))
+        # How much gradient each candidate slot's loss term gets (_slot_weights) and which
+        # norm that term uses (_slot_norm_alphas). Both default OFF -- uniform weights, MSE
+        # everywhere -- which is bit-identical to the objective that predates them.
+        self._init_slot_weighting(kwargs.get('slot_weight_decay', False),
+                                  kwargs.get('slot_weights', None))
+        self._init_slot_loss_norm(kwargs.get('slot_loss_norm', None))
 
         self.model = SearchTransformerForDiffusion(
             action_dim=action_dim,
@@ -646,10 +647,12 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
     # ablation arm ends up secretly identical to its sibling.
     _KNOWN_KWARGS = frozenset({
         'max_actions', 'search_context', 'selection', 'selection_temperature',
-        'slot_weight_decay', 'context_decay', 'corrupt_obs_eval', 'scheduler_step_kwargs',
+        'slot_weight_decay', 'slot_weights', 'slot_loss_norm', 'context_decay',
+        'corrupt_obs_eval',
+        'scheduler_step_kwargs',
         # PushT verifier
         'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
-        'render_size',
+        'verifier_value', 'render_size',
         # maze verifier
         'maze_path', 'device', 'verifier_noise',
     })
@@ -846,48 +849,8 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
                 values=values,
             )
 
-    def _slot_weights(self, device, dtype) -> Optional[torch.Tensor]:
-        """Per-candidate-slot loss weights, or None for the uniform (unweighted) path.
-
-        WHAT THE SLOTS ARE. One forward decodes all K = max_actions candidate slots, and
-        every one of them is trained on the SAME target -- the expert action. What differs
-        is how much context each is allowed to see: the staircase memory mask lets slot k
-        attend to exactly the first k context candidates. So the model is fitting a family
-        of conditionals at once, from "no context" (slot 0, the k=1 case) up to "K-1 scored
-        candidates" (slot K-1).
-
-        WHY WEIGHT THEM. Under ``selection: final_pass`` the executed action is a sample
-        drawn with a FULL context, so slot K-1 is the deployment condition and the earlier
-        slots exist to manufacture the context it reads. Averaging flat spends 1 - 1/K of
-        the gradient on conditionals that arm never executes.
-
-        THE SHAPE. Geometric decay counting back from the last slot,
-        ``w_k ∝ decay^(K-1-k)``: weight rises monotonically with context length, each step
-        back costing a constant factor. Monotone rather than last-slot-only because the
-        earlier slots are not disposable -- they generate the candidates slot K-1 reads, so
-        starving them degrades its input. Geometric rather than linear because the thing
-        being traded off (how far a slot's conditioning is from deployment) is multiplicative
-        in the number of missing context entries, not additive.
-
-        THE NORMALIZATION. Weights are scaled to mean 1, i.e. they sum to K exactly as the
-        uniform weights do. Three things downstream read the loss MAGNITUDE --
-        ``gradient_clip_norm`` (a uniformly larger loss clips more often), the effective
-        step size under a shared ``lr``, and ``val_loss``, which the topk selector monitors
-        and the reports compare across arms. Without this, changing the decay would silently
-        change all three and the ablation would differ in scale as well as in mechanism.
-
-        Note the model has ONE set of weights shared by every slot -- this reweights which
-        conditioning regime those shared weights are tuned for, it does not give the final
-        slot parameters of its own.
-        """
-        # None == disabled (`slot_weight_decay: False`); width 1 has a single slot to weight
-        if self.slot_weight_decay is None or self.max_actions == 1:
-            return None
-        k = torch.arange(self.max_actions, device=device, dtype=dtype)
-        w = self.slot_weight_decay ** (self.max_actions - 1 - k)
-        return w / w.mean()
-
-    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False,
+                     slot_weighting=True):
         """Denoising loss for the expert action, conditioned on a best-of-n search context.
 
         ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the
@@ -899,11 +862,17 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         ``return_aux`` additionally returns the exact inputs the denoiser was called with,
         so a frozen snapshot of this policy can be re-run on identical inputs via
         ``predict_epsilon``; matched inputs are what make that comparison a KL.
+
+        ``slot_weighting=False`` computes the CANONICAL objective whatever the config says
+        -- uniform slot weights AND plain MSE. The validation loop passes it (see
+        slot_weights.val) so val_loss remains comparable across arms and across a curriculum
+        ramp instead of moving with the weighting.
         """
         with self._crop_scope():
-            return self._compute_loss(batch, actions, values, return_aux)
+            return self._compute_loss(batch, actions, values, return_aux, slot_weighting)
 
-    def _compute_loss(self, batch, actions=None, values=None, return_aux=False):
+    def _compute_loss(self, batch, actions=None, values=None, return_aux=False,
+                      slot_weighting=True):
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon, \
@@ -969,8 +938,11 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
-        loss = F.mse_loss(pred, target, reduction='none')      # (B, K, H, Da)
-        weights = self._slot_weights(loss.device, loss.dtype)
+        # slot_weighting=False forces the canonical objective (uniform weights, plain MSE)
+        # regardless of config. The validation loop uses it so val_loss stays a fixed
+        # yardstick across arms and across a curriculum ramp -- see slot_weights.val.
+        loss = self._slot_norm_loss(pred, target, slot_weighting)   # (B, K, H, Da)
+        weights = self._slot_weights(loss.device, loss.dtype) if slot_weighting else None
         if weights is None:
             loss = reduce(loss, 'b ... -> b (...)', 'mean').mean()
         else:

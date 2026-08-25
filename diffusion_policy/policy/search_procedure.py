@@ -7,8 +7,10 @@ how a single candidate is produced.
 """
 from typing import Dict, Optional
 import contextlib
+import math
 
 import torch
+import torch.nn.functional as F
 
 from diffusion_policy.common.selection_util import SELECTION_MODES, select_candidate
 
@@ -35,28 +37,320 @@ class SearchProcedureMixin:
     ``_encode_obs_features``.
     """
 
-    def _init_slot_weighting(self, slot_weight_decay=False):
-        """Per-slot loss weighting is OFF by default.
+    def _init_slot_weighting(self, slot_weight_decay=False, slot_weights=None):
+        """Resolve the per-candidate-slot loss weighting. OFF (uniform) by default.
 
-        A float in (0, 1) enables it; 1.0 is rejected rather than silently accepted as
-        "off", so a config that means uniform says so. The resolved weights are logged at
-        construction -- under `final_pass` the deployed slot depends on the eval width, so
-        the vector is the only honest record of what each slot was trained at.
+        Two config surfaces, and they are mutually exclusive:
+
+          slot_weights: {mode, decay, ratio, weights, schedule, val}   -- the general one
+          slot_weight_decay: <float>                                   -- LEGACY scalar,
+              exactly equivalent to {mode: geometric, decay: X, val: trained}
+
+        Both accepted so the runs that already trained under the scalar keep resolving to
+        the identical weight vector; setting both to non-defaults raises rather than
+        silently letting one win.
+
+        The nested dict is key-checked against a whitelist for the same reason
+        DiffusionTransformerSearchPolicy._validate_kwargs exists: a typo inside a config
+        block is otherwise silently ignored, which is how an ablation arm ends up secretly
+        identical to its sibling. _KNOWN_KWARGS only guards the TOP-level name, so without
+        this `slot_weights.rato: 4` would train uniform and say nothing.
         """
-        if slot_weight_decay is False or slot_weight_decay is None:
-            self.slot_weight_decay = None
+        spec = self._resolve_slot_weight_spec(slot_weight_decay, slot_weights)
+        self.slot_weight_spec = spec
+        # Kept as a plain float for `geometric` (else None) because two external readers
+        # index it by name: scripts/selection_smoke.py and dump_candidate_scores.py's
+        # _slot_weight_table.
+        self.slot_weight_decay = spec['decay'] if spec['mode'] == 'geometric' else None
+        # Curriculum position. A plain int, not a buffer: it is re-derived from global_step
+        # every optimizer step, so a resume reproduces the schedule with nothing to restore
+        # -- the same property CropScopeMixin._crop_step relies on.
+        self._slot_weight_step = 0
+        if spec['mode'] == 'uniform':
             return
-        decay = float(slot_weight_decay)
-        if decay == 1.0:
-            raise ValueError(
-                'slot_weight_decay: 1.0 is a no-op; use False to mean uniform slots.')
-        assert 0.0 < decay < 1.0, \
-            f'slot_weight_decay must be False or in (0, 1), got {decay}'
-        self.slot_weight_decay = decay
         w = self._slot_weights(torch.device('cpu'), torch.float32)
-        if w is not None:
-            print(f'{type(self).__name__}: slot_weight_decay={decay} -> per-slot weights '
-                  f'[{", ".join(f"{x:.4f}" for x in w.tolist())}] (mean {w.mean():.6f})')
+        if w is None:
+            return
+        def _fmt(v):
+            return '[' + ', '.join(f'{x:.4f}' for x in v.tolist()) + f'] (mean {v.mean():.6f})'
+        name = type(self).__name__
+        if spec['schedule'] is None:
+            print(f'{name}: slot_weights {spec["mode"]} -> per-slot weights {_fmt(w)}')
+        else:
+            # Under a curriculum ONE printed vector is not an honest record of what the run
+            # trained at, so both endpoints are logged.
+            sch = spec['schedule']
+            a = self._slot_weights(torch.device('cpu'), torch.float32, step=sch['start_step'])
+            b = self._slot_weights(torch.device('cpu'), torch.float32, step=sch['end_step'])
+            print(f'{name}: slot_weights {spec["mode"]} + {sch["shape"]} schedule '
+                  f'{sch["start_step"]}..{sch["end_step"]}\n'
+                  f'  at start {_fmt(a)}\n  at end   {_fmt(b)}')
+
+    # Every key the slot_weights block may contain. See _init_slot_weighting for why this
+    # whitelist exists rather than a permissive .get().
+    _SLOT_WEIGHT_KEYS = frozenset(
+        {'mode', 'decay', 'ratio', 'weights', 'schedule', 'val'})
+    _SLOT_SCHEDULE_KEYS = frozenset({'shape', 'start_step', 'end_step'})
+    _SLOT_MODES = ('uniform', 'geometric', 'linear', 'list', 'last_only')
+    _SLOT_SHAPES = ('linear', 'cosine', 'step')
+
+    @classmethod
+    def _resolve_slot_weight_spec(cls, slot_weight_decay=False, slot_weights=None):
+        """Validate and normalize both surfaces into one dict. Pure; no self state."""
+        try:                                    # hydra hands over DictConfig/ListConfig
+            from omegaconf import OmegaConf
+            if slot_weights is not None and OmegaConf.is_config(slot_weights):
+                slot_weights = OmegaConf.to_container(slot_weights, resolve=True)
+        except ImportError:
+            pass
+
+        legacy_on = slot_weight_decay is not False and slot_weight_decay is not None
+        sw = dict(slot_weights or {})
+        unknown = sorted(set(sw) - cls._SLOT_WEIGHT_KEYS)
+        if unknown:
+            raise TypeError(
+                f'slot_weights got unknown key(s) {unknown}. These would be silently '
+                f'ignored, leaving the run on uniform weights while the config claims '
+                f'otherwise. Known keys: {sorted(cls._SLOT_WEIGHT_KEYS)}')
+        mode = sw.get('mode', 'uniform') or 'uniform'
+        if mode not in cls._SLOT_MODES:
+            raise ValueError(f'slot_weights.mode must be one of {cls._SLOT_MODES}, got {mode!r}')
+        if legacy_on and mode != 'uniform':
+            raise ValueError(
+                'slot_weight_decay and slot_weights are two spellings of the same knob; '
+                'set exactly one. slot_weight_decay: X == slot_weights: '
+                '{mode: geometric, decay: X, val: trained}.')
+
+        if legacy_on:
+            decay = float(slot_weight_decay)
+            if decay == 1.0:
+                raise ValueError(
+                    'slot_weight_decay: 1.0 is a no-op; use False to mean uniform slots.')
+            assert 0.0 < decay < 1.0, \
+                f'slot_weight_decay must be False or in (0, 1), got {decay}'
+            # val: 'trained' preserves the semantics every run under the scalar had --
+            # val_loss was computed WITH the weighting.
+            return {'mode': 'geometric', 'decay': decay, 'ratio': None, 'weights': None,
+                    'schedule': None, 'val': 'trained', 'legacy_scalar': True}
+
+        spec = {'mode': mode, 'decay': None, 'ratio': None, 'weights': None,
+                'schedule': None,
+                # Default 'uniform': with topk retention removed val_loss no longer selects
+                # anything, but it is still the cross-arm comparison signal and a
+                # non-stationary reweighting would make it move for reasons unrelated to
+                # fit. A fixed yardstick keeps a curriculum's val curve comparable with
+                # itself. See _slot_weights.
+                'val': sw.get('val', 'uniform') or 'uniform',
+                'legacy_scalar': False}
+        if spec['val'] not in ('uniform', 'trained'):
+            raise ValueError(f"slot_weights.val must be 'uniform' or 'trained', "
+                             f"got {spec['val']!r}")
+        if mode == 'geometric':
+            if sw.get('decay') is None:
+                raise ValueError("slot_weights.mode: geometric needs a `decay` in (0, 1)")
+            d = float(sw['decay'])
+            if d == 1.0:
+                raise ValueError('slot_weights.decay: 1.0 is a no-op; use mode: uniform.')
+            assert 0.0 < d < 1.0, f'slot_weights.decay must be in (0, 1), got {d}'
+            spec['decay'] = d
+        elif mode == 'linear':
+            if sw.get('ratio') is None:
+                raise ValueError("slot_weights.mode: linear needs a `ratio` = w_last/w_first > 1")
+            r = float(sw['ratio'])
+            if r == 1.0:
+                raise ValueError('slot_weights.ratio: 1.0 is a no-op; use mode: uniform.')
+            assert r > 1.0, f'slot_weights.ratio must be > 1, got {r}'
+            spec['ratio'] = r
+        elif mode == 'list':
+            if sw.get('weights') is None:
+                raise ValueError("slot_weights.mode: list needs an explicit `weights` list")
+            w = [float(x) for x in sw['weights']]
+            assert w and all(x > 0 for x in w), \
+                'slot_weights.weights must all be > 0 (they are renormalized to mean 1)'
+            spec['weights'] = w
+
+        sch = sw.get('schedule')
+        if sch is not None:
+            try:
+                from omegaconf import OmegaConf
+                if OmegaConf.is_config(sch):
+                    sch = OmegaConf.to_container(sch, resolve=True)
+            except ImportError:
+                pass
+            sch = dict(sch)
+            bad = sorted(set(sch) - cls._SLOT_SCHEDULE_KEYS)
+            if bad:
+                raise TypeError(f'slot_weights.schedule got unknown key(s) {bad}; known: '
+                                f'{sorted(cls._SLOT_SCHEDULE_KEYS)}')
+            shape = sch.get('shape', 'linear') or 'linear'
+            if shape not in cls._SLOT_SHAPES:
+                raise ValueError(f'slot_weights.schedule.shape must be one of '
+                                 f'{cls._SLOT_SHAPES}, got {shape!r}')
+            start, end = int(sch.get('start_step', 0) or 0), int(sch.get('end_step', 0) or 0)
+            if end <= start:
+                raise ValueError(f'slot_weights.schedule.end_step ({end}) must exceed '
+                                 f'start_step ({start})')
+            if mode == 'uniform':
+                raise ValueError('slot_weights.schedule with mode: uniform ramps toward '
+                                 'uniform from uniform, i.e. it does nothing. Set a mode.')
+            spec['schedule'] = {'shape': shape, 'start_step': start, 'end_step': end}
+        return spec
+
+    @staticmethod
+    def _slot_ramp(step, schedule):
+        """Curriculum position in [0, 1]. Clamped at both ends."""
+        s, e = schedule['start_step'], schedule['end_step']
+        a = (float(step) - s) / max(e - s, 1)
+        a = min(max(a, 0.0), 1.0)
+        shape = schedule['shape']
+        if shape == 'linear':
+            return a
+        if shape == 'cosine':
+            return 0.5 * (1.0 - math.cos(math.pi * a))
+        return 1.0 if float(step) >= e else 0.0        # 'step'
+
+    def set_slot_weight_step(self, step: int):
+        """Fix the training step the curriculum profile is derived from.
+
+        Called once per optimizer step by the workspace, next to set_crop_step, so the two
+        share one notion of "the current step". A plain int and NOT a buffer: it is
+        re-derived from global_step every step, so a resumed run reproduces the schedule
+        with nothing to checkpoint.
+        """
+        self._slot_weight_step = int(step)
+
+    def _slot_weights(self, device, dtype, step=None) -> Optional[torch.Tensor]:
+        """Per-slot loss weights: a length-K vector (K = max_actions) with mean 1, or None
+        for the uniform path.
+
+        One forward decodes all K candidate slots against the same expert action, slot k
+        attending to the first k scored context candidates; these weights say how much of
+        the gradient each of those conditionals gets.
+
+          geometric   w_k ∝ decay^(K-1-k)
+          linear      w_k ∝ 1 + (ratio-1)*k/(K-1)
+          list        an explicit K-length profile
+          last_only   slot K-1 only -- an extreme probe, not a recipe
+
+        `schedule` ramps the chosen profile up from uniform over training. The mean stays
+        exactly 1 at every point of the ramp, so changing profile never moves the loss
+        SCALE that gradient_clip_norm, the effective step size, and val_loss all read.
+        Which profile to use and why: the slot_weights block in
+        train_pusht_diffusion_search.yaml.
+        """
+        # None == uniform; width 1 has a single slot, so there is nothing to weight
+        spec = self.slot_weight_spec
+        if spec['mode'] == 'uniform' or self.max_actions == 1:
+            return None
+        K = self.max_actions
+        k = torch.arange(K, device=device, dtype=dtype)
+        mode = spec['mode']
+        if mode == 'geometric':
+            base = spec['decay'] ** (K - 1 - k)
+        elif mode == 'linear':
+            # w_k proportional to 1 + (ratio-1)*k/(K-1): same endpoint ratio as a geometric
+            # decay of ratio^(-1/(K-1)), differing only in curvature. That pairing is what
+            # makes geometric-vs-linear an experiment about SHAPE rather than about spread.
+            base = 1.0 + (spec['ratio'] - 1.0) * k / max(K - 1, 1)
+        elif mode == 'last_only':
+            base = (k == K - 1).to(dtype)
+        elif mode == 'list':
+            w = spec['weights']
+            if len(w) != K:
+                raise ValueError(
+                    f'slot_weights.weights has {len(w)} entries but max_actions is {K}; '
+                    f'an explicit profile must name every slot.')
+            base = torch.tensor(w, device=device, dtype=dtype)
+        else:
+            raise ValueError(f'unhandled slot_weights mode {mode!r}')
+        w = base / base.mean()
+
+        sch = spec['schedule']
+        if sch is not None:
+            t = self._slot_weight_step if step is None else step
+            a = self._slot_ramp(t, sch)
+            # Blend in WEIGHT space, not by interpolating the profile's parameter. Because
+            # mean(w) == 1 exactly, mean(w - 1) == 0, so mean(1 + a*(w-1)) == 1 for EVERY a
+            # -- the loss scale is constant across the whole ramp. Interpolating `decay`
+            # instead would also have to pass through decay == 1.0, which the config
+            # validator rejects as a no-op.
+            w = 1.0 + a * (w - 1.0)
+        return w
+
+    # ---------------------------------------------------------------- per-slot loss norm
+
+    _SLOT_NORM_KEYS = frozenset({'mode'})
+    _SLOT_NORM_MODES = ('l2', 'l1', 'l2tol1')
+
+    @classmethod
+    def _resolve_slot_loss_norm(cls, slot_loss_norm=None):
+        """Validate the slot_loss_norm block into {'mode': ...}. Pure; no self state."""
+        try:                                    # hydra hands over DictConfig
+            from omegaconf import OmegaConf
+            if slot_loss_norm is not None and OmegaConf.is_config(slot_loss_norm):
+                slot_loss_norm = OmegaConf.to_container(slot_loss_norm, resolve=True)
+        except ImportError:
+            pass
+        sn = dict(slot_loss_norm or {})
+        # Whitelisted for the same reason slot_weights is: a silently ignored typo would
+        # train the default objective while the config claims otherwise.
+        unknown = sorted(set(sn) - cls._SLOT_NORM_KEYS)
+        if unknown:
+            raise TypeError(f'slot_loss_norm got unknown key(s) {unknown}; known: '
+                            f'{sorted(cls._SLOT_NORM_KEYS)}')
+        mode = sn.get('mode', 'l2') or 'l2'
+        if mode not in cls._SLOT_NORM_MODES:
+            raise ValueError(f'slot_loss_norm.mode must be one of {cls._SLOT_NORM_MODES}, '
+                             f'got {mode!r}')
+        return {'mode': mode}
+
+    def _init_slot_loss_norm(self, slot_loss_norm=None):
+        """Resolve which norm each slot's loss term uses. L2 everywhere by default."""
+        self.slot_loss_norm_spec = self._resolve_slot_loss_norm(slot_loss_norm)
+        a = self._slot_norm_alphas(torch.device('cpu'), torch.float32)
+        if a is None:
+            return
+        print(f'{type(self).__name__}: slot_loss_norm '
+              f'{self.slot_loss_norm_spec["mode"]} -> per-slot L1 fraction ['
+              + ', '.join(f'{x:.4f}' for x in a.tolist()) + ']')
+
+    def _slot_norm_alphas(self, device, dtype) -> Optional[torch.Tensor]:
+        """Per-slot L1 fraction alpha_k, or None for the plain-MSE path.
+
+        Slot k's loss term is ``(1-a_k)*(pred-target)**2 + a_k*|pred-target|``, so a_k = 0
+        is pure L2 and a_k = 1 is pure L1.
+
+          l2      None -- every slot MSE, bit-identical to the objective that predates this
+          l1      a_k = 1
+          l2tol1  a_k = k/(K-1): slot 0 pure L2, slot K-1 pure L1, linear in between
+
+        NOT renormalized, unlike _slot_weights: these pick a norm, they do not split a fixed
+        loss budget. The two norms are within ~20% at unit residual (the target is
+        eps ~ N(0,1): E[e^2] = 1.00 vs E[|e|] = 0.80), so blending them does not
+        appreciably reweight one slot against another.
+        """
+        mode = self.slot_loss_norm_spec['mode']
+        K = self.max_actions
+        if mode == 'l2':
+            return None
+        if mode == 'l1':
+            return torch.ones(K, device=device, dtype=dtype)
+        if K == 1:                     # nothing to interpolate; slot 0 is the pure-L2 end
+            return None
+        return torch.arange(K, device=device, dtype=dtype) / (K - 1)
+
+    def _slot_norm_loss(self, pred, target, slot_weighting=True):
+        """Elementwise loss per slot, (B, K, H, Da): plain MSE, or the per-slot L1/L2 blend.
+
+        ``slot_weighting=False`` forces plain MSE whatever the config says -- see
+        compute_loss, which passes it for val_loss.
+        """
+        alphas = self._slot_norm_alphas(pred.device, pred.dtype) if slot_weighting else None
+        if alphas is None:
+            return F.mse_loss(pred, target, reduction='none')
+        err = pred - target
+        a = alphas.view(1, -1, 1, 1)
+        return (1.0 - a) * err.pow(2) + a * err.abs()
 
     def _init_selection(self, **kwargs):
         """Set the knobs predict_action_best reads. Call from the host's __init__."""
@@ -157,18 +451,35 @@ class SearchProcedureMixin:
     def _score_candidates(self, verifier, obs_dict, action, want_subgoals: bool = False):
         """Evaluate one batch of candidates.
 
-        Returns ``(context, score, subgoal)``:
+        Returns ``(context, score, subgoal, terms)``:
           * ``context`` (B,) or (B, context_dim) -- the feedback fed back into the search
             context so the next candidate is conditioned on it.
           * ``score`` (B,) -- the scalar used to *rank* candidates (argmax at eval time).
           * ``subgoal`` -- dict of per-candidate debug tensors for logging, or None. Only
             populated when ``want_subgoals``; verifiers without a renderable outcome
             (e.g. the maze one) always return None.
+          * ``terms`` (B, K) -- the raw components the score is built from, kept
+            undecomposed so a CROSS-CANDIDATE value can re-weight them once all n
+            candidates exist (see ``_fuse_scores``). None when the verifier has no
+            decomposition, which is every verifier but PushT's.
         By default context and score are both the verifier value. Subclasses override to
         widen the context while keeping the scalar ranking signal.
         """
         value = verifier.get_value(obs_dict, action)
-        return value, value, None
+        return value, value, None, None
+
+    def _fuses_scores(self) -> bool:
+        """Does this policy's ranking score need the WHOLE candidate set?
+
+        False for every per-candidate value, which is all of them by default. True only for
+        a cross-candidate rule (PushT's ``armTd``), where the score of candidate k depends
+        on the other n-1 candidates and therefore cannot be computed as they are generated.
+        """
+        return False
+
+    def _fuse_scores(self, scores, terms):
+        """``(B, n)``, ``(B, n, K)`` -> ``(B, n)``. Identity unless ``_fuses_scores()``."""
+        return scores
 
     def _normalize_context_actions(
             self, actions: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
@@ -197,12 +508,19 @@ class SearchProcedureMixin:
             return_scores: bool = False,
             obs_features: Optional[torch.Tensor] = None,
             return_subgoals: bool = False,
+            return_terms: bool = False,
         ):
         """Generate n_actions candidates, each conditioned on the previous ones.
 
-        Returns ``(actions, values)``, with ``scores`` appended when ``return_scores``
-        and ``subgoals`` appended last when ``return_subgoals`` -- i.e. the tuple grows
-        left-to-right: ``(actions, values[, scores][, subgoals])``.
+        Returns ``(actions, values)``, with ``scores`` appended when ``return_scores``,
+        ``subgoals`` when ``return_subgoals``, and ``terms`` last when ``return_terms``
+        -- i.e. the tuple grows left-to-right:
+        ``(actions, values[, scores][, subgoals][, terms])``. Every optional element is
+        APPENDED, never inserted, because ~10 sites unpack this tuple positionally.
+
+        ``terms`` is (B, n, K): the raw components each score was built from, kept so a
+        CROSS-CANDIDATE value can re-weight them once all n candidates exist. It is None
+        unless the verifier decomposes its value (only PushT's does).
 
         ``values`` is the search *context* feedback -- (B, n) for the scalar verifier
         value, (B, n, context_dim) for a wider context -- while ``scores`` is always the
@@ -225,6 +543,7 @@ class SearchProcedureMixin:
             actions = None
             values = None
             scores = None
+            terms = None
             subgoals = list()
             for _ in range(n_actions):
                 new_action = self.predict_action(
@@ -233,16 +552,19 @@ class SearchProcedureMixin:
                     values=values,
                     obs_features=obs_features,
                 )['action_pred']
-                new_value, new_score, new_subgoal = self._score_candidates(
+                new_value, new_score, new_subgoal, new_terms = self._score_candidates(
                     verifier, obs_dict, new_action, want_subgoals=return_subgoals)
                 if actions is None:
                     actions = new_action.unsqueeze(1)
                     values = new_value.unsqueeze(1)
                     scores = new_score.unsqueeze(1)
+                    terms = None if new_terms is None else new_terms.unsqueeze(1)
                 else:
                     actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                     values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
                     scores = torch.cat([scores, new_score.unsqueeze(1)], dim=1)
+                    if new_terms is not None:
+                        terms = torch.cat([terms, new_terms.unsqueeze(1)], dim=1)
                 if new_subgoal is not None:
                     subgoals.append(new_subgoal)
 
@@ -251,6 +573,8 @@ class SearchProcedureMixin:
             out = out + (scores,)
         if return_subgoals:
             out = out + (_stack_subgoals(subgoals),)
+        if return_terms:
+            out = out + (terms,)
         return out
 
     @torch.inference_mode()
@@ -262,6 +586,7 @@ class SearchProcedureMixin:
             return_scores: bool = False,
             return_subgoals: bool = False,
             obs_features: Optional[torch.Tensor] = None,
+            return_terms: bool = False,
         ):
         """Search with a rolling context window; see search_candidates for the return shape.
 
@@ -273,26 +598,56 @@ class SearchProcedureMixin:
         subgoals in a loop of its own rather than inside `search_candidates`, so wrapping
         only that method would leave every candidate past `max_actions` on an independent
         crop -- the exact split-crop defect, reappearing only at n > K.
+
+        THIS is where a cross-candidate value is applied (``_fuse_scores``), rather than in
+        `predict_action_best`, because both branches below produce the complete (B, n) set
+        and several callers -- scripts/render_search_videos.py, scripts/dump_candidate_
+        scores.py -- take the candidates straight from here and run their own
+        `scores.argmax(dim=1)`. Fusing downstream of them would leave those ranking on the
+        BASE value while their output claimed otherwise. Callers of `search_candidates`
+        directly (the training workspaces) deliberately do NOT get fusion: a cross-candidate
+        value has no training semantics and is rejected as a `verifier_tag`.
         """
+        # a cross-candidate value needs the terms; nothing else pays for them
+        need_terms = return_scores and self._fuses_scores()
         with self._crop_scope():
             # encode once for the whole search, however many candidates it runs
             if obs_features is None:
                 obs_features = self._encode_obs_features(obs_dict)
             if n_actions <= self.max_actions:
-                return self.search_candidates(
+                head = self.search_candidates(
                     obs_dict, verifier, n_actions, return_scores=return_scores,
-                    obs_features=obs_features, return_subgoals=return_subgoals)
+                    obs_features=obs_features, return_subgoals=return_subgoals,
+                    return_terms=True)
+                # rebind to the rolling branch's names so both fall through to ONE exit,
+                # which is what keeps fusion from being applied per-window at n > K.
+                # Walk the tuple rather than indexing fixed slots: the optional elements
+                # are appended, so `subgoals` sits at 2 or 3 depending on return_scores.
+                all_terms = head[-1]
+                head = head[:-1]
+                all_actions, all_values = head[0], head[1]
+                i = 2
+                all_scores = None
+                if return_scores:
+                    all_scores, i = head[i], i + 1
+                all_subgoals_stacked = head[i] if return_subgoals else None
+                return self._finish_n_actions(
+                    all_actions, all_values, all_scores, all_subgoals_stacked, all_terms,
+                    return_scores, return_subgoals, return_terms, need_terms)
 
             # scores are always needed internally (the caller may only want values), but
             # subgoals are only rendered when actually asked for.
             head = self.search_candidates(
                 obs_dict, verifier, self.max_actions, return_scores=True,
-                obs_features=obs_features, return_subgoals=return_subgoals)
+                obs_features=obs_features, return_subgoals=return_subgoals,
+                return_terms=True)
+            terms = head[-1]
             actions, values, scores = head[0], head[1], head[2]
             subgoals = head[3] if return_subgoals else None
             all_actions = actions.clone()
             all_values = values.clone()
             all_scores = scores.clone()
+            all_terms = None if terms is None else terms.clone()
             all_subgoals = [subgoals] if subgoals is not None else []
 
             action_history = actions[:, 1:]
@@ -304,12 +659,14 @@ class SearchProcedureMixin:
                     values=value_history,
                     obs_features=obs_features,
                 )['action_pred']
-                new_value, new_score, new_subgoal = self._score_candidates(
+                new_value, new_score, new_subgoal, new_terms = self._score_candidates(
                     verifier, obs_dict, new_action, want_subgoals=return_subgoals)
 
                 all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
                 all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
                 all_scores = torch.cat([all_scores, new_score.unsqueeze(1)], dim=1)
+                if new_terms is not None:
+                    all_terms = torch.cat([all_terms, new_terms.unsqueeze(1)], dim=1)
                 action_history = torch.cat(
                     [action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
                 value_history = torch.cat(
@@ -318,11 +675,36 @@ class SearchProcedureMixin:
                     # already (B, 1, ...) from the inner stack vs (B, ...) from the loop
                     all_subgoals.append({k: v.unsqueeze(1) for k, v in new_subgoal.items()})
 
-        out = (all_actions, all_values)
+        return self._finish_n_actions(
+            all_actions, all_values, all_scores, _cat_subgoals(all_subgoals), all_terms,
+            return_scores, return_subgoals, return_terms, need_terms)
+
+    def _finish_n_actions(self, actions, values, scores, subgoals, terms,
+                          return_scores, return_subgoals, return_terms, need_terms):
+        """The single exit both predict_n_actions branches fall through to.
+
+        Fusing here rather than in either branch is what guarantees a cross-candidate value
+        sees the WHOLE candidate set: at n > max_actions the rolling branch builds the stack
+        in two pieces, and standardizing each piece separately would silently give a
+        different -- and wrong -- ranking than the same n at max_actions.
+        """
+        if need_terms:
+            assert terms is not None, (
+                f'{type(self).__name__} ranks with a cross-candidate verifier value but its '
+                f'verifier returned no per-term decomposition; _score_candidates must supply '
+                f'`terms` (B, K) for the fusion in _fuse_scores.')
+            # dim 1 is the CANDIDATE axis. Never dim 0 -- that is the parallel-episode
+            # batch (50 independent test episodes at eval), and standardizing across it
+            # would let one episode's candidate spread decide another episode's action.
+            scores = self._fuse_scores(scores, terms)
+
+        out = (actions, values)
         if return_scores:
-            out = out + (all_scores,)
+            out = out + (scores,)
         if return_subgoals:
-            out = out + (_cat_subgoals(all_subgoals),)
+            out = out + (subgoals,)
+        if return_terms:
+            out = out + (terms,)
         return out
 
     @torch.inference_mode()

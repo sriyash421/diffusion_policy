@@ -3,9 +3,10 @@
 Checks the four things that would silently produce a wrong run rather than an exception:
 
   1. The existing arms are untouched: every pre-existing config still resolves to
-     selection=argmax / slot_weight_decay=1.0, and _compute_loss at decay 1.0 returns
-     EXACTLY the unweighted mean (so the six live runs' loss curve does not shift under
-     them if they are ever resumed against this code).
+     selection=argmax / slot_weight_decay=False / slot_weights.mode=uniform, and the
+     uniform path returns EXACTLY the unweighted mean (so the live runs' loss curve does
+     not shift under them if they are ever resumed against this code). 1.0 is rejected
+     rather than silently meaning "off".
   2. The kwarg whitelist still bites: a typo'd key must raise, or an ablation arm can end
      up secretly identical to its sibling (which is what _KNOWN_KWARGS exists to prevent).
   3. predict_action_best under final_pass returns an action that is NOT any of the n
@@ -14,7 +15,18 @@ Checks the four things that would silently produce a wrong run rather than an ex
 
 Run on a compute node: it builds a ResNet18 and a pool of PushT sims, which the login
 node's shared ~10GB cgroup will not tolerate.
+
+  python scripts/selection_smoke.py
 """
+if __name__ == "__main__":
+    # `python scripts/selection_smoke.py` puts scripts/ on sys.path, not the repo root, so
+    # `import diffusion_policy` failed with ModuleNotFoundError however the CWD was set.
+    # Same preamble the other scripts in here use.
+    import sys, os, pathlib
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent)
+    sys.path.append(ROOT_DIR)
+    os.chdir(ROOT_DIR)
+
 import math
 import numpy as np
 import torch
@@ -152,13 +164,30 @@ def main():
             # Assert it resolves to THIS arm's label: a config whose directory disagreed with
             # its mechanism would file a whole column of SUCCESS_RATES.md under the wrong arm,
             # and `training.resume` would either resume the wrong run or start a fresh one.
+            assert cfg.slot_weights.mode == 'uniform', \
+                f'{name} slot_weights.mode={cfg.slot_weights.mode}'
+            assert cfg.sw_suffix == '', f'{name} sw_suffix={cfg.sw_suffix!r}'
             rn = OmegaConf.to_container(cfg, resolve=True)['run_name']
-            # run_name also carries k{n_candidates} now, so two width overrides of one
-            # config cannot collide on a single checkpoint directory.
+            # run_name carries every axis that makes two runs incomparable, so none of them
+            # can collide on one checkpoint directory (which `training.resume` would then
+            # silently continue): k{n_candidates}, ver-{verifier_tag} (the scoring rule
+            # changed on 2026-08-19), and sw_suffix (the slot-weight profile). sw_suffix is
+            # EMPTY at the defaults, so this assertion also pins that adding slot_weights
+            # did not move any existing run's directory.
             assert rn.startswith(
-                f'{cfg.arm}_k{cfg.n_candidates}_corrupt-{cfg.corrupt_obs}_'), \
+                f'{cfg.arm}_k{cfg.n_candidates}_ver-{cfg.verifier_tag}_'
+                f'corrupt-{cfg.corrupt_obs}_'), \
                 f'{name}: run_name {rn!r} does not match arm {cfg.arm!r}'
             assert cfg.context_decay == 1.0, f'{name} context_decay={cfg.context_decay}'
+
+        # a non-uniform profile MUST be able to name itself in the directory
+        cfg = compose(config_name='train_pusht_diffusion_search',
+                      overrides=ARGMAX_ARMS[0][1] + [
+                          'slot_weights.mode=linear', 'slot_weights.ratio=4.857',
+                          'sw_suffix=_sw-lin4857'])
+        rn = OmegaConf.to_container(cfg, resolve=True)['run_name']
+        assert '_sw-lin4857_' in rn, rn
+        print(f'[ok] sw_suffix reaches run_name: {rn}')
         print(f'[ok] {len(ARGMAX_ARMS)} existing arms: selection=argmax, '
               f'slot_weight_decay=False, context_decay=1.0, run_name keyed on arm')
 
@@ -260,56 +289,161 @@ def main():
             else:
                 print('[ok] softmax draws from its own generator (global RNG untouched)')
 
-            # ---- 1b. the slot weights have the intended shape
-            w = policy._slot_weights(torch.device('cpu'), torch.float32)
+            # ---- 1b. the slot weight PROFILES have the intended shape
             K = policy.max_actions
+            cpu, f32 = torch.device('cpu'), torch.float32
+
+            def profile(**spec):
+                """Resolve a slot_weights block on this policy and return the vector."""
+                policy._init_slot_weighting(False, spec)
+                return policy._slot_weights(cpu, f32)
+
+            # geometric is the legacy shape; keep asserting exactly what it always did
+            w = profile(mode='geometric', decay=0.9)
             assert w is not None and w.shape == (K,), w
             assert torch.allclose(w.mean(), torch.tensor(1.0), atol=1e-6), \
                 f'weights must average 1 or the loss scale shifts: mean={w.mean():.6f}'
             assert torch.all(w[1:] > w[:-1]), f'weights must rise with context length: {w}'
             ratio = (w[-1] / w[0]).item()
-            expected = policy.slot_weight_decay ** -(K - 1)
-            assert abs(ratio - expected) < 1e-4, (ratio, expected)
-            print(f'[ok] slot weights: w_0={w[0]:.3f} .. w_{K-1}={w[-1]:.3f}, '
+            assert abs(ratio - 0.9 ** -(K - 1)) < 1e-4, ratio
+            print(f'[ok] geometric: w_0={w[0]:.3f} .. w_{K-1}={w[-1]:.3f}, '
                   f'mean={w.mean():.6f}, last/first={ratio:.2f}x')
 
-            # False is the uniform path -- byte-identical to what 1.0 used to do. Go
-            # through _init_slot_weighting, not the attribute: the config value False is
-            # normalised to an internal None there, and that mapping is the thing under
-            # test. 1.0 is now rejected rather than silently meaning 'off'.
-            policy._init_slot_weighting(False)
-            assert policy._slot_weights(torch.device('cpu'), torch.float32) is None
-            try:
-                policy._init_slot_weighting(1.0)
-            except ValueError:
-                print('[ok] decay=False -> uniform path (None); decay=1.0 rejected')
-            else:
-                failures.append('slot_weight_decay=1.0 was accepted -- it is a silent '
-                                'no-op and must raise in favour of False')
+            # BACK-COMPAT: the legacy scalar must resolve to the identical vector, or every
+            # run trained under it is no longer reproducible from its own config.
+            policy._init_slot_weighting(0.9, None)
+            assert torch.allclose(policy._slot_weights(cpu, f32), w, atol=1e-7)
+            assert policy.slot_weight_decay == 0.9, \
+                'the .slot_weight_decay attribute is read by selection_smoke and by ' \
+                'dump_candidate_scores._slot_weight_table; it must survive'
+            assert policy.slot_weight_spec['val'] == 'trained', \
+                'the legacy scalar had val_loss computed WITH the weighting; keep it'
+            print('[ok] legacy slot_weight_decay=0.9 == slot_weights geometric 0.9')
 
-            # ---- 1c. the weighting actually reaches the loss, and 1.0 is the plain mean
+            # linear at ratio decay^-(K-1) has the SAME endpoints as geometric(decay) and
+            # differs only in curvature -- that pairing is the only one that varies shape
+            # without also varying spread, so it is the comparison worth running.
+            match = 0.9 ** -(K - 1)
+            lin = profile(mode='linear', ratio=match)
+            assert abs((lin[-1] / lin[0]).item() - match) < 1e-3, lin
+            assert torch.allclose(lin.mean(), torch.tensor(1.0), atol=1e-6)
+            assert not torch.allclose(lin, w), 'linear and geometric must differ in between'
+            print(f'[ok] linear ratio={match:.4f} matches geometric endpoints, '
+                  f'differs mid-profile ({lin[K//2]:.3f} vs {w[K//2]:.3f})')
+
+            for spec in (dict(mode='last_only'),
+                         dict(mode='list', weights=[1.0] * (K - 1) + [3.0])):
+                p = profile(**spec)
+                assert p.shape == (K,) and torch.allclose(p.mean(), torch.tensor(1.0), atol=1e-6), \
+                    (spec, p)
+            print('[ok] last_only and explicit list profiles resolve, mean 1')
+
+            # ---- 1b'. rejections. Each of these is a config that LOOKS like it asks for a
+            # weighting and would otherwise train uniform while the run name claims a profile.
+            def rejects(label, **spec):
+                try:
+                    policy._init_slot_weighting(False, spec)
+                except (ValueError, AssertionError, TypeError):
+                    return
+                failures.append(f'slot_weights {label} was accepted but must raise')
+
+            rejects('mode=geometric with no decay', mode='geometric')
+            rejects('decay=1.0 (a silent no-op)', mode='geometric', decay=1.0)
+            rejects('ratio=1.0 (a silent no-op)', mode='linear', ratio=1.0)
+            rejects('unknown mode', mode='quadratic')
+            # THE IMPORTANT ONE: _KNOWN_KWARGS only guards the top-level name, so without a
+            # nested whitelist `rato: 4` trains uniform and says nothing.
+            rejects('typo in a nested key', mode='linear', rato=4.0)
+            rejects('list of the wrong length', mode='list', weights=[1.0] * (K + 1))
+            rejects('schedule that ends before it starts', mode='linear', ratio=2.0,
+                    schedule={'start_step': 10, 'end_step': 5})
+            rejects('schedule on mode=uniform', mode='uniform',
+                    schedule={'start_step': 0, 'end_step': 10})
+            rejects('unknown val', mode='linear', ratio=2.0, val='sometimes')
+            try:
+                policy._init_slot_weighting(0.9, {'mode': 'linear', 'ratio': 2.0})
+            except ValueError:
+                pass
+            else:
+                failures.append('both slot_weight_decay and slot_weights were accepted; '
+                                'one silently wins and the run name cannot say which')
+            print('[ok] every malformed slot_weights spec raises (incl. nested typos)')
+
+            # uniform is the default and must give the None (unweighted) path
+            policy._init_slot_weighting(False, None)
+            assert policy._slot_weights(cpu, f32) is None
+            print('[ok] default -> uniform path (None)')
+
+            # ---- 1b''. curriculum: ramps from uniform to the target, mean 1 throughout
+            policy._init_slot_weighting(False, dict(
+                mode='geometric', decay=0.9,
+                schedule={'shape': 'linear', 'start_step': 0, 'end_step': 100}))
+            w0 = policy._slot_weights(cpu, f32, step=0)
+            w50 = policy._slot_weights(cpu, f32, step=50)
+            w100 = policy._slot_weights(cpu, f32, step=100)
+            w999 = policy._slot_weights(cpu, f32, step=999)
+            assert torch.allclose(w0, torch.ones(K), atol=1e-6), w0
+            assert torch.allclose(w100, w, atol=1e-6), w100
+            assert torch.allclose(w999, w100, atol=1e-6), 'past end_step must clamp'
+            assert ((w50 - w0).abs() > 1e-6).any(), 'the midpoint must actually move'
+            for name, v in (('start', w0), ('mid', w50), ('end', w100)):
+                # THE load-bearing property: the blend is done in weight space, so mean(w)
+                # is 1 at EVERY point of the ramp and gradient_clip_norm sees a constant
+                # loss scale. Interpolating the decay parameter would not give this.
+                assert torch.allclose(v.mean(), torch.tensor(1.0), atol=1e-6), (name, v.mean())
+            policy.set_slot_weight_step(100)
+            assert torch.allclose(policy._slot_weights(cpu, f32), w100, atol=1e-6), \
+                'set_slot_weight_step must drive the profile the loss sees'
+            print('[ok] curriculum: uniform -> target, mean 1 at every point, '
+                  'set_slot_weight_step drives it')
+
+            # ---- 1c. the weighting actually reaches the loss
             policy.train()
             policy.set_crop_step(42, 0)
+            policy._init_slot_weighting(False, None)
             torch.manual_seed(7)
             uniform = policy.compute_loss(batch)
-            policy.slot_weight_decay = 0.9
+            policy._init_slot_weighting(False, dict(mode='geometric', decay=0.9))
             torch.manual_seed(7)
             decayed = policy.compute_loss(batch)
-            print(f'[ok] loss decay=False -> {uniform.item():.6f} | '
-                  f'decay=0.9 -> {decayed.item():.6f}')
+            torch.manual_seed(7)
+            forced_uniform = policy.compute_loss(batch, slot_weighting=False)
+            print(f'[ok] loss uniform -> {uniform.item():.6f} | '
+                  f'geometric 0.9 -> {decayed.item():.6f}')
             if abs(uniform.item() - decayed.item()) < 1e-9:
-                failures.append('slot_weight_decay=0.9 changed nothing -- the weighting is '
+                failures.append('slot_weights geometric changed nothing -- the weighting is '
                                 'not reaching the loss')
+            if abs(uniform.item() - forced_uniform.item()) > 1e-9:
+                failures.append('compute_loss(slot_weighting=False) did not reproduce the '
+                                'uniform loss -- val_loss would not be a fixed yardstick')
+            else:
+                print('[ok] compute_loss(slot_weighting=False) == the uniform loss exactly')
+
+            # a curriculum at step 0 must be the uniform loss to float noise, or the ramp
+            # starts from something other than where it claims
+            policy._init_slot_weighting(False, dict(
+                mode='geometric', decay=0.9,
+                schedule={'shape': 'linear', 'start_step': 0, 'end_step': 100}))
+            policy.set_slot_weight_step(0)
+            torch.manual_seed(7)
+            curr0 = policy.compute_loss(batch)
+            if abs(curr0.item() - uniform.item()) > 1e-9:
+                failures.append(f'curriculum at step 0 ({curr0.item():.9f}) != uniform '
+                                f'({uniform.item():.9f}); the ramp does not start uniform')
+            else:
+                print('[ok] curriculum at step 0 == uniform loss exactly')
 
             # a mean-1 weighting of EQUAL per-slot losses must equal the flat mean, which is
             # what keeps val_loss on the same scale across arms
             from einops import reduce
             equal = torch.ones(5, K, 3, 2) * 0.37
-            wq = policy._slot_weights(torch.device('cpu'), torch.float32)
+            policy._init_slot_weighting(False, dict(mode='geometric', decay=0.9))
+            wq = policy._slot_weights(cpu, f32)
             flat = reduce(equal, 'b ... -> b (...)', 'mean').mean()
             wtd = (reduce(equal, 'b k ... -> b k', 'mean') * wq).mean()
             assert torch.allclose(flat, wtd, atol=1e-6), (flat, wtd)
             print('[ok] mean-1 normalization preserves the loss scale')
+            policy._init_slot_weighting(False, None)
 
             # ---- 5. context recency decay: the mask carries lambda^(dist from latest)
             _check_context_decay(policy)

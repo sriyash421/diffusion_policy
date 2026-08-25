@@ -28,12 +28,12 @@ from diffusion_policy.policy.mlp_image_policy import MLPImagePolicy
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 from diffusion_policy.common.sampler import get_collate_fn
+from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -139,6 +139,25 @@ def _is_search_policy(policy) -> bool:
     return hasattr(policy, 'search_candidates') and hasattr(policy, 'verifier')
 
 
+
+def _val_slot_weighting(policy) -> bool:
+    """Whether val_loss is computed WITH the per-slot weighting.
+
+    Default False (uniform). val_loss is the cross-arm comparison signal, and a weighting
+    that changes over training -- a slot_weights curriculum -- would make it move for
+    reasons that have nothing to do with fit, so a curve could not be compared with itself.
+    The legacy `slot_weight_decay` scalar resolves to 'trained', preserving the semantics
+    every run under that key already had.
+
+    There is a second reason the default matters: ema_model is a deepcopy and the workspace
+    sets _slot_weight_step only on the LIVE model, so a curriculum evaluated on the EMA copy
+    would sit at the schedule's starting profile forever -- silently uniform, but uniform by
+    accident rather than by choice.
+    """
+    spec = getattr(policy, 'slot_weight_spec', None)
+    return bool(spec and spec.get('val') == 'trained')
+
+
 class TrainMLPImageWorkspace(BaseWorkspace):
     # last_{rollout,val,sample}_step make the gradient-step eval cadences resume-safe:
     # without them a resumed run re-fires every eval block immediately.
@@ -150,6 +169,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
         _check_arm_label(cfg)
+        check_verifier_value(cfg)
 
         # set seed
         seed = cfg.training.seed
@@ -424,13 +444,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             output_dir=self.output_dir)
         assert isinstance(env_runner, BaseImageRunner)
 
-        # configure best-checkpoint retention (optional: only when checkpoint.topk is set)
-        topk_manager = None
-        if cfg.checkpoint.get('topk', None) is not None:
-            topk_manager = TopKCheckpointManager(
-                save_dir=os.path.join(self.output_dir, 'checkpoints'),
-                **cfg.checkpoint.topk)
-
         # configure logging
         if self.accelerator.is_main_process:
             wandb_run = wandb.init(
@@ -535,6 +548,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         # uninterrupted one because there is no RNG state to restore.
                         if hasattr(model, 'set_crop_step'):
                             model.set_crop_step(cfg.training.seed, self.global_step)
+                        # beside set_crop_step so the crop offset and the
+                        # slot-weight curriculum share one notion of 'now'
+                        if hasattr(model, 'set_slot_weight_step'):
+                            model.set_slot_weight_step(self.global_step)
                         raw_loss = model.compute_loss(batch)
                         loss = raw_loss / accumulate_every
                         self.accelerator.backward(loss)
@@ -613,7 +630,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         # Placed after the checkpoint block so the final step is saved, and
                         # it leaves the end-of-epoch block below to run once on the
                         # truncated epoch -- so a capped run still ends with a val_loss and
-                        # a topk checkpoint.
+                        # a final rollout.
                         if max_gradient_steps is not None \
                             and self.global_step >= max_gradient_steps:
                             stop_training = True
@@ -628,8 +645,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 train_loss = np.mean(train_losses)
                 step_log['train_loss'] = train_loss
                 policy = self.accelerator.unwrap_model(self.model)
-                # EMA weights are what gets rolled out, validated, sampled and checkpointed
-                # by topk when enabled; the live weights are only the optimization target.
+                # EMA weights are what gets rolled out, validated, sampled and saved into
+                # every step_*.ckpt; the live weights are only the optimization target.
                 eval_policy = self.ema_model if self.ema_model is not None else policy
                 eval_policy.eval()
                 policy.eval()
@@ -679,7 +696,15 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = eval_policy.compute_loss(batch)
+                                # This workspace also trains policies with no slot
+                                # weighting at all (MLPImagePolicy), whose compute_loss
+                                # does not take the keyword.
+                                if hasattr(eval_policy, 'slot_weight_spec'):
+                                    loss = eval_policy.compute_loss(
+                                        batch,
+                                        slot_weighting=_val_slot_weighting(eval_policy))
+                                else:
+                                    loss = eval_policy.compute_loss(batch)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -779,22 +804,6 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 # the first (i.e. with p_drop_attn silently zeroed).
                 policy.train()
 
-                # keep the k best checkpoints by the monitored metric. This is the safety
-                # net that was missing: a previous run's val_loss bottomed at ~3k steps and
-                # then rose 3x while training continued to 100k, and with no topk manager
-                # the good weights were simply lost. get_ckpt_path returns None when the
-                # metric is absent this epoch (cadences differ), so this is a no-op then.
-                if topk_manager is not None and self.accelerator.is_main_process:
-                    metric_dict = {k.replace('/', '_'): v for k, v in step_log.items()}
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-                    if topk_ckpt_path is not None:
-                        model_ddp = self.model
-                        self.model = self.accelerator.unwrap_model(self.model)
-                        try:
-                            self.save_checkpoint(path=topk_ckpt_path)
-                        finally:
-                            self.model = model_ddp
-
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
@@ -804,8 +813,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 # that the eval script parses) by one per epoch.
                 self.epoch += 1
 
-                # The end-of-epoch validation, sampling and topk checkpoint above have
-                # already run, so the run ends fully evaluated rather than mid-epoch.
+                # The end-of-epoch validation and sampling above have already run, so the
+                # run ends fully evaluated rather than mid-epoch.
                 if stop_training:
                     print(f'Reached max_gradient_steps={max_gradient_steps}, stopping.')
                     break

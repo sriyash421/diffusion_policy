@@ -37,6 +37,25 @@ from diffusion_policy.workspace.train_mlp_image_workspace import (
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
+
+def _val_slot_weighting(policy) -> bool:
+    """Whether val_loss is computed WITH the per-slot weighting.
+
+    Default False (uniform). val_loss is the cross-arm comparison signal, and a weighting
+    that changes over training -- a slot_weights curriculum -- would make it move for
+    reasons that have nothing to do with fit, so a curve could not be compared with itself.
+    The legacy `slot_weight_decay` scalar resolves to 'trained', preserving the semantics
+    every run under that key already had.
+
+    There is a second reason the default matters: ema_model is a deepcopy and the workspace
+    sets _slot_weight_step only on the LIVE model, so a curriculum evaluated on the EMA copy
+    would sit at the schedule's starting profile forever -- silently uniform, but uniform by
+    accident rather than by choice.
+    """
+    spec = getattr(policy, 'slot_weight_spec', None)
+    return bool(spec and spec.get('val') == 'trained')
+
+
 class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     """Outer/inner trainer for the conditional-diffusion search policy.
 
@@ -384,6 +403,10 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         # also generates its context in eval mode).
                         if hasattr(policy, 'set_crop_step'):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
+                        # beside set_crop_step so the crop offset and the
+                        # slot-weight curriculum share one notion of 'now'
+                        if hasattr(policy, 'set_slot_weight_step'):
+                            policy.set_slot_weight_step(self.global_step)
                         result = policy.compute_loss(
                             batch,
                             actions=None if buf_actions is None else buf_actions[sel_t],
@@ -459,7 +482,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         val_losses = list()
                         for batch_idx, batch in enumerate(val_dataloader):
                             batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                            val_losses.append(eval_policy.compute_loss(batch).item())
+                            val_losses.append(eval_policy.compute_loss(
+                                batch,
+                                slot_weighting=_val_slot_weighting(eval_policy)).item())
                             if cfg.training.max_val_steps is not None \
                                     and batch_idx >= cfg.training.max_val_steps - 1:
                                 break
