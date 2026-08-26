@@ -51,7 +51,7 @@ print(f"ckpts     : {len(ck)}/10" + (f"  latest {os.path.basename(ck[-1])}" if c
 if os.path.exists(log):
     bad = [l for l in open(log, errors='ignore')
            if any(k in l for k in ('Traceback', 'CUDA out of memory', 'No space left',
-                                   'Killed', 'TIMEOUT:', 'train exited rc='))]
+                                   'Killed', 'TIMEOUT:')) or ('train exited rc=' in l and 'rc=0' not in l)]
     print(f"errors    : {len(bad)}" + ("" if not bad else "  <-- see below"))
     for l in bad[-5:]:
         print("            " + l.rstrip()[:140])

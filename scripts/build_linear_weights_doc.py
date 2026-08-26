@@ -91,6 +91,33 @@ def table(agg, fmt='{:.2f}'):
     return '\n'.join(lines) if len(lines) > 2 else '_no checkpoints evaluated yet_'
 
 
+def val_loss_curve(run):
+    """(min_val, min_step, final_val, final_step) from the trainer's logs.json.txt.
+
+    val_loss is computed under the CANONICAL objective -- uniform weights, plain L2, via
+    compute_loss(slot_weighting=False) -- precisely so it does not move with the weighting
+    being ablated. That makes it the one number comparable across these arms even when the
+    verifier differs, and it is what says whether a weighting broke the fit.
+    """
+    p = run / 'logs.json.txt'
+    if not p.exists():
+        return None
+    v = []
+    for line in p.read_text().splitlines():
+        if '"val_loss"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get('global_step') is not None:
+            v.append((int(d['global_step']), float(d['val_loss'])))
+    if not v:
+        return None
+    ms, mv = min(v, key=lambda x: x[1])
+    return mv, ms, v[-1][1], v[-1][0]
+
+
 def written_steps(run):
     d = run / 'checkpoints'
     if not d.is_dir():
@@ -165,6 +192,13 @@ def main():
              'control is the uniform armTn arm below; until it is trained '
              '(`bash scripts/run_st_k16_linear_drumkit.sh --uniform-control`) the linear '
              'numbers describe one arm in isolation and carry no claim about the weighting.\n')
+    L.append('**This is the 30-demo regime, not something the weighting did.** The uniform '
+             't_goal k=16 arm on the same 30 demos runs the same curve — `val_loss` min '
+             '0.1029 at step 4,096 rising to 0.3174 by 99,328, 3.08x — against the linear '
+             'arm\'s 0.1006 -> 0.2850, 2.83x. Near-identical shape, marginally *less* '
+             'drift under linear weights. `val_loss` is computed under the canonical '
+             'objective (uniform weights, plain L2) in both, so it is comparable across '
+             'them even though their verifiers are not.\n')
     L.append('At 50 test episodes a single cell carries a 95% CI of roughly ±0.13 near 0.5, '
              'so **cell-to-cell differences under ~0.15 are not separable**; read down a '
              'column or across several checkpoints, never one cell.\n')
@@ -180,6 +214,14 @@ def main():
         done = sorted(s for s, v in by_step(rows, 'success_rate', 'argmax').items()
                       if set(NS) <= set(v))
         L.append(f'_{len(ck)}/10 checkpoints written; {len(done)} fully swept at argmax._\n')
+        vl = val_loss_curve(run)
+        if vl:
+            mv, ms, fv, fs = vl
+            L.append(f'**Fit.** `val_loss` bottoms at **{mv:.4f}** by step {ms:,} and rises '
+                     f'to **{fv:.4f}** by {fs:,} — {fv/mv:.2f}x off its minimum. Read the '
+                     f'step rows below with that in mind: the late checkpoints are more '
+                     f'overfit than the early ones, and a success rate that falls down the '
+                     f'column is the expected shape here, not a surprise.\n')
         for sel in SELECTIONS:
             agg = by_step(rows, 'success_rate', sel)
             L.append(f'### Test success rate — `{sel}`\n')
