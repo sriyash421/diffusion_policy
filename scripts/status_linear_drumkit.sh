@@ -24,9 +24,9 @@ alive=$(ps -eo args --no-headers | grep -c "[t]rain.py --config-name=train_pusht
 echo "run       : $RUN"
 echo "training  : $([ "$alive" -gt 0 ] && echo "alive ($alive procs)" || echo "NOT RUNNING")"
 
-$PY - "$D" "$LOG" <<'PYEOF'
+$PY - "$D" "$LOG" "$alive" <<'PYEOF'
 import glob, json, os, sys, time
-d, log = sys.argv[1], sys.argv[2]
+d, log, alive = sys.argv[1], sys.argv[2], int(sys.argv[3])
 TARGET = 100000
 f = sorted(glob.glob(os.path.join(d, 'wandb', '*', 'files', 'wandb-summary.json')))
 if f:
@@ -41,7 +41,9 @@ if f:
           f"val {s.get('val_loss', float('nan')):.4f}   epoch {s.get('epoch', '?')}")
     # A summary that has not been touched in minutes while the process is alive is the
     # signature of a wedged verifier pool, which is the failure this whole check is for.
-    if stale > 600:
+    # Only meaningful WHILE training runs: once it exits, the summary is final by
+    # definition and its age is just how long ago the run finished, not a stall.
+    if alive and stale > 600:
         print(f"  !! STALLED: wandb summary untouched for {stale/60:.0f} min")
 else:
     print("step      : no wandb summary yet (still building the first context pool)")
@@ -59,7 +61,11 @@ PYEOF
 
 curves=$ROOT/bon_grid_30demo/$ARM/success_curves.jsonl
 if [ -f "$curves" ]; then
-  echo "eval grid : $(wc -l < "$curves") rows in bon_grid_30demo/$ARM"
+  cells=$(grep -cE "^=== .* $ARM step" "$LOG" 2>/dev/null || echo 0)
+  # 60 = 10 checkpoints x 3 selection rules x 2 n-slices. Counted from the log,
+  # not from success_curves.jsonl: that file keeps only the last selection rule
+  # per checkpoint (see build_linear_weights_doc.py), so its row count is ~1/3 true.
+  echo "eval grid : $cells/60 cells started"
   $PY scripts/build_linear_weights_doc.py
 else
   echo "eval grid : not started (runs after training exits 0)"

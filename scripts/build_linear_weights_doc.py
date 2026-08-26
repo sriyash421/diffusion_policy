@@ -1,4 +1,4 @@
-"""Regenerate SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md from the on-disk eval grid.
+"""Regenerate SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md from the sweep logs.
 
 The arm is ST-diffusion k=16 (4/4/256) trained on 30 demos for 100k gradient steps with
 LINEAR per-slot loss weights at ratio 4.857, launched by
@@ -7,9 +7,19 @@ scripts/run_st_k16_linear_drumkit.sh on drumkit. Every 10k checkpoint is swept o
 
     python scripts/build_linear_weights_doc.py [-o SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md]
 
-Reads bon_grid_30demo/<arm>/success_curves.jsonl and nothing else, so it is safe to re-run
-mid-sweep: checkpoints that have not been evaluated simply have no row. The driver calls it
-after every cell, so the doc tracks the sweep live.
+SOURCE IS THE DRIVER LOG, NOT success_curves.jsonl -- and that is not a preference.
+eval_search_pusht.py writes its curve keyed on the CHECKPOINT, not on (checkpoint,
+selection), so the three selection rules of one checkpoint overwrite each other in both
+`<arm>/success_curves.jsonl` and `<arm>/step_*/success_curve.json`: whichever ran last
+(final_pass, under this driver's loop order) is the only one that survives, wearing all
+seven n values. The pre-existing `search` arm shows the identical collapse -- 10 rows, all
+final_pass -- so two thirds of every grid ever run is absent from the jsonl. The per-n
+numbers are printed to stdout for all three rules, so the log is the only complete record,
+which is why scripts/bon_grid_table.py parses it too. Reading the jsonl here would silently
+have labelled final_pass results as argmax.
+
+Safe to re-run mid-sweep: cells that have not been evaluated simply have no line to parse.
+The driver calls it after every cell, so the doc tracks the sweep live.
 
 Like the other success-rate builders this deliberately does NOT nominate a best checkpoint
 or a best n. Every evaluated cell is printed; picking a winner here would be selection on
@@ -19,18 +29,23 @@ import argparse
 import json
 import os
 import pathlib
+import re
 
 ROOT = pathlib.Path(os.environ.get(
     'DP_OUTPUT_ROOT', '/home/harine/diffusion_policy_outputs'))
 BASE = ROOT / 'pusht_search' / 'pusht_image_search'
-GRID = BASE / 'bon_grid_30demo'
 NS = [1, 2, 4, 8, 16, 32, 64]
 STEPS = [10000 * k for k in range(1, 11)]
 SELECTIONS = ('argmax', 'softmax', 'final_pass')
 
-# (grid arm key, run dir, heading, one-line gloss). The uniform armTn control is listed but
-# will simply render "not trained" until someone runs --uniform-control -- it is the arm
-# this doc's numbers actually need, so it is named here rather than left implicit.
+# Every log the driver writes. Repeatable on the command line; later logs win on collision,
+# so a re-run of a timed-out cell supersedes the cell it replaces.
+LOGS = ['logs/run_st_k16_linear_drumkit.log',
+        'logs/run_st_k16_uniform_drumkit.log']
+
+# (log arm key, run dir, heading, one-line gloss). The uniform armTn control is listed but
+# renders "not trained" until someone runs --uniform-control -- it is the arm this doc's
+# numbers actually need, so it is named here rather than left implicit.
 ARMS = [
     ('st-k16-lin4857',
      BASE / 'outer_inner' / 'value_k16_ver-armTn_sw-lin4857_corrupt-False_demos-30_seed-42',
@@ -47,47 +62,36 @@ ARMS = [
 LINEAR_W = [0.341, 0.429, 0.517, 0.605, 0.693, 0.780, 0.868, 0.956,
             1.044, 1.132, 1.220, 1.307, 1.395, 1.483, 1.571, 1.659]
 
+# `=== [<iso>] <arm> <step_XXXXXXX> <selection> ===`, echoed once per n-slice.
+_HEADER = re.compile(r'=== \S+ ([\w-]+) step_(\d+) (\w+) ===')
+_CELL = re.compile(r'(val|test) n=(\d+): success_rate=([\d.]+)')
 
-def read_rows(arm_key):
-    p = GRID / arm_key / 'success_curves.jsonl'
-    if not p.exists():
-        return []
-    out = []
-    for line in p.read_text().splitlines():
-        if line.strip():
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass          # a row still being written; the next call picks it up
+
+def read_cells(paths):
+    """{(arm, step, selection, split): {n: success_rate}} parsed from the driver logs."""
+    out = {}
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        txt = open(path, errors='ignore').read()
+        parts = _HEADER.split(txt)
+        # split() yields [preamble, arm, step, sel, body, arm, step, sel, body, ...]
+        for i in range(1, len(parts), 4):
+            arm, step, sel, body = parts[i], int(parts[i + 1]), parts[i + 2], parts[i + 3]
+            for split, n, sr in _CELL.findall(body):
+                out.setdefault((arm, step, sel, split), {})[int(n)] = float(sr)
     return out
 
 
-def by_step(rows, field, selection):
-    """{step: {n: value}} for one field under one selection rule.
-
-    A checkpoint is evaluated in two n slices (1..16 and 32..64) that land as separate
-    rows, so the per-n dicts are merged rather than replaced.
-    """
-    agg = {}
-    for r in rows:
-        if r.get('selection') != selection:
-            continue
-        step = r.get('step')
-        if step is None:
-            continue
-        vals = r.get(field) or []
-        agg.setdefault(int(step), {}).update(dict(zip(r.get('n') or [], vals)))
-    return agg
-
-
-def table(agg, fmt='{:.2f}'):
+def table(cells, arm, selection, split):
     head = '| step | ' + ' | '.join(f'n={n}' for n in NS) + ' |'
     lines = [head, '|---:|' + '---:|' * len(NS)]
     for step in STEPS:
-        if step not in agg:
+        row = cells.get((arm, step, selection, split))
+        if not row:
             continue
-        cells = [fmt.format(agg[step][n]) if n in agg[step] else '–' for n in NS]
-        lines.append(f'| {step:,} | ' + ' | '.join(cells) + ' |')
+        lines.append(f'| {step:,} | '
+                     + ' | '.join(f'{row[n]:.2f}' if n in row else '–' for n in NS) + ' |')
     return '\n'.join(lines) if len(lines) > 2 else '_no checkpoints evaluated yet_'
 
 
@@ -122,14 +126,16 @@ def written_steps(run):
     d = run / 'checkpoints'
     if not d.is_dir():
         return []
-    return sorted(int(p.name[len('step_'):-len('.ckpt')])
-                  for p in d.glob('step_*.ckpt'))
+    return sorted(int(p.name[len('step_'):-len('.ckpt')]) for p in d.glob('step_*.ckpt'))
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('-o', '--out', default='SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md')
+    ap.add_argument('--log', action='append', default=None,
+                    help='driver log to parse; repeatable, later logs win')
     args = ap.parse_args()
+    cells = read_cells(args.log or LOGS)
 
     L = []
     L.append('# ST-diffusion k=16 with linear slot weights — success rates (drumkit)\n')
@@ -139,8 +145,15 @@ def main():
              'swept over `n = 1, 2, 4, 8, 16, 32, 64` under all three selection rules, on '
              'the same 50 held-out test episodes.\n')
     L.append('Launched by `scripts/run_st_k16_linear_drumkit.sh`. Regenerate this doc with '
-             '`python scripts/build_linear_weights_doc.py`; source of truth is each arm\'s '
-             '`bon_grid_30demo/<arm>/success_curves.jsonl`.\n')
+             '`python scripts/build_linear_weights_doc.py`.\n')
+    L.append('**Source is the driver log, not `success_curves.jsonl`.** '
+             '`eval_search_pusht.py` keys its curve on the checkpoint rather than on '
+             '(checkpoint, selection), so one checkpoint\'s three selection rules overwrite '
+             'each other on disk and only the last to run — `final_pass` — survives, '
+             'wearing all seven n values. The pre-existing `search` arm shows the same '
+             'collapse (10 rows, all `final_pass`). The per-n numbers are printed to stdout '
+             'for all three rules, so the log is the only complete record; '
+             '`scripts/bon_grid_table.py` parses it for the same reason.\n')
 
     L.append('## What is being varied\n')
     L.append('One forward decodes all K=16 candidate slots against the same expert action, '
@@ -168,15 +181,13 @@ def main():
              'orthogonal and only the first is exercised here.\n')
 
     L.append('### The caveat this arm runs into\n')
-    L.append('These arms run `selection: argmax`, where **every slot is deployed** — all n '
-             'candidates come from slots 0..K-1 and the executed action is the best of '
-             'them. The objective is a good *max over the pool*, not a good final '
-             'conditional, so up-weighting the high-context slots may be the wrong '
-             'direction here; the last-slot-heavy argument is a `final_pass` argument, '
-             'where slot K-1 *is* the deployment condition. That is precisely why the grid '
-             'below sweeps all three selection rules rather than argmax alone — under '
-             '`final_pass` the weighting is aimed at the slot actually deployed, and the '
-             'two columns should not be expected to move together.\n')
+    L.append('Under `argmax` **every slot is deployed** — all n candidates come from slots '
+             '0..K-1 and the executed action is the best of them. The objective is a good '
+             '*max over the pool*, not a good final conditional, so up-weighting the '
+             'high-context slots may be the wrong direction there; the last-slot-heavy '
+             'argument is a `final_pass` argument, where slot K-1 *is* the deployment '
+             'condition. That is why the grid sweeps all three rules rather than argmax '
+             'alone — the columns should not be expected to move together.\n')
 
     L.append('## Comparability — read this before using the numbers\n')
     L.append('`verifier_tag` is **armTn** here, and the slot-weight code path requires it. '
@@ -192,28 +203,29 @@ def main():
              'control is the uniform armTn arm below; until it is trained '
              '(`bash scripts/run_st_k16_linear_drumkit.sh --uniform-control`) the linear '
              'numbers describe one arm in isolation and carry no claim about the weighting.\n')
-    L.append('**This is the 30-demo regime, not something the weighting did.** The uniform '
-             't_goal k=16 arm on the same 30 demos runs the same curve — `val_loss` min '
-             '0.1029 at step 4,096 rising to 0.3174 by 99,328, 3.08x — against the linear '
-             'arm\'s 0.1006 -> 0.2850, 2.83x. Near-identical shape, marginally *less* '
-             'drift under linear weights. `val_loss` is computed under the canonical '
-             'objective (uniform weights, plain L2) in both, so it is comparable across '
-             'them even though their verifiers are not.\n')
+    L.append('**The overfitting below is the 30-demo regime, not something the weighting '
+             'did.** The uniform `t_goal` k=16 arm on the same 30 demos runs the same curve '
+             '— `val_loss` min 0.1029 at step 4,096 rising to 0.3174 by 99,328, 3.08x — '
+             'against the linear arm\'s 0.1006 → 0.2850, 2.83x. Near-identical shape, '
+             'marginally *less* drift under linear weights. `val_loss` is computed under the '
+             'canonical objective in both, so it is comparable across them even though '
+             'their verifiers are not.\n')
     L.append('At 50 test episodes a single cell carries a 95% CI of roughly ±0.13 near 0.5, '
              'so **cell-to-cell differences under ~0.15 are not separable**; read down a '
              'column or across several checkpoints, never one cell.\n')
 
     for arm_key, run, heading, gloss in ARMS:
-        rows = read_rows(arm_key)
+        have = {k for k in cells if k[0] == arm_key}
         ck = written_steps(run)
         L.append(f'## {heading}\n')
-        L.append(f'`outer_inner/{run.name}` → `bon_grid_30demo/{arm_key}` — {gloss}\n')
-        if not ck and not rows:
+        L.append(f'`outer_inner/{run.name}` → log arm `{arm_key}` — {gloss}\n')
+        if not ck and not have:
             L.append('_Not trained yet — no checkpoints on disk and no evaluated cells._\n')
             continue
-        done = sorted(s for s, v in by_step(rows, 'success_rate', 'argmax').items()
-                      if set(NS) <= set(v))
-        L.append(f'_{len(ck)}/10 checkpoints written; {len(done)} fully swept at argmax._\n')
+        full = sum(1 for s in STEPS
+                   if set(NS) <= set(cells.get((arm_key, s, 'final_pass', 'test'), {})))
+        L.append(f'_{len(ck)}/10 checkpoints written; {full}/10 fully swept '
+                 f'(all three rules, n=1..64)._\n')
         vl = val_loss_curve(run)
         if vl:
             mv, ms, fv, fs = vl
@@ -223,11 +235,10 @@ def main():
                      f'overfit than the early ones, and a success rate that falls down the '
                      f'column is the expected shape here, not a surprise.\n')
         for sel in SELECTIONS:
-            agg = by_step(rows, 'success_rate', sel)
             L.append(f'### Test success rate — `{sel}`\n')
-            L.append(table(agg) + '\n')
-        L.append(f'### Val success rate — `argmax` (30 episodes)\n')
-        L.append(table(by_step(rows, 'val_success_rate', 'argmax')) + '\n')
+            L.append(table(cells, arm_key, sel, 'test') + '\n')
+        L.append('### Val success rate — `argmax` (30 episodes)\n')
+        L.append(table(cells, arm_key, 'argmax', 'val') + '\n')
         L.append('Val is the split a checkpoint and an n may honestly be chosen on; the '
                  'test tables above are the read-off, not the search space.\n')
 
