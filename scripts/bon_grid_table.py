@@ -5,6 +5,17 @@ rules so the three are read side by side -- in particular their n=1 cells, which
 exactly. Reads whatever has completed so far, so it is safe against an in-progress sweep.
 
     python scripts/bon_grid_table.py [--metric reward|success] [--split test|val]
+
+SCOPE: this renders the LOCAL-GPU sweeps only -- it parses stdout out of logs/*.log written
+by the scripts/*.sh launchers, at their n<=16 / 16-env protocol. It is NOT the reporting
+path for the cluster. Training and eval run under SLURM, where eval_watch_pusht_search.sbatch
+sweeps n = 1 2 4 8 16 32 64 over the 50 test episodes with --skip-val and writes
+<run>/bon_search/success_curves.jsonl. Those numbers are not comparable to these and are
+rendered by scripts/build_30_100_success_doc.py, which reads the jsonl directly.
+
+Consequence for the arms below: 'unetbc', 'st-k1-big' and 'st-k16-big' were only ever
+trained on the cluster, and their launchers no longer run eval at all, so those rows have no
+log to parse and stay empty here. Read them from build_30_100_success_doc.py instead.
 """
 import argparse, os, re, sys
 

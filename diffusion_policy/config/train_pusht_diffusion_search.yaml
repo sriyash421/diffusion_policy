@@ -117,12 +117,45 @@ selection: argmax                # {argmax, softmax, final_pass}
 #     on the eval n. At K=16 with decay 0.9 the slot used at n=1 trains at 0.40 and the one
 #     at n>=16 at 1.96. `context_decay` below has no n dependence.
 slot_weights:
-  mode: uniform          # {uniform, geometric, linear, list, last_only}
+  mode: uniform          # {uniform, geometric, linear, tent, list, last_only, curriculum}
   decay: null            # geometric: w_k ∝ decay^(K-1-k), 0 < decay < 1
   ratio: null            # linear:    w_last/w_first, > 1
+                         # tent:      w_peak/w_edge,  > 1
   weights: null          # list:      explicit K-length list of positives
+  reverse: false         # mirror the finished profile -- how a SLOT-0-HEAVY one is written
   schedule: null         # {shape: linear|cosine|step, start_step: 0, end_step: 50000}
+  waypoints: null        # curriculum only; see below
+  interp: null           # curriculum only; {linear, step}, default linear
   val: uniform           # {uniform, trained} -- what val_loss is computed under
+
+# `tent` puts the mass on the MIDDLE slots -- neither context-free nor fully conditioned --
+# with a symmetric peak at the centre. At even K the peak straddles the two central slots.
+# `reverse` mirrors any profile, so a slot-0-heavy ramp is `linear` + `reverse: true`
+# rather than a ratio < 1 (which the validator rejects, along with every other no-op).
+#
+# `mode: curriculum` moves the profile over training, through an ordered `waypoints` list.
+# Each waypoint is a profile spec plus the `step` it takes effect at -- the same keys mean
+# the same thing there as here, so a curriculum can use any shape above. Held flat before
+# the first waypoint and after the last; the interval [step_i, step_i+1) belongs to
+# waypoint i, so a waypoint's own step is the first step it is active on.
+#
+#   interp: step     hold each waypoint's profile until the next one's step. "30k steps on
+#                    uniform, then linear" is this: each profile is actually TRAINED on for
+#                    its whole stretch.
+#   interp: linear   interpolate between waypoints, so the objective drifts continuously
+#                    and a waypoint's exact profile is touched for one step on the way past.
+#
+# Every waypoint is renormalized to mean 1, and a convex combination of mean-1 vectors is
+# mean 1 -- so the loss SCALE is constant across a whole curriculum, and gradient_clip_norm,
+# the effective step size and val_loss stay comparable while the profile moves.
+#
+# The round-2 curriculum (30k uniform, then linear r=100 for the remaining 70k):
+#   slot_weights:
+#     mode: curriculum
+#     interp: step
+#     waypoints:
+#       - {step: 0,     mode: uniform}
+#       - {step: 30000, mode: linear, ratio: 100}
 
 # LEGACY scalar, kept so the runs already trained under it resolve to the identical weight
 # vector. Exactly equivalent to slot_weights: {mode: geometric, decay: X, val: trained}.

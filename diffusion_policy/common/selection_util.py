@@ -9,10 +9,11 @@ import torch
 
 # How the executed action is chosen. 'final_pass' is listed because it is a legal value of
 # `policy.selection`, but it is handled by the policy, not by select_candidate below.
-SELECTION_MODES = ('argmax', 'softmax', 'final_pass')
+SELECTION_MODES = ('argmax', 'softmax', 'index', 'final_pass')
 
 
-def select_candidate(actions, scores, mode='argmax', temperature=1.0, generator=None):
+def select_candidate(actions, scores, mode='argmax', temperature=1.0, generator=None,
+                     index=None):
     """Pick one chunk per batch row.
 
     actions (B, n, H, Da), scores (B, n) -> (B, H, Da).
@@ -24,11 +25,24 @@ def select_candidate(actions, scores, mode='argmax', temperature=1.0, generator=
     noise vector. That made 'argmax' and 'softmax' rollouts diverge at n=1, where they
     take provably the same action -- an apparent selection effect that was only reseeding.
     """
-    assert mode in ('argmax', 'softmax'), \
-        f"select_candidate handles 'argmax'/'softmax'; got {mode!r} " \
+    assert mode in ('argmax', 'softmax', 'index'), \
+        f"select_candidate handles 'argmax'/'softmax'/'index'; got {mode!r} " \
         f"('final_pass' is generation, not selection -- the policy owns it)"
-    B = actions.shape[0]
+    B, n = actions.shape[0], actions.shape[1]
     arange = torch.arange(B, device=actions.device)
+    if mode == 'index':
+        # A FIXED candidate by generation order, ignoring the scores entirely -- the
+        # verifier takes no part. `index` is 1-BASED, the way "the 8th candidate" is said
+        # out loud; negatives count from the end (-1 == last). This is the read-out that
+        # asks what one slot of the search is worth on its own, with no selection on top.
+        assert index is not None, "selection 'index' needs policy.selection_index"
+        i = int(index)
+        assert i != 0, 'selection_index is 1-based; 0 is not a candidate'
+        i = i - 1 if i > 0 else n + i
+        assert 0 <= i < n, \
+            f'selection_index {index} is out of range at n={n}; the candidate does not ' \
+            f'exist, so a number here would silently be some other slot'
+        return actions[:, i]
     if mode == 'argmax':
         pick = scores.argmax(dim=1)
     else:

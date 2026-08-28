@@ -77,7 +77,8 @@ def main(step_dir):
         if not good:
             fail.append(label)
 
-    # the verifier value is -mean keypoint distance, so it must be <= 0 and higher = better;
+    # the verifier value is -(T-to-goal + arm-to-T distance), so it must be <= 0 and
+    # higher = better;
     # a sign flip anywhere upstream would show up here and silently invert every plot
     z = np.load(tdir.joinpath('argmax-all.npz'))
     s = z['scores'][np.isfinite(z['scores'])]

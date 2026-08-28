@@ -53,9 +53,11 @@ import tqdm
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.common.stats_util import wilson_interval
 from diffusion_policy.dataset.pusht_image_dataset import (
     get_split_masks_3way, get_episode_init_states,
     load_split_manifest, masks_from_manifest)
+from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
@@ -214,21 +216,10 @@ def get_test_states(cfg):
     return get_split_states(cfg, 'test')
 
 
-def wilson_interval(k, n, z=1.96):
-    """95% Wilson score interval for a binomial rate.
-
-    Reported alongside every success rate because the splits are small -- 50 test episodes
-    give SE ~7pp and 10 val episodes ~16pp, so differences smaller than the interval are
-    not distinguishable from sampling noise. Wilson rather than normal-approx because it
-    stays inside [0,1] and behaves at p near 0 or 1, which is exactly where these land.
-    """
-    if n == 0:
-        return (0.0, 0.0)
-    p = k / n
-    d = 1 + z ** 2 / n
-    centre = (p + z ** 2 / (2 * n)) / d
-    half = z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2)) / d
-    return (float(max(0.0, centre - half)), float(min(1.0, centre + half)))
+# `wilson_interval` is imported above from diffusion_policy.common.stats_util and
+# re-exported here, since several scripts import it from this module by name. It moved
+# because the read-only reporting scripts need it without paying this module's ~88 s /
+# ~440 MB torch+hydra import.
 
 
 # Discount for the discounted-return metric. Applied to the per-step reward sequence and
@@ -268,10 +259,14 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
     because `max` remains the primary series -- success is defined on it.
 
     ``score_sink``: optional list. When given, every policy call appends
-    ``(env_index, step_index, [score per candidate])`` -- the RAW verifier value for each
-    of the n candidates drawn, i.e. -mean_kp||feedback|| in pixels, which is what argmax
-    ranks on. Captured here because predict_action_best returns it and it is otherwise
-    discarded; storing it costs one .cpu() per step and nothing else.
+    ``(env_index, step_index, [score per candidate])`` -- the verifier value for each of the
+    n candidates drawn, which is what argmax ranks on. Which value that is depends on the
+    policy's `verifier_value` (see pusht_verifier). Units follow it: PIXELS and <= 0 for the
+    per-candidate values, but under a CROSS-CANDIDATE value (armTd) the number is
+    standardized across the n candidates of that step, so it is neither in pixels nor <= 0,
+    and only its ORDER within a step is meaningful. Captured here because
+    predict_action_best returns it and it is otherwise discarded; storing it costs one
+    .cpu() per step and nothing else.
     """
     def make_init_fn(state):
         state = np.asarray(state, dtype=np.float64)
@@ -386,10 +381,25 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     return float(sr), ci, out
 
 
+def _verifier_value_of(policy):
+    """Which value this policy's verifier ranks with, WITHOUT forcing a lazy build.
+
+    Read off the search kwargs rather than the verifier object: on the UNet BC arm the
+    verifier is a lazy property, and touching it here would fork its 32-process sim pool
+    just to answer a metadata question. Falls back to the pre-cutover default for the same
+    reason the verifier does -- a checkpoint saved before 2026-08-19 has no key at all.
+    """
+    kwargs = getattr(policy, '_search_kwargs', None)
+    if kwargs is None:
+        kwargs = getattr(policy, 'kwargs', None) or {}
+    return kwargs.get('verifier_value', DEFAULT_VALUE_FN) or DEFAULT_VALUE_FN
+
+
 def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300, seed=None,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
                     selection=None, selection_temperature=1.0, skip_val=False,
-                    noise_scheduler=None, score_writer=None):
+                    noise_scheduler=None, score_writer=None, verifier_value=None,
+                    selection_index=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
@@ -407,6 +417,30 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     if selection is not None:
         policy.selection = selection
         policy.selection_temperature = float(selection_temperature)
+        # 'index' executes a fixed candidate by generation order and never consults
+        # the scores, so the verifier takes no part in it -- see select_candidate.
+        policy.selection_index = selection_index
+    # The verifier value is also swappable on trained weights -- it is what RANKS the
+    # candidates, not anything the weights encode -- so 'same weights, t_goal vs armT' is a
+    # controlled comparison. Both halves must move together: `value_fn` is what the sim
+    # scores with, and the kwargs entry is what `_normalize_value` mirrors for the context
+    # copy. Setting only one makes the model see a different ranking than the selector
+    # applies. Left alone, the checkpoint's own cfg decides -- and a cfg from before the
+    # 2026-08-19 cutover has no key at all, so it correctly reproduces `t_goal`.
+    if verifier_value is not None:
+        search_kwargs = getattr(policy, '_search_kwargs', None)   # UNet BC arm
+        target = search_kwargs if search_kwargs is not None else policy.kwargs
+        target['verifier_value'] = verifier_value
+        # The transformer arms build the verifier in __init__, so theirs must be swapped in
+        # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
+        # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
+        # property here, which would force that fork now.
+        built = (policy.__dict__.get('_verifier') if search_kwargs is not None
+                 else getattr(policy, 'verifier', None))
+        if built is not None:
+            built.value_fn = verifier_value
+    print(f'  verifier value: {_verifier_value_of(policy)}'
+          + (' (overridden)' if verifier_value is not None else ' (from checkpoint cfg)'))
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
     # run_dir defaults to the checkpoint's own run (checkpoints/ sits directly under it), so
@@ -444,6 +478,9 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # as an explicit field because it was NOT always equal: before 2026-08-18 'final_pass'
     # cost n+1, so archived curves carry the old value and must be read off it, not off n.
     selection = getattr(policy, 'selection', 'argmax')
+    # which value ranked the candidates; recorded so a curve is self-describing and cannot
+    # be merged with one measured under the other verifier (see _IDENTITY)
+    verifier_value_used = _verifier_value_of(policy)
     n_extra = 0
     temperature = getattr(policy, 'selection_temperature', None)
 
@@ -459,6 +496,11 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             # recorded so a softmax curve is self-describing: the number is meaningless
             # without knowing T, and T only means anything because the score is z-scored
             'selection_temperature': temperature if selection == 'softmax' else None,
+            # 1-based candidate executed under 'index'; None elsewhere. Without it a
+            # cand-8 curve and a cand-1 curve are indistinguishable in the jsonl.
+            'selection_index': (getattr(policy, 'selection_index', None)
+                                if selection == 'index' else None),
+            'verifier_value': verifier_value_used,
             'n_generations': [int(n) + n_extra for n in done],
             # test split: REPORTED
             'success_rate': [test_sr[n] for n in done],
@@ -592,7 +634,11 @@ _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              # a softmax curve and an argmax curve at the same step are different
              # experiments; without these two a --selection override that landed in
              # the same directory would merge into the native curve n-by-n
-             'selection', 'selection_temperature')
+             'selection', 'selection_temperature', 'selection_index',
+             # likewise for the verifier value: t_goal and armT rank candidates
+             # differently, so their curves are different experiments. Curves written
+             # before 2026-08-19 carry no key here and are all t_goal.
+             'verifier_value')
 
 
 def merge_curves(old, new):
@@ -692,8 +738,31 @@ def step_from_ckpt(path):
 
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
+def _bon_subdir(selection=None, verifier_value=None, selection_index=None):
+    """Output subdirectory for one sweep: bon_search[_sel-<mode>][_ver-<value>].
+
+    An override of EITHER readout rule is a different experiment on the same weights, so it
+    gets its own directory. Writing it into plain bon_search/ would merge it with the
+    native curve at the same step -- silently averaging two rules into one row.
+    """
+    sub = 'bon_search'
+    if selection is not None:
+        # the candidate is part of the rule, so it is part of the directory: cand 8
+        # and cand 1 are different experiments and must not share a curve file
+        sub += f'_sel-{selection}'
+        if selection == 'index' and selection_index is not None:
+            sub += str(selection_index)
+    if verifier_value is not None:
+        sub += f'_ver-{verifier_value}'
+    return sub
+
+
 def _make_score_writer(step_dir, checkpoint, selection):
-    """Append per-candidate verifier distances to candidate_scores.jsonl.
+    """Append per-candidate verifier values to candidate_scores.jsonl.
+
+    The value is whichever of pusht_verifier.VALUE_FNS the eval ran with, in pixels; the
+    curve's `verifier_value` field records which. Rows written before 2026-08-19 predate the
+    field and are all `t_goal`.
 
     One row per (split, n, episode, step) holding the n raw scores for that policy call.
     Raw, not the rescaled context copy: this is exactly what argmax compares, so the
@@ -742,6 +811,11 @@ def _row_from_curve(step, checkpoint, curve):
         # in rows written before selection modes existed, which all mean 'argmax'/n
         'selection': curve.get('selection', 'argmax'),
         'selection_temperature': curve.get('selection_temperature'),
+        # which of pusht_verifier.VALUE_FNS ranked the candidates. THIS FIELD IS WHAT MAKES
+        # _IDENTITY's verifier_value guard work: this dict is an explicit whitelist, so a
+        # key added to the curve but not listed here never reaches the jsonl and the guard
+        # silently passes everything. Absent in rows written before 2026-08-19 == 't_goal'.
+        'verifier_value': curve.get('verifier_value'),
         'n_generations': curve.get('n_generations'),
         'success_rate': curve['success_rate'],
         'success_ci': curve.get('success_ci'),
@@ -840,13 +914,45 @@ def read_curve_rows(out_root):
 @click.option('--wandb-entity', default='l2sml')
 @click.option('--wandb-project', default='pushT_diffusion_search')
 @click.option('--selection', default=None,
-              type=click.Choice(['argmax', 'softmax', 'final_pass']),
+              type=click.Choice(['argmax', 'softmax', 'index', 'final_pass']),
               help='override the checkpoint\'s own selection rule. Results land in '
-                   'bon_search_sel-<mode>/ so they never merge with the native-mode curve.')
+                   'bon_search_sel-<mode>/ so they never merge with the native-mode '
+                   'curve. `index` executes a fixed candidate by generation order '
+                   '(--selection-index) and never consults the verifier.')
+@click.option('--selection-index', default=None, type=int,
+              help='--selection index: WHICH candidate to execute, 1-BASED in generation '
+                   'order (8 == the 8th candidate; negatives count from the end, -1 == '
+                   'last). Requires n >= the index at every swept level, else the sweep '
+                   'raises rather than quietly executing a different slot. Results land '
+                   'in bon_search_sel-index<N>/.')
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
+@click.option('--verifier-value', default=None,
+              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd']),
+              help='override which value the verifier ranks candidates with. t_goal is '
+                   'the pre-2026-08-19 value (-T-to-goal distance); d_t_goal is that '
+                   'same term over its 13.6px spread, which RANKS IDENTICALLY but records '
+                   'the scalar in normalized units; armTn adds the '
+                   'arm-to-T-centre term, each term divided by its own within-step '
+                   'candidate spread measured OFFLINE (13.6 / 52.1 px); armTd is armTn '
+                   'with those two constants replaced by the spread measured across the n '
+                   'candidates AT THAT STEP. armTd is UNet-BC-only (the ST arms raise: '
+                   'their search context is causal, so a statistic over all n candidates '
+                   'does not exist when a candidate is scored), is never a verifier_tag, '
+                   'and its recorded score is standardized rather than pixels -- so it is '
+                   'NOT <= 0 and is not comparable across control steps. At n=1 it is '
+                   'identically 0 and the executed action is unchanged. Default: whatever '
+                   'the checkpoint\'s own config says -- a pre-cutover checkpoint has no '
+                   'key and correctly gets t_goal. Results land in bon_search_ver-<value>/ '
+                   'so they never merge with the native-value curve. RETIRED: raw `armT` '
+                   'is deliberately absent -- it summed the two terms unnormalized, so the '
+                   'arm term outvoted task progress ~4:1 and inverted best-of-n (UNet BC '
+                   '0.70 -> 0.00 at n=64, step 10k). Its function stays in VALUE_FNS so '
+                   'the existing bon_search_ver-armT/ curves remain readable.')
 @click.option('--store-scores', is_flag=True,
-              help='write every candidate\'s raw verifier distance to '
+              help='write every candidate\'s raw verifier value '
+                   '(in pixels, EXCEPT under armTd where it is standardized across the n '
+                   'candidates; see --verifier-value for which) to '
                    'candidate_scores.jsonl (one row per split/n/episode/step). This is the '
                    'signal argmax ranks on; it is otherwise discarded after selection.')
 @click.option('--skip-val', is_flag=True,
@@ -854,20 +960,28 @@ def read_curve_rows(out_root):
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
-         store_scores):
+         store_scores, verifier_value, selection_index):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
     assert n_list, f'no powers of two in [{min_n}, {max_n}]'
+    if selection == 'index':
+        assert selection_index, "--selection index needs --selection-index (1-based)"
+        # Checked here rather than per-rollout: a level where the candidate does not
+        # exist would otherwise fail deep inside the sweep, after paying for the
+        # levels below it.
+        need = abs(selection_index)
+        bad = [n for n in n_list if n < need]
+        assert not bad, (f'--selection-index {selection_index} needs n >= {need}, but '
+                         f'the sweep includes n={bad}. Raise --min-n.')
+    elif selection_index is not None:
+        raise SystemExit('--selection-index only means anything with --selection index')
     if not watch:
         assert checkpoint is not None, 'provide -c/--checkpoint or --watch'
         # resolve() not a '..'-relative join: with a symlinked checkpoints/ the old form
         # resolved through the link and landed beside the target instead of in the run dir.
         run_root = pathlib.Path(checkpoint).resolve().parent.parent
-        # A selection override is a DIFFERENT experiment on the same weights, so it gets
-        # its own directory. Writing it into bon_search/ would merge it with the native
-        # curve at the same step -- silently averaging two selection rules into one row.
-        sub = 'bon_search' if selection is None else f'bon_search_sel-{selection}'
+        sub = _bon_subdir(selection, verifier_value, selection_index)
         out = pathlib.Path(output_dir) if output_dir else run_root.joinpath(sub)
         step = step_from_ckpt(checkpoint)
         # SAME per-step subdir convention as watch mode. Previously this wrote a flat
@@ -886,6 +1000,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 num_inference_steps=num_inference_steps,
                                 selection=selection,
                                 selection_temperature=selection_temperature,
+                                verifier_value=verifier_value,
+                                selection_index=selection_index,
                                 skip_val=skip_val,
                                 noise_scheduler=noise_scheduler,
                                 score_writer=_make_score_writer(
@@ -897,7 +1013,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
     # watch mode
     assert run_dir is not None, '--watch requires --run-dir'
     ckpt_dir = pathlib.Path(run_dir).joinpath('checkpoints')
-    sub = 'bon_search' if selection is None else f'bon_search_sel-{selection}'
+    sub = _bon_subdir(selection, verifier_value, selection_index)
     out_root = pathlib.Path(output_dir or os.path.join(run_dir, sub))
     if not ckpt_dir.is_dir():
         # Fail loudly on a wrong --run-dir. Previously a bad path was indistinguishable
@@ -959,6 +1075,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         num_inference_steps=num_inference_steps,
                                         selection=selection,
                                         selection_temperature=selection_temperature,
+                                        verifier_value=verifier_value,
+                                        selection_index=selection_index,
                                         skip_val=skip_val,
                                         noise_scheduler=noise_scheduler)
             except Exception as e:
