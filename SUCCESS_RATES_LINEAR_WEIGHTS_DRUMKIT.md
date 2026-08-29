@@ -38,7 +38,7 @@ At 50 test episodes a single cell carries a 95% CI of roughly ±0.13 near 0.5, s
 
 `outer_inner/value_k16_ver-armTn_sw-lin4857_corrupt-False_demos-30_seed-42` → log arm `st-k16-lin4857` — w_k affine in the slot index, mean 1, w_last/w_first = 4.857
 
-_10/10 checkpoints written; 6/10 fully swept (all three rules, n=1..64)._
+_10/10 checkpoints written; 9/10 fully swept (all three rules, n=1..64)._
 
 **Fit.** `val_loss` bottoms at **0.1006** by step 4,096 and rises to **0.2850** by 99,328 — 2.83x off its minimum. Read the step rows below with that in mind: the late checkpoints are more overfit than the early ones, and a success rate that falls down the column is the expected shape here, not a surprise.
 
@@ -53,6 +53,9 @@ _10/10 checkpoints written; 6/10 fully swept (all three rules, n=1..64)._
 | 50,000 | 0.10 | 0.18 | 0.30 | 0.28 | 0.28 | 0.34 | 0.46 |
 | 60,000 | 0.14 | 0.24 | 0.28 | 0.36 | 0.26 | 0.34 | 0.32 |
 | 70,000 | 0.20 | 0.20 | 0.32 | 0.36 | 0.44 | 0.34 | 0.36 |
+| 80,000 | 0.20 | 0.28 | 0.34 | 0.32 | 0.30 | 0.42 | 0.36 |
+| 90,000 | 0.14 | 0.30 | 0.26 | 0.32 | 0.24 | 0.28 | 0.34 |
+| 100,000 | 0.10 | 0.26 | 0.34 | 0.26 | 0.40 | 0.22 | 0.26 |
 
 ### Test success rate — `softmax`
 
@@ -65,6 +68,9 @@ _10/10 checkpoints written; 6/10 fully swept (all three rules, n=1..64)._
 | 50,000 | 0.10 | 0.32 | 0.16 | 0.26 | 0.30 | 0.26 | 0.48 |
 | 60,000 | 0.14 | 0.24 | 0.22 | 0.24 | 0.34 | 0.34 | 0.32 |
 | 70,000 | 0.20 | 0.16 | 0.28 | 0.14 | 0.30 | 0.26 | 0.22 |
+| 80,000 | 0.20 | 0.30 | 0.08 | 0.24 | 0.26 | 0.34 | 0.18 |
+| 90,000 | 0.14 | 0.30 | 0.26 | 0.24 | 0.20 | 0.34 | 0.24 |
+| 100,000 | 0.10 | 0.30 | 0.26 | 0.18 | 0.20 | 0.32 | 0.32 |
 
 ### Test success rate — `final_pass`
 
@@ -76,7 +82,10 @@ _10/10 checkpoints written; 6/10 fully swept (all three rules, n=1..64)._
 | 40,000 | 0.22 | 0.26 | 0.22 | 0.22 | 0.20 | 0.22 | 0.18 |
 | 50,000 | 0.10 | 0.24 | 0.18 | 0.20 | 0.20 | 0.30 | 0.26 |
 | 60,000 | 0.14 | 0.20 | 0.20 | 0.24 | 0.14 | 0.12 | 0.22 |
-| 70,000 | 0.20 | 0.20 | 0.12 | 0.26 | 0.22 | – | – |
+| 70,000 | 0.20 | 0.20 | 0.12 | 0.26 | 0.22 | 0.16 | – |
+| 80,000 | 0.20 | 0.24 | 0.14 | 0.20 | 0.22 | 0.26 | 0.24 |
+| 90,000 | 0.14 | 0.24 | 0.18 | 0.18 | 0.08 | 0.18 | 0.14 |
+| 100,000 | 0.10 | 0.18 | 0.18 | 0.14 | 0.18 | 0.18 | 0.20 |
 
 ### Val success rate — `argmax` (30 episodes)
 
@@ -89,6 +98,9 @@ _10/10 checkpoints written; 6/10 fully swept (all three rules, n=1..64)._
 | 50,000 | 0.17 | 0.10 | 0.27 | 0.37 | 0.30 | 0.30 | 0.27 |
 | 60,000 | 0.20 | 0.07 | 0.37 | 0.23 | 0.33 | 0.23 | 0.40 |
 | 70,000 | 0.23 | 0.20 | 0.17 | 0.20 | 0.23 | 0.23 | 0.60 |
+| 80,000 | 0.17 | 0.17 | 0.37 | 0.27 | 0.20 | 0.37 | 0.27 |
+| 90,000 | 0.13 | 0.23 | 0.27 | 0.20 | 0.30 | 0.37 | 0.27 |
+| 100,000 | 0.20 | 0.20 | 0.30 | 0.33 | 0.33 | 0.33 | 0.47 |
 
 Val is the split a checkpoint and an n may honestly be chosen on; the test tables above are the read-off, not the search space.
 
