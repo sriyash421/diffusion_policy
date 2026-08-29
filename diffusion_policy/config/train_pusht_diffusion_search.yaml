@@ -142,6 +142,52 @@ slot_weight_decay: False
 slot_loss_norm:
   mode: l2               # {l2, l1, l2tol1}
 
+# ------------------------------------------------- per-slot OBSERVATION corruption ladder
+# TMRL-style context smoothing, indexed by candidate slot. Slot k's observation features are
+# noised by the obs DDPM at a FIXED timestep t_k, with t falling across the slot index: slot
+# 0 (no search context) is the most corrupted, slot K-1 (full context) is clean. The premise
+# is that a slot which cannot see well has to explore, while a slot with the full context
+# sharpens -- so the context becomes something the model must actually use.
+#
+# The noise SAMPLE is shared across a decision and only the LEVEL varies by slot: the agent
+# has one observation, not K of them. Scaled by a running per-dimension feature std, so
+# sqrt(alpha_bar) means an SNR rather than an absolute magnitude.
+#
+#   uniform        off. Bit-identical to the objective that predates this, and registers no
+#                  extra buffers, so every existing checkpoint still loads.
+#   linear_t       t_k = (K-1-k)/(K-1) * (T-1). Even in the timestep INDEX -- the same
+#                  index-linear form slot_weights and slot_loss_norm use. Because alpha_bar
+#                  is a cumulative product this is NOT even in corruption: the step in
+#                  sqrt(alpha_bar) runs 0.042 at the noisy end down to 0.006 at the clean
+#                  end, a 7x spread.
+#   geometric      t_k = (T-1) * decay^k. Spends almost everything on slots 0-4; at
+#                  decay 0.7 eight of fifteen adjacent pairs are indistinguishable and slots
+#                  12-14 land on one timestep. Kept for a like-for-like shape comparison
+#                  against slot_weights' own geometric mode, not as a recommendation -- the
+#                  startup print warns when slots collapse.
+#   linear_signal  t_k chosen so sqrt(alpha_bar) falls in EQUAL steps (~0.027 at K=16) from
+#                  its floor at slot 0 to ~1 at slot K-1. The only shape that gives all K
+#                  slots a distinct, evenly-spaced corruption level. Default choice.
+#   list           an explicit K-length timestep profile.
+#
+# MUTUALLY EXCLUSIVE with corrupt_obs: both noise obs_cond, so enabling both would corrupt
+# it twice at two unrelated levels. The policy raises rather than letting one win.
+#
+# Two things to hold in mind when reading results (neither is a bug):
+#  * corrupt_obs_eval: False evaluates every slot CLEAN, so the slot -> level mapping the
+#    model trained under does not hold at rollout. That is a legitimate arm -- it measures
+#    how much of the benefit survives without deployment-time corruption -- but it is not
+#    the same conditional the loss trained.
+#  * The deployed slot range moves with search width. At n < K only slots 0..n-1 are ever
+#    generated, i.e. only the noisy end; past n = K the rolling window pins every further
+#    generation at slot K-1. Under selection: final_pass the executed action is the LAST
+#    generation, hence the ladder's cleanest reachable slot.
+# Set son_suffix whenever this is non-uniform, for the run-dir reason sw_suffix exists.
+slot_obs_noise:
+  mode: uniform          # {uniform, linear_t, geometric, linear_signal, list}
+  # decay: 0.7           # geometric only, in (0, 1)
+  # timesteps: []        # list only, exactly n_candidates entries
+
 # Recency discount on the SEARCH CONTEXT, applied inside the transformer as an additive
 # attention bias. For a candidate generated against m context entries, the latest entry
 # counts at weight 1, the previous at context_decay, the one before that at context_decay^2
@@ -175,8 +221,12 @@ n_candidates: 16
 # is a pure function of run_name and `training.resume: True` finds latest.ckpt there, so two
 # weightings sharing a name would silently resume each other's run.
 sw_suffix: ''                    # e.g. '_sw-lin4857', '_sw-geo9', '_l2tol1'
+# Carries the OBS-NOISE ladder into the run directory. Must name the mode AND its parameter:
+# corrupt-${corrupt_obs} is a bool and cannot tell three ladder shapes apart, so without this
+# they would share a directory and `training.resume: True` would have them resume each other.
+son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7'
 
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
@@ -311,6 +361,7 @@ policy:
   slot_weight_decay: ${slot_weight_decay}
   slot_weights: ${slot_weights}
   slot_loss_norm: ${slot_loss_norm}
+  slot_obs_noise: ${slot_obs_noise}
   context_decay: ${context_decay}
 
   # Image crop, owned by the POLICY rather than the obs encoder. Random crop is the

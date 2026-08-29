@@ -352,6 +352,138 @@ class SearchProcedureMixin:
         a = alphas.view(1, -1, 1, 1)
         return (1.0 - a) * err.pow(2) + a * err.abs()
 
+    # ------------------------------------------------------ per-slot observation noise
+
+    _SLOT_OBS_NOISE_KEYS = frozenset({'mode', 'decay', 'timesteps'})
+    _SLOT_OBS_NOISE_MODES = ('uniform', 'linear_t', 'geometric', 'linear_signal', 'list')
+
+    @classmethod
+    def _resolve_slot_obs_noise(cls, slot_obs_noise=None):
+        """Validate and normalize the slot_obs_noise block. Pure; no self state.
+
+        Key-checked against a whitelist for the same reason slot_weights is: a typo inside a
+        config block is otherwise silently ignored, which is how an ablation arm ends up
+        secretly identical to its sibling. Without this `slot_obs_noise.mod: linear_t` would
+        train uncorrupted and say nothing.
+        """
+        try:                                    # hydra hands over DictConfig/ListConfig
+            from omegaconf import OmegaConf
+            if slot_obs_noise is not None and OmegaConf.is_config(slot_obs_noise):
+                slot_obs_noise = OmegaConf.to_container(slot_obs_noise, resolve=True)
+        except ImportError:
+            pass
+
+        sn = dict(slot_obs_noise or {})
+        unknown = sorted(set(sn) - cls._SLOT_OBS_NOISE_KEYS)
+        if unknown:
+            raise TypeError(
+                f'slot_obs_noise got unknown key(s) {unknown}. These would be silently '
+                f'ignored, leaving the run uncorrupted while the config claims otherwise. '
+                f'Known keys: {sorted(cls._SLOT_OBS_NOISE_KEYS)}')
+        mode = sn.get('mode', 'uniform') or 'uniform'
+        if mode not in cls._SLOT_OBS_NOISE_MODES:
+            raise ValueError(f'slot_obs_noise.mode must be one of '
+                             f'{cls._SLOT_OBS_NOISE_MODES}, got {mode!r}')
+
+        spec = {'mode': mode, 'decay': None, 'timesteps': None}
+        if mode == 'geometric':
+            if sn.get('decay') is None:
+                raise ValueError("slot_obs_noise.mode: geometric needs a `decay` in (0, 1)")
+            d = float(sn['decay'])
+            if d == 1.0:
+                raise ValueError('slot_obs_noise.decay: 1.0 holds every slot at the noisiest '
+                                 'timestep; use mode: uniform to mean no ladder.')
+            assert 0.0 < d < 1.0, f'slot_obs_noise.decay must be in (0, 1), got {d}'
+            spec['decay'] = d
+        elif mode == 'list':
+            if sn.get('timesteps') is None:
+                raise ValueError("slot_obs_noise.mode: list needs an explicit `timesteps` list")
+            spec['timesteps'] = [int(x) for x in sn['timesteps']]
+        return spec
+
+    def _init_slot_obs_noise(self, slot_obs_noise=None):
+        """Resolve the per-slot observation-corruption ladder. OFF by default.
+
+        Call AFTER `_init_corruption` and after `self.obs_noise_scheduler` exists: the
+        mutual-exclusion check reads `self.corrupt_obs`, and `linear_signal` inverts the
+        scheduler's `alphas_cumprod`.
+        """
+        spec = self._resolve_slot_obs_noise(slot_obs_noise)
+        self.slot_obs_noise_spec = spec
+        if spec['mode'] == 'uniform':
+            return
+        # N-5: both surfaces noise the SAME tensor (obs_cond), so enabling both applies the
+        # corruption twice at two unrelated levels. Same treatment slot_weight_decay gets
+        # against slot_weights: refuse rather than let one silently win.
+        if getattr(self, 'corrupt_obs', False):
+            raise ValueError(
+                'corrupt_obs and slot_obs_noise both corrupt obs_cond, so enabling both '
+                'noises it twice. Set exactly one: corrupt_obs for the flat single-level '
+                'arm, slot_obs_noise for the per-slot ladder.')
+        t = self._slot_obs_timesteps()
+        if t is None:
+            return
+        abar = self.obs_noise_scheduler.alphas_cumprod.to(t.device)
+        sig = abar[t].sqrt()
+        name = type(self).__name__
+        detail = spec['mode'] + (f" decay={spec['decay']}" if spec['decay'] is not None else '')
+        print(f'{name}: slot_obs_noise {detail} -> per-slot (timestep, sqrt(alpha_bar))')
+        print('  ' + ', '.join(f'{i}:({int(ti)}, {si:.3f})'
+                               for i, (ti, si) in enumerate(zip(t.tolist(), sig.tolist()))))
+        # A ladder whose slots are not distinguishable is a silently degenerate arm --
+        # geometric does this readily (see the plan's ladder comparison), so say so here
+        # rather than let the run finish before anyone notices.
+        dup = int((sig[1:] - sig[:-1]).abs().lt(5e-3).sum())
+        if dup:
+            print(f'  WARNING: {dup}/{len(sig) - 1} adjacent slot pairs differ by < 0.005 in '
+                  f'sqrt(alpha_bar) -- those slots are near-duplicate corruption levels.')
+
+    def _slot_obs_timesteps(self, device=None) -> Optional[torch.Tensor]:
+        """Per-slot DDPM timestep for the obs ladder: a length-K long tensor, or None.
+
+        Slot 0 is the MOST corrupted (highest t) and slot K-1 the least, because slot k
+        conditions on the first k scored context candidates -- the slot with no context is
+        the one that should be least sure of what it is looking at.
+
+          linear_t       t_k = (K-1-k)/(K-1) * (T-1)          -- even in the timestep index
+          geometric      t_k = (T-1) * decay^k                -- even in log t
+          linear_signal  t_k = argmin |sqrt(abar) - target_k| -- even in retained signal
+          list           an explicit K-length profile
+
+        `linear_signal` is spaced evenly in `sqrt(alpha_bar)`, the factor the observation is
+        actually scaled by, because `alpha_bar` is a cumulative product: equal steps in t are
+        NOT equal steps in corruption. It is inverted by lookup rather than in closed form for
+        the same reason.
+        """
+        spec = self.slot_obs_noise_spec
+        # None == no ladder; width 1 has a single slot, so there is nothing to grade.
+        if spec['mode'] == 'uniform' or self.max_actions == 1:
+            return None
+        K = self.max_actions
+        T = self.obs_noise_scheduler.config.num_train_timesteps
+        denom = max(K - 1, 1)
+        k = torch.arange(K, dtype=torch.float64)
+        mode = spec['mode']
+        if mode == 'linear_t':
+            t = torch.round((K - 1 - k) / denom * (T - 1))
+        elif mode == 'geometric':
+            t = torch.round((T - 1) * spec['decay'] ** k)
+        elif mode == 'linear_signal':
+            sig = self.obs_noise_scheduler.alphas_cumprod.to(torch.float64).sqrt()  # (T,)
+            # sig is decreasing in t: sig[0] ~ 1 (clean), sig[T-1] the floor (noisiest).
+            target = sig[-1] + (sig[0] - sig[-1]) * k / denom
+            t = (sig[None, :] - target[:, None]).abs().argmin(dim=1)
+        elif mode == 'list':
+            w = spec['timesteps']
+            if len(w) != K:
+                raise ValueError(
+                    f'slot_obs_noise.timesteps has {len(w)} entries but max_actions is {K}; '
+                    f'an explicit profile must name every slot.')
+            t = torch.tensor(w, dtype=torch.float64)
+        else:
+            raise ValueError(f'unhandled slot_obs_noise mode {mode!r}')
+        return t.to(dtype=torch.long, device=device).clamp_(0, T - 1)
+
     def _init_selection(self, **kwargs):
         """Set the knobs predict_action_best reads. Call from the host's __init__."""
         self.selection = kwargs.get('selection', 'argmax') or 'argmax'
@@ -425,6 +557,21 @@ class SearchProcedureMixin:
         """No-op by default; policies that own image crops override it to pin one offset
         across the obs and every subgoal encoded inside the scope."""
         yield
+
+    @contextlib.contextmanager
+    def _corrupt_scope(self):
+        """No-op by default; policies that own a per-slot obs ladder override it to pin one
+        corruption sample across every candidate of a decision."""
+        yield
+
+    def _slot_kwargs(self, slot):
+        """``{'slot': k}`` when the per-slot obs ladder is active, ``{}`` otherwise.
+
+        The other hosts of this mixin (maze and online search) have no ladder and their
+        ``predict_action`` does not take the argument, so it is passed only where it means
+        something.
+        """
+        return {'slot': slot} if getattr(self, 'slot_obs_t', None) is not None else {}
 
 
     def _build_verifier(self, **kwargs):
@@ -537,7 +684,7 @@ class SearchProcedureMixin:
         the entry point TrainSearchOuterInnerWorkspace and the diagnostic scripts reach
         directly. It is reentrant, so the offline trainer's nested call is a no-op.
         """
-        with self._crop_scope():
+        with self._crop_scope(), self._corrupt_scope():
             if obs_features is None:
                 obs_features = self._encode_obs_features(obs_dict)
             actions = None
@@ -545,12 +692,15 @@ class SearchProcedureMixin:
             scores = None
             terms = None
             subgoals = list()
-            for _ in range(n_actions):
+            for i in range(n_actions):
+                # candidate i conditions on exactly i scored context entries, so i IS the
+                # slot index the training loss decodes -- see _slot_obs_timesteps.
                 new_action = self.predict_action(
                     obs_dict,
                     actions=actions,
                     values=values,
                     obs_features=obs_features,
+                    **self._slot_kwargs(i),
                 )['action_pred']
                 new_value, new_score, new_subgoal, new_terms = self._score_candidates(
                     verifier, obs_dict, new_action, want_subgoals=return_subgoals)
@@ -610,7 +760,7 @@ class SearchProcedureMixin:
         """
         # a cross-candidate value needs the terms; nothing else pays for them
         need_terms = return_scores and self._fuses_scores()
-        with self._crop_scope():
+        with self._crop_scope(), self._corrupt_scope():
             # encode once for the whole search, however many candidates it runs
             if obs_features is None:
                 obs_features = self._encode_obs_features(obs_dict)
@@ -653,11 +803,14 @@ class SearchProcedureMixin:
             action_history = actions[:, 1:]
             value_history = values[:, 1:]
             for _ in range(self.max_actions, n_actions):
+                # The rolling window holds the context at its widest, so every generation
+                # past max_actions sits at the ladder's last (cleanest) slot.
                 new_action = self.predict_action(
                     obs_dict,
                     actions=action_history,
                     values=value_history,
                     obs_features=obs_features,
+                    **self._slot_kwargs(self.max_actions - 1),
                 )['action_pred']
                 new_value, new_score, new_subgoal, new_terms = self._score_candidates(
                     verifier, obs_dict, new_action, want_subgoals=return_subgoals)
@@ -754,7 +907,7 @@ class SearchProcedureMixin:
         # The crop scope spans the whole search so the obs and every candidate's subgoal
         # share one offset, exactly as in training. (In eval mode that offset is the
         # deterministic center crop, so this is belt-and-braces rather than load-bearing.)
-        with self._crop_scope():
+        with self._crop_scope(), self._corrupt_scope():
             # encoded once and shared by the search AND (in 'final_pass') the final sample
             obs_features = self._encode_obs_features(obs_dict)
             actions = values = scores = None
@@ -782,6 +935,9 @@ class SearchProcedureMixin:
                     actions=actions[:, -keep:] if keep else None,
                     values=values[:, -keep:] if keep else None,
                     obs_features=obs_features,
+                    # conditioned on `keep` context entries, so it is slot `keep` -- the
+                    # ladder's cleanest reachable slot at this width.
+                    **self._slot_kwargs(keep),
                 )['action_pred']                                        # (B, H, Da)
 
         start = self.n_obs_steps - 1

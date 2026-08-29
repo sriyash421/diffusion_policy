@@ -389,7 +389,7 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
 def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300, seed=None,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
                     selection=None, selection_temperature=1.0, skip_val=False,
-                    noise_scheduler=None, score_writer=None):
+                    noise_scheduler=None, score_writer=None, corrupt_obs_eval=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
@@ -407,6 +407,14 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     if selection is not None:
         policy.selection = selection
         policy.selection_temperature = float(selection_temperature)
+    # Whether rollouts see the corruption the run TRAINED under is likewise a readout-time
+    # choice -- corrupt_obs_eval only gates the eval branch of the corruption, it takes no
+    # part in the loss. So the corrupted and clean rows come from one checkpoint, exactly as
+    # argmax and softmax do. Under the per-slot ladder, False means every slot is evaluated
+    # clean, so the slot -> corruption-level mapping the model trained under does not hold
+    # at rollout; that is a legitimate arm, but not the same conditional the loss trained.
+    if corrupt_obs_eval is not None:
+        policy.corrupt_obs_eval = bool(corrupt_obs_eval)
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
     # run_dir defaults to the checkpoint's own run (checkpoints/ sits directly under it), so
@@ -845,6 +853,9 @@ def read_curve_rows(out_root):
                    'bon_search_sel-<mode>/ so they never merge with the native-mode curve.')
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
+@click.option('--corrupt-obs-eval/--no-corrupt-obs-eval', 'corrupt_obs_eval', default=None,
+              help='override whether rollouts see the obs corruption the run trained under. '
+                   'Unset keeps the checkpoint\'s own setting.')
 @click.option('--store-scores', is_flag=True,
               help='write every candidate\'s raw verifier distance to '
                    'candidate_scores.jsonl (one row per split/n/episode/step). This is the '
@@ -854,7 +865,7 @@ def read_curve_rows(out_root):
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
-         store_scores):
+         store_scores, corrupt_obs_eval):
     # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
     # curves stay comparable and success_curves.jsonl rows stay mergeable.
     n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
@@ -886,6 +897,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 num_inference_steps=num_inference_steps,
                                 selection=selection,
                                 selection_temperature=selection_temperature,
+                                corrupt_obs_eval=corrupt_obs_eval,
                                 skip_val=skip_val,
                                 noise_scheduler=noise_scheduler,
                                 score_writer=_make_score_writer(
@@ -959,6 +971,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         num_inference_steps=num_inference_steps,
                                         selection=selection,
                                         selection_temperature=selection_temperature,
+                                        corrupt_obs_eval=corrupt_obs_eval,
                                         skip_val=skip_val,
                                         noise_scheduler=noise_scheduler)
             except Exception as e:

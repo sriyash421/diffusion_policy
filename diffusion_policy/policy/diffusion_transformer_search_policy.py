@@ -309,6 +309,7 @@ class SearchTransformerForDiffusion(nn.Module):
             n_context_actions: int,
             context_lengths: Optional[torch.Tensor],
             device: torch.device,
+            fold_slots: bool = False,
         ):
         S = self._cond_len
         action_offset = self.n_obs_steps
@@ -376,18 +377,28 @@ class SearchTransformerForDiffusion(nn.Module):
             # defensive, but it costs nothing.
             memory_mask = bias.masked_fill(invalid, torch.finfo(dtype).min)
 
-        memory_mask = memory_mask.repeat_interleave(self.horizon, dim=1)
-        memory_mask = memory_mask.unsqueeze(1).expand(
-            batch_size,
-            self.n_head,
-            n_candidates * self.horizon,
-            S,
-        ).reshape(batch_size * self.n_head, n_candidates * self.horizon, S)
+        if fold_slots:
+            # One decoder row per (batch, slot) instead of one per batch: (B*K, H) queries
+            # against a per-slot memory. Head-minor, matching the b-major/head-minor layout
+            # torch expects for `(N*num_heads, L, S)` -- see the unfolded branch below.
+            memory_mask = memory_mask.reshape(batch_size * n_candidates, 1, 1, S).expand(
+                batch_size * n_candidates, self.n_head, self.horizon, S,
+            ).reshape(batch_size * n_candidates * self.n_head, self.horizon, S)
+        else:
+            memory_mask = memory_mask.repeat_interleave(self.horizon, dim=1)
+            memory_mask = memory_mask.unsqueeze(1).expand(
+                batch_size,
+                self.n_head,
+                n_candidates * self.horizon,
+                S,
+            ).reshape(batch_size * self.n_head, n_candidates * self.horizon, S)
 
         key_padding = torch.ones(batch_size, S, dtype=torch.bool, device=device)
         key_padding[:, :action_offset] = False
         if n_context_actions > 0:
             key_padding[:, action_offset:action_offset + n_context_actions] = False
+        if fold_slots:
+            key_padding = key_padding.repeat_interleave(n_candidates, dim=0)
         return memory_mask, key_padding
 
     def forward(
@@ -401,7 +412,9 @@ class SearchTransformerForDiffusion(nn.Module):
         ) -> torch.Tensor:
         """
         sample: (B, horizon, action_dim), noisy action trajectory to denoise.
-        obs_cond: (B, n_obs_steps, obs_feature_dim), encoded observation context.
+        obs_cond: (B, n_obs_steps, obs_feature_dim) shared by every slot, or
+            (B, K, n_obs_steps, obs_feature_dim) for one view per slot (see the corruption
+            ladder). The 4-D form folds K into the batch dimension.
         actions: optional (B, K, horizon, action_dim), previous generated candidates.
         values: optional (B, K) or (B, K, context_dim), the feedback for the previous
             candidates -- the verifier scalar, and/or the state their rollout reached.
@@ -467,10 +480,28 @@ class SearchTransformerForDiffusion(nn.Module):
                 )
                 action_value_tokens = torch.cat([action_value_tokens, pad], dim=1)
 
-        memory = torch.cat([
-            self.obs_emb(obs_cond),
-            action_value_tokens,
-        ], dim=1)
+        # PER-SLOT CONDITIONING. A 3-D obs_cond is one observation shared by every slot --
+        # the original path, left untouched. A 4-D (B, K, To, D) obs_cond carries one view
+        # per slot (the corruption ladder), which the shared (B, S, n_emb) memory cannot
+        # express, so K folds into the batch dimension: (B*K, S, n_emb) memory against
+        # (B*K, H) decoder queries. That fold is EXACTLY equivalent to the joint decode,
+        # because _build_tgt_mask already forbids every cross-slot edge -- the slots never
+        # attended to one another, so splitting them into separate rows changes nothing but
+        # which memory each one reads.
+        fold_slots = obs_cond.ndim == 4
+        if fold_slots:
+            assert obs_cond.shape[1] == K_decode, (
+                f'obs_cond has {obs_cond.shape[1]} slots but {K_decode} are being decoded')
+            obs_tokens = self.obs_emb(obs_cond)                     # (B, K, To, E)
+            action_value_tokens = action_value_tokens.unsqueeze(1).expand(
+                B, K_decode, *action_value_tokens.shape[1:])        # (B, K, MCA, E)
+            memory = torch.cat([obs_tokens, action_value_tokens], dim=2)
+            memory = memory.reshape(B * K_decode, memory.shape[2], memory.shape[3])
+        else:
+            memory = torch.cat([
+                self.obs_emb(obs_cond),
+                action_value_tokens,
+            ], dim=1)
         if self.cond_pos_emb is not None:
             memory = self.drop(memory + self.cond_pos_emb[:, :memory.shape[1], :])
         memory_mask, memory_key_padding_mask = self._build_memory_masks(
@@ -479,6 +510,7 @@ class SearchTransformerForDiffusion(nn.Module):
             n_context_actions=K_context,
             context_lengths=context_lengths,
             device=device,
+            fold_slots=fold_slots,
         )
         if self.cond_encoder == 'gpt2':
             # Exactly OnlineSearchPolicy's call: one flat stream, causality from GPT-2's own
@@ -509,11 +541,18 @@ class SearchTransformerForDiffusion(nn.Module):
         pos_emb = self.pos_emb[:, None, :self.horizon, :]
         time_emb = self.time_emb(timesteps.reshape(-1)).reshape(B, K_decode, 1, -1)
         x = self.drop(x + pos_emb + time_emb)
-        x = x.reshape(B, K_decode * self.horizon, -1)
+        if fold_slots:
+            # One row per (batch, slot); the tgt mask collapses to the plain causal one
+            # because each row now holds a single slot's horizon.
+            x = x.reshape(B * K_decode, self.horizon, -1)
+            tgt_mask = self._build_tgt_mask(1, device)
+        else:
+            x = x.reshape(B, K_decode * self.horizon, -1)
+            tgt_mask = self._build_tgt_mask(K_decode, device)
         x = self.decoder(
             tgt=x,
             memory=memory,
-            tgt_mask=self._build_tgt_mask(K_decode, device),
+            tgt_mask=tgt_mask,
             memory_mask=memory_mask,
             memory_key_padding_mask=memory_key_padding_mask,
         )
@@ -638,6 +677,31 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
 
+        # The per-slot corruption ladder. AFTER _init_corruption (it refuses to coexist with
+        # corrupt_obs) and AFTER obs_noise_scheduler (linear_signal inverts its alpha_bars).
+        self._init_slot_obs_noise(kwargs.get('slot_obs_noise', None))
+        slot_obs_t = self._slot_obs_timesteps()
+        if slot_obs_t is None:
+            # Registered ONLY when the ladder is on, so an arm that does not use it has a
+            # byte-identical state_dict and every checkpoint that predates this still loads
+            # under the default strict=True (see BaseWorkspace.load_payload).
+            self.slot_obs_t = None
+        else:
+            self.register_buffer('slot_obs_t', slot_obs_t)
+            # Per-dimension feature scale the corruption is measured against, so sqrt(abar)
+            # is an SNR rather than an absolute magnitude (AUDIT P0-2). A running estimate
+            # rather than a per-batch one: rollout batches are small and B=1 would give a
+            # degenerate std, and the corruption must not depend on batch shape -- the same
+            # property set_sample_seeds guarantees for the sampling noise.
+            self.register_buffer('obs_feature_std', torch.ones(obs_feature_dim))
+            self.register_buffer('obs_feature_std_inited',
+                                 torch.zeros((), dtype=torch.bool))
+        # One corruption sample per DECISION, not per candidate (AUDIT P0-3): the agent has
+        # one observation, not max_actions of them. Plain attributes, like _sample_seeds --
+        # they hold no learnable state and a checkpoint should not pin them.
+        self._corrupt_eps = None
+        self._corrupt_depth = 0
+
         self._init_crop(shape_meta, crop_shape, random_crop)
 
     # ---------------------------------------------------------------- config validation
@@ -647,7 +711,8 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
     # ablation arm ends up secretly identical to its sibling.
     _KNOWN_KWARGS = frozenset({
         'max_actions', 'search_context', 'selection', 'selection_temperature',
-        'slot_weight_decay', 'slot_weights', 'slot_loss_norm', 'context_decay',
+        'slot_weight_decay', 'slot_weights', 'slot_loss_norm', 'slot_obs_noise',
+        'context_decay',
         'corrupt_obs_eval',
         'scheduler_step_kwargs',
         # PushT verifier
@@ -715,6 +780,79 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             nobs = nobs[:, :To, ...]
         return self._encode_obs(nobs)
 
+    # ------------------------------------------------- per-slot observation corruption
+
+    @contextlib.contextmanager
+    def _corrupt_scope(self):
+        """Pin ONE corruption noise sample for the span of a decision. Reentrant.
+
+        Mirrors ``_crop_scope``, and for the same reason: within a single decision every
+        candidate must be looking at the SAME observation. The ladder grades how hard each
+        slot has to look at it -- only the LEVEL varies by slot, never the sample.
+        """
+        self._corrupt_depth += 1
+        try:
+            yield
+        finally:
+            self._corrupt_depth -= 1
+            if self._corrupt_depth == 0:
+                self._corrupt_eps = None
+
+    def _decision_noise(self, obs_features: torch.Tensor) -> torch.Tensor:
+        """The corruption sample for this decision, drawn once and reused inside a scope."""
+        eps = self._corrupt_eps
+        if eps is None or eps.shape != obs_features.shape or eps.device != obs_features.device:
+            # The feature-scale estimate is refreshed HERE, on the first corruption of a
+            # decision, not on every call: the EMA moves on each update, so updating per
+            # candidate would corrupt slot 0 and slot K-1 at slightly different scales and
+            # the ladder would no longer be one observation seen at graded levels.
+            self._update_obs_feature_std(obs_features)
+            eps = torch.randn_like(obs_features)
+            if self._corrupt_depth > 0:
+                self._corrupt_eps = eps
+        return eps
+
+    @torch.no_grad()
+    def _update_obs_feature_std(self, obs_features: torch.Tensor) -> None:
+        """Track the per-dimension feature scale. Training only; seeded by the first batch."""
+        if not self.training:
+            return
+        std = obs_features.reshape(-1, obs_features.shape[-1]).std(dim=0).clamp_min(1e-6)
+        if not bool(self.obs_feature_std_inited):
+            self.obs_feature_std.copy_(std)
+            self.obs_feature_std_inited.fill_(True)
+        else:
+            self.obs_feature_std.mul_(0.99).add_(std, alpha=0.01)
+
+    def corrupt_obs_features_slotwise(self, obs_features, slot=None):
+        """Apply the per-slot ladder to encoded obs features.
+
+        ``slot=None`` returns every slot at once, ``(B, To, D) -> (B, K, To, D)``, which is
+        what the training forward needs. An int returns that one slot's view, ``(B, To, D)``,
+        which is what a single ``predict_action`` call needs. Indices at or past K-1 clamp to
+        the last slot: past ``max_actions`` the search runs a rolling window that pins every
+        further generation at the widest context, so they belong at the ladder's clean end.
+
+        Off (``slot_obs_t is None``) this is the identity, so an arm without the ladder is
+        unaffected. The train/eval gate is ``corrupt_obs_eval``, exactly as for
+        ``corrupt_obs_features`` -- with the caveat that evaluating clean means the slot ->
+        level mapping the model trained under does not hold at rollout.
+        """
+        if self.slot_obs_t is None:
+            return obs_features
+        if not self.training and not self.corrupt_obs_eval:
+            return obs_features
+
+        eps = self._decision_noise(obs_features) * self.obs_feature_std
+        abars = self.obs_noise_scheduler.alphas_cumprod.to(obs_features.device)
+        if slot is None:
+            ab = abars[self.slot_obs_t].to(obs_features.dtype).view(1, -1, 1, 1)
+            x = obs_features.unsqueeze(1)
+            return ab.sqrt() * x + (1.0 - ab).sqrt() * eps.unsqueeze(1)
+        idx = min(int(slot), self.slot_obs_t.numel() - 1)
+        ab = abars[self.slot_obs_t[idx]].to(obs_features.dtype)
+        return ab.sqrt() * obs_features + (1.0 - ab).sqrt() * eps
+
     def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         return self.corrupt_obs_features(self._encode_obs_features(obs_dict))
 
@@ -760,6 +898,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             actions: Optional[torch.Tensor] = None,
             values: Optional[torch.Tensor] = None,
             obs_features: Optional[torch.Tensor] = None,
+            slot: Optional[int] = None,
         ) -> Dict[str, torch.Tensor]:
         """Standard ``BaseImagePolicy`` readout: a single (non-searched) action chunk.
 
@@ -774,13 +913,22 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         ``actions`` arrive in RAW action units -- the search loop keeps them raw because the
         verifier simulates them -- and are normalized here, see _normalize_context_actions.
         ``obs_features``: optional pre-computed _encode_obs_features output, reused across
-        the candidates of one search loop. Corruption is still drawn per call -- caching
-        the corrupted features instead would make every candidate share one noise sample.
+        the candidates of one search loop.
+
+        ``slot``: which candidate slot this generation is, for the per-slot corruption
+        ladder. ``None`` means "not laddered" and falls back to the flat ``corrupt_obs``
+        path. Under the ladder the noise SAMPLE is shared across the decision (see
+        ``_corrupt_scope``) and only the level varies by slot; under the flat path it is
+        still drawn per call, because caching it there would make every candidate share one
+        sample without any of the ladder's structure to justify it.
         """
         assert 'past_action' not in obs_dict
         if obs_features is None:
             obs_features = self._encode_obs_features(obs_dict)
-        obs_cond = self.corrupt_obs_features(obs_features)
+        if slot is None:
+            obs_cond = self.corrupt_obs_features(obs_features)
+        else:
+            obs_cond = self.corrupt_obs_features_slotwise(obs_features, slot)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
             actions=self._normalize_context_actions(actions),
@@ -868,7 +1016,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         slot_weights.val) so val_loss remains comparable across arms and across a curriculum
         ramp instead of moving with the weighting.
         """
-        with self._crop_scope():
+        with self._crop_scope(), self._corrupt_scope():
             return self._compute_loss(batch, actions, values, return_aux, slot_weighting)
 
     def _compute_loss(self, batch, actions=None, values=None, return_aux=False,
@@ -884,7 +1032,12 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         # and every candidate of the context search below (which only reads them, under
         # no_grad, so no graph is built for the search).
         obs_features = self._encode_obs_features(batch['obs'])
-        obs_cond = self.corrupt_obs_features(obs_features)
+        # (B, To, D) flat, or (B, K, To, D) under the ladder -- one conditioning view per
+        # candidate slot, same observation and same noise sample, graded level.
+        if self.slot_obs_t is None:
+            obs_cond = self.corrupt_obs_features(obs_features)
+        else:
+            obs_cond = self.corrupt_obs_features_slotwise(obs_features)
 
         if actions is None:
             actions, values = self.generate_search_context(
