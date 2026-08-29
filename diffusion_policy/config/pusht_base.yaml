@@ -28,6 +28,12 @@ shape_meta: ${task.shape_meta}
 # The ablation configs override `search_context` / `corrupt_obs` at THIS level; the policy
 # block interpolates from here so the two can never disagree.
 # ---------------------------------------------------------------------------
+# WHICH VISION BACKBONE, as a wandb tag. Defaults to the ResNet every arm used before
+# 2026-08-28; train_pusht_diffusion_search overrides it to `vae`. It exists so runs from
+# either era are filterable in one wandb project, which matters because the encoder swap is
+# not visible anywhere else in a run's metadata.
+encoder_tag: resnet18
+
 exp_name: pusht_search
 
 # Training-set size in DEMONSTRATIONS. Selects the split manifest
@@ -215,7 +221,7 @@ logging:
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_ver-${verifier_tag}
-  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}"]
+  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "enc-${encoder_tag}"]
   id: null
   group: null
 

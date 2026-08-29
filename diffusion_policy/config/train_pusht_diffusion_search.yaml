@@ -258,8 +258,23 @@ sw_suffix: ''                    # e.g. '_sw-lin4857', '_sw-geo9', '_l2tol1'
 # corrupt-${corrupt_obs} is a bool and cannot tell three ladder shapes apart, so without this
 # they would share a directory and `training.resume: True` would have them resume each other.
 son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7'
+# Carries the FLAT corrupt_obs arm into the run directory. A manual suffix rather than the
+# bare `_corrupt-${corrupt_obs}` this replaced, for the same reason sw_suffix and son_suffix
+# are manual: the bool printed `corrupt-False` on every clean run, which reads as "corruption
+# off" next to a son_suffix that means the opposite. Empty by default, so a clean run's name
+# says nothing about corruption at all. SET IT whenever corrupt_obs is True -- two runs
+# differing only in corrupt_obs would otherwise share a directory and resume each other.
+corrupt_suffix: ''               # e.g. '_corrupt'
+# Which vision backbone this run used. `vae` is the default since the 2026-08-28 encoder
+# swap; set it (and enc_suffix) back to resnet18 for an arm that overrides rgb_model.
+encoder_tag: vae
+# Keeps a VAE run and a ResNet run out of the same directory -- they would otherwise differ
+# in nothing hydra.run.dir can see and would resume each other. Empty for the default
+# backbone, on the same principle as sw_suffix: the default spelling of a name does not
+# change when a new axis is added.
+enc_suffix: ''                   # e.g. '_enc-resnet18'
 
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
@@ -280,27 +295,46 @@ policy:
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
     shape_meta: ${shape_meta}
+    # THE STABLE DIFFUSION VAE ENCODER, not the ResNet18 this arm used until 2026-08-28.
+    # 34.2M params against the ResNet's 11.18M, producing a 4x9x9 = 324-d flattened latent
+    # at the 72x72 crop (vs 512-d). TRAINABLE, exactly as the ResNet was -- nothing in this
+    # repo ever froze that one -- so the swap varies the architecture and nothing else.
+    #
+    # Why: slot_obs_noise corrupts the encoded observation with a DDPM forward marginal,
+    # which on ResNet activations is an operator borrowed out of context and on a VAE latent
+    # is the space diffusion models are trained to operate in. That argument is exact at
+    # initialization and weakens as training moves the encoder off the SD manifold; the
+    # architecture and the pretrained init are what carry over.
+    #
+    # Measured on PushT frames before adopting it: 29.6 dB reconstruction PSNR at 72x72
+    # (31.7 dB at the full 96x96), and the 0.18215 scale puts the latent at mean 0.48 /
+    # std 1.00 -- so the SD VAE does transfer to 96x96 synthetic images despite being
+    # trained on 512x512 natural ones.
+    #
+    # To go back to the ResNet for an arm, override this block with
+    #   _target_: diffusion_policy.model.vision.model_getter.get_resnet
+    #   name: resnet18
+    #   weights: IMAGENET1K_V1
+    # and set encoder_tag=resnet18, use_group_norm=True, crop_shape=[76,76] in BOTH places.
     rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      # ImageNet-pretrained conv weights, matching train_pusht_unet_bc so the ST-vs-UNet
-      # comparison is not also an encoder-init comparison.
-      #
-      # Note this composes only PARTLY with use_group_norm below, which swaps every
-      # BatchNorm2d for a freshly-initialized GroupNorm: the pretrained conv filters
-      # transfer, the running normalization statistics do not. That is accepted and is what
-      # both arms do. (This comment used to claim random init, which the value below has
-      # never matched.)
-      weights: IMAGENET1K_V1
+      _target_: diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder
+      model_name: stabilityai/sd-vae-ft-mse
+      scaling_factor: 0.18215
     resize_shape: null
     # The CropRandomizer still lives here (so the encoder's declared input shape stays
     # 96x96 and its shape assertion keeps working), but the POLICY chooses the offsets and
     # passes them in -- see crop_shape / random_crop in the policy block below. Left to
     # itself CropRandomizer samples one offset per IMAGE, which cannot express "the
     # observation and the subgoals predicted from it must share a crop".
-    crop_shape: [76, 76]
+    # 72, not the 76 this arm used with the ResNet: the VAE downsamples by 8 and 76 is not
+    # divisible by 8. Its stride-2 stages floor 76 to the same 9x9 latent anyway, so 72 is
+    # the identical 324 dims with well-defined arithmetic rather than a compromise. MUST
+    # match the policy block's crop_shape below.
+    crop_shape: [72, 72]
     random_crop: True
-    use_group_norm: True
+    # No-op against a VAE, which has GroupNorm natively and no BatchNorm2d for
+    # replace_submodules to find. Off so the config does not imply otherwise.
+    use_group_norm: False
     share_rgb_model: False
     # MUST be False: the LinearNormalizer already maps images to [-1,1]
     # (normalize_util.get_image_range_normalizer), and ImageNet stats assume [0,1]. With
@@ -408,7 +442,7 @@ policy:
   # eval time (where both are center-cropped). The offset is a pure function of
   # (training.seed, global_step), so it is identical across restarts and machines and is no
   # longer drawn from the global RNG interleaved with the diffusion noise.
-  crop_shape: [76, 76]
+  crop_shape: [72, 72]      # must match obs_encoder.crop_shape above; see the note there
   random_crop: True
 
   # search width (candidates conditioned on the previous ones), same as the maze config.
