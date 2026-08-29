@@ -746,12 +746,17 @@ def step_from_ckpt(path):
 
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
-def _bon_subdir(selection=None, verifier_value=None, selection_index=None):
-    """Output subdirectory for one sweep: bon_search[_sel-<mode>][_ver-<value>].
+def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
+                corrupt_obs_eval=None):
+    """Output subdirectory: bon_search[_sel-<mode>][_ver-<value>][_obs-<clean|corrupt>].
 
-    An override of EITHER readout rule is a different experiment on the same weights, so it
+    An override of ANY readout rule is a different experiment on the same weights, so it
     gets its own directory. Writing it into plain bon_search/ would merge it with the
     native curve at the same step -- silently averaging two rules into one row.
+
+    `corrupt_obs_eval` is keyed here for exactly that reason: whether rollouts see the obs
+    corruption the run trained under changes the number and nothing else in the path, so
+    without it the corrupt and clean sweeps of one selection rule overwrite each other.
     """
     sub = 'bon_search'
     if selection is not None:
@@ -762,6 +767,8 @@ def _bon_subdir(selection=None, verifier_value=None, selection_index=None):
             sub += str(selection_index)
     if verifier_value is not None:
         sub += f'_ver-{verifier_value}'
+    if corrupt_obs_eval is not None:
+        sub += '_obs-corrupt' if corrupt_obs_eval else '_obs-clean'
     return sub
 
 
@@ -992,7 +999,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
         # resolve() not a '..'-relative join: with a symlinked checkpoints/ the old form
         # resolved through the link and landed beside the target instead of in the run dir.
         run_root = pathlib.Path(checkpoint).resolve().parent.parent
-        sub = _bon_subdir(selection, verifier_value, selection_index)
+        sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval)
         out = pathlib.Path(output_dir) if output_dir else run_root.joinpath(sub)
         step = step_from_ckpt(checkpoint)
         # SAME per-step subdir convention as watch mode. Previously this wrote a flat
@@ -1025,7 +1032,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
     # watch mode
     assert run_dir is not None, '--watch requires --run-dir'
     ckpt_dir = pathlib.Path(run_dir).joinpath('checkpoints')
-    sub = _bon_subdir(selection, verifier_value, selection_index)
+    sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval)
     out_root = pathlib.Path(output_dir or os.path.join(run_dir, sub))
     if not ckpt_dir.is_dir():
         # Fail loudly on a wrong --run-dir. Previously a bad path was indistinguishable
