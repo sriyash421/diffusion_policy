@@ -39,6 +39,16 @@ distribution the policy never actually visits.
 """
 import sys
 
+if __name__ == "__main__":
+    # `python scripts/dump_candidate_scores.py` puts scripts/ on sys.path, not the repo
+    # root, so `import diffusion_policy` raised ModuleNotFoundError unless the caller
+    # remembered PYTHONPATH=$PWD. Same preamble render_search_videos.py uses; it makes the
+    # command in the docs work as written.
+    import os, pathlib
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent)
+    sys.path.append(ROOT_DIR)
+    os.chdir(ROOT_DIR)
+
 sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
@@ -54,7 +64,29 @@ import tqdm
 
 from diffusion_policy.common.pytorch_util import dict_apply
 from eval_search_pusht import (
-    SUCCESS_REWARD, build_envs, get_split_states, load_policy, wilson_interval)
+    SUCCESS_REWARD, build_envs, get_split_states, load_policy, wilson_interval,
+    _episode_seed)
+
+
+def resolved_verifier_value(policy, cfg):
+    """Which VALUE_FNS key this rollout actually scores with.
+
+    Recorded in every artifact because the scoring rule changed on 2026-08-19 (`t_goal` ->
+    `armT`, adding an arm-to-T approach term) and the two are NOT comparable: `t_goal` is
+    flat across candidates until the arm touches the block, `armT` is not. A checkpoint
+    saved before the cutover carries no `verifier_value` key, so it resolves to the
+    pre-cutover default and is scored on exactly what it was trained on -- but an artifact
+    that does not SAY so cannot be told apart from one produced under armT.
+    """
+    from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN, VALUE_FNS
+    mode = None
+    try:
+        mode = cfg.policy.get('verifier_value', None)
+    except Exception:
+        pass
+    mode = str(mode or DEFAULT_VALUE_FN)
+    assert mode in VALUE_FNS, f'unknown verifier_value {mode!r}'
+    return mode
 
 
 # ------------------------------------------------------------------------------- rewards
@@ -119,13 +151,24 @@ def _reward_stats(traj):
 def rollout_candidate_scores(env, policy, states, device, n, max_steps):
     """One episode per env; record every candidate's verifier score at every control step.
 
-    Returns (scores, chosen, rewards, alive, score_final) where
+    Returns (scores, chosen, rewards, alive, score_final, reward_traj, terms) where
       scores  (T, B, n)  raw verifier value, candidate IN GENERATION ORDER
       chosen  (T, B)     argmax index -- what an argmax policy would have executed
       rewards (B,)       episode max reward
       alive   (T, B)     bool, False once that env's episode has ended
       score_final (T, B) the DEPLOYED sample's verifier value under `selection: final_pass`,
                   else None
+      terms   (T, B, n, 2) raw-PIXEL [d_T->goal, d_arm->T], or None if the verifier does
+                  not decompose its value (only PushT's does)
+
+    WHY `terms` IS RECORDED. Under `armTn` the score is -(d_T->goal/13.6 + d_arm->T/52.1):
+    two different distances, summed after each is divided by its own within-step candidate
+    spread. A slot can therefore out-score another purely by parking the arm nearer the T
+    while making no task progress at all -- the exact failure mode that retired the raw
+    `armT` value (it cost the UNet BC arm its best-of-n gain, 0.460 -> 0.060 at n=8). Any
+    claim that candidate k beats candidate 0 is uninterpretable without the split, so the
+    terms are recorded at rollout time rather than reconstructed later: they come straight
+    out of the verifier that produced the score, so the two cannot drift apart.
 
     THE ROLLOUT IS DRIVEN BY WHATEVER THE POLICY ACTUALLY DEPLOYS. Under `argmax` that is the
     best-scoring candidate; under `final_pass` it is a further sample conditioned on all n
@@ -155,7 +198,7 @@ def rollout_candidate_scores(env, policy, states, device, n, max_steps):
     sl = slice(To - 1, To - 1 + Ta)
     final_pass = getattr(policy, 'selection', 'argmax') == 'final_pass'
 
-    scores_t, chosen_t, alive_t, final_t = [], [], [], []
+    scores_t, chosen_t, alive_t, final_t, terms_t = [], [], [], [], []
     ep_done = np.zeros(B, dtype=bool)
     done = False
     pbar = tqdm.tqdm(total=max_steps // Ta + 1, desc=f'n={n}', leave=False)
@@ -167,9 +210,12 @@ def rollout_candidate_scores(env, policy, states, device, n, max_steps):
             # every candidate's subgoal share an offset.
             with policy._crop_scope():
                 obs_features = policy._encode_obs_features(obs_dict)
-                actions, values, scores = policy.predict_n_actions(
+                # optional returns are APPENDED to the tuple, never inserted; with
+                # return_subgoals off the terms land in slot 3.
+                actions, values, scores, terms = policy.predict_n_actions(
                     obs_dict, verifier=policy.verifier, n_actions=n,
-                    return_scores=True, obs_features=obs_features)   # (B,n,H,Da), ctx, (B,n)
+                    return_scores=True, obs_features=obs_features,
+                    return_terms=True)          # (B,n,H,Da), ctx, (B,n), (B,n,2)|None
                 best = scores.argmax(dim=1)                          # (B,)
                 if final_pass:
                     keep = policy.max_actions - 1
@@ -189,6 +235,8 @@ def rollout_candidate_scores(env, policy, states, device, n, max_steps):
         scores_t.append(scores.float().cpu().numpy())
         chosen_t.append(best.cpu().numpy())
         alive_t.append(~ep_done.copy())
+        if terms is not None:
+            terms_t.append(terms.float().cpu().numpy())
         if score_final is not None:
             final_t.append(score_final.float().cpu().numpy())
 
@@ -211,11 +259,150 @@ def rollout_candidate_scores(env, policy, states, device, n, max_steps):
         traj[i, :len(r)] = r
     return (np.stack(scores_t), np.stack(chosen_t),
             np.array([np.max(r) for r in rewards]), np.stack(alive_t),
-            np.stack(final_t) if final_t else None, traj)
+            np.stack(final_t) if final_t else None, traj,
+            np.stack(terms_t) if terms_t else None)
 
 
-def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, seed):
+def write_per_step_json(out_dir, meta, scores, chosen, alive, reward_traj, idxs,
+                        n_action_steps, score_final=None, max_episodes=0, terms=None):
+    """Objective 2a: every candidate's distance value at every control step of a rollout.
+
+    One file per episode. Written for ALL episodes by default because the arrays are
+    already in memory and the whole set costs ~1 MB -- picking "the one episode" before
+    seeing the data would be choosing the example to fit the story.
+
+    Both `value` (verifier units, higher is better, 0 is perfect) and `neg_value`
+    (= -value, lower is better) are stored. They are the same number; the pair exists so a
+    reader never has to remember which way the sign runs.
+
+    `neg_value` REPLACES the old `distance_px` key, which was a misnomer under any value but
+    `t_goal`. Under `armTn` the score is -(d_t_goal/13.6 + d_arm_t/52.1) -- a sum of two
+    distances each divided by its own within-step candidate spread -- so its negation is a
+    normalized composite running to about 32, not a pixel distance. The actual pixel
+    distances are `d_t_goal` and `d_arm_t`, present whenever the verifier decomposes.
+    """
+    per = pathlib.Path(out_dir) / 'per_step'
+    per.mkdir(parents=True, exist_ok=True)
+    T, B, n = scores.shape
+    Ta = int(n_action_steps)
+    written = []
+    limit = B if not max_episodes else min(B, int(max_episodes))
+    for b in range(limit):
+        steps = []
+        for t in range(T):
+            if not bool(alive[t, b]):
+                continue
+            v = scores[t, b].astype(np.float64)
+            mx = float(v.max())
+            tie = v >= (mx - TIE_TAU)
+            order = np.sort(v)
+            env_step = t * Ta
+            # reward at the END of this decision's action window, clipped to the episode
+            row = reward_traj[b]
+            fin = np.flatnonzero(~np.isnan(row))
+            last = int(fin[-1]) if fin.size else 0
+            rw = float(row[min(env_step + Ta - 1, last)]) if fin.size else float('nan')
+            steps.append({
+                't': int(t), 'env_step': int(env_step), 'alive': True,
+                'value': [round(float(x), 4) for x in v],
+                'neg_value': [round(float(-x), 4) for x in v],
+                'argmax_first': int(v.argmax()),
+                'argmax_last': int(n - 1 - tie[::-1].argmax()),
+                'n_argmax_tied': int(tie.sum()),
+                'argmax_margin_px': round(float(order[-1] - order[-2]), 6) if n >= 2 else 0.0,
+                'degenerate': bool(mx - float(v.min()) <= BLIND_EPS),
+                'executed': int(chosen[t, b]),
+                'executed_value': round(float(v[int(chosen[t, b])]), 4),
+                'final_slot_value': round(float(v[-1]), 4),
+                'min': round(float(v.min()), 4), 'max': round(mx, 4),
+                'mean': round(float(v.mean()), 4),
+                'spread': round(float(mx - v.min()), 4),
+                'reward': round(rw, 4) if rw == rw else None,
+            })
+            if score_final is not None:
+                steps[-1]['deployed_final_value'] = round(float(score_final[t, b]), 4)
+            if terms is not None:
+                # RAW PIXELS, per candidate. Kept separate from `value` because a slot can
+                # out-score another on the arm-reach term alone while making no task
+                # progress, and the composite cannot show that.
+                steps[-1]['d_t_goal'] = [round(float(x), 4) for x in terms[t, b, :, 0]]
+                steps[-1]['d_arm_t'] = [round(float(x), 4) for x in terms[t, b, :, 1]]
+
+        deg = np.array([x['degenerate'] for x in steps], dtype=bool)
+        tied = np.array([x['n_argmax_tied'] > 1 for x in steps], dtype=bool)
+        first = np.array([x['argmax_first'] for x in steps], dtype=float)
+        uniq = ~tied
+        traj = reward_traj[b][~np.isnan(reward_traj[b])]
+        doc = {
+            # v2: `distance_px` -> `neg_value` (the old name was a misnomer under armTn),
+            # plus per-candidate `d_t_goal` / `d_arm_t` in raw pixels.
+            'schema': 'pusht_candidate_values/v2',
+            **{k: meta[k] for k in ('arm', 'checkpoint', 'step', 'split', 'n',
+                                    'max_actions', 'selection', 'seed', 'paired_seeds',
+                                    'slot_semantics', 'slot_index_meaningful', 'slot_note',
+                                    'n_obs_steps', 'n_action_steps') if k in meta},
+            'split_pos': int(b), 'episode_idx': int(idxs[b]),
+            'episode_seed': int(meta['episode_seeds'][b]) if meta.get('episode_seeds') else None,
+            'value_units': f"verifier value under {meta.get('verifier_value', '?')}; "
+                           'higher is better, 0 is perfect. Under armTn this is '
+                           '-(d_t_goal/13.6 + d_arm_t/52.1) -- a spread-normalized '
+                           'composite, NOT a pixel distance.',
+            'neg_value_units': '= -value; lower is better. Same units as `value`.',
+            'term_units': ('d_t_goal, d_arm_t: raw pixels, per candidate'
+                           if terms is not None else None),
+            'alive_note': 'alive is captured BEFORE the env step, so the terminal decision '
+                          'of a successful episode is included.',
+            'steps': steps,
+            'summary': {
+                'n_decisions': len(steps), 'n_alive': len(steps),
+                'success': bool(traj.max() >= SUCCESS_REWARD) if traj.size else False,
+                'max_reward': float(traj.max()) if traj.size else 0.0,
+                'n_degenerate_steps': int(deg.sum()),
+                'n_tied_argmax_steps': int(tied.sum()),
+                'argmax_slot_mean_first': float(first.mean()) if len(first) else None,
+                'argmax_slot_median_first': float(np.median(first)) if len(first) else None,
+                'argmax_slot_mean_unique': float(first[uniq].mean()) if uniq.any() else None,
+                'argmax_slot_median_unique': float(np.median(first[uniq])) if uniq.any() else None,
+                'n_unique_steps': int(uniq.sum()),
+            },
+        }
+        name = f'ep{b:02d}_idx{int(idxs[b])}.json'
+        (per / name).write_text(json.dumps(doc, indent=2))
+        written.append(name)
+    print(f'  per-step JSON: {len(written)} episodes -> {per}')
+    return written
+
+
+def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, seed,
+            per_step_json=False, per_step_episodes=0, pair_seeds=True,
+            verifier_value=None):
     policy, cfg = load_policy(checkpoint, device)
+    # SCORING RULE OVERRIDE, so arms trained under different verifier eras can be compared.
+    #
+    # The value is a scoring instrument, not trained weights -- it is what RANKS candidates
+    # -- so it is swappable on a loaded checkpoint. Same mechanism eval_search_pusht.py's
+    # --verifier-value uses, deliberately: one implementation, not two that drift.
+    #
+    # THIS CHANGES THE ROLLOUT, and that is not a side effect to gloss over. The executed
+    # candidate is the argmax under this value, so a different value picks a different
+    # action and the trajectory diverges. A dump written with an override is a measurement
+    # of "this policy scored/selected under THAT rule", which is exactly what makes a
+    # t_goal-era arm usable as a null for armTn arms -- and is not the same experiment as
+    # its native dump. Both the native and the used value are recorded below so the two can
+    # never be silently mixed.
+    native_value = resolved_verifier_value(policy, cfg)
+    if verifier_value is not None:
+        search_kwargs = getattr(policy, '_search_kwargs', None)   # UNet BC arm
+        target = search_kwargs if search_kwargs is not None else policy.kwargs
+        target['verifier_value'] = verifier_value
+        # The transformer arms build the verifier in __init__, so theirs must be swapped in
+        # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
+        # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
+        # property here, which would force that fork now.
+        built = (policy.__dict__.get('_verifier') if search_kwargs is not None
+                 else getattr(policy, 'verifier', None))
+        if built is not None:
+            built.value_fn = verifier_value
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
     run_dir = pathlib.Path(checkpoint).resolve().parent.parent
@@ -225,10 +412,25 @@ def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, see
 
     torch.manual_seed(seed)
     np.random.seed(seed)
+    # Per-EPISODE noise streams keyed on the episode's position in the split -- the same key
+    # _eval_split_at_n uses -- so an episode sees the same trajectory noise under every arm
+    # and at every checkpoint, and the arms are paired episode-by-episode rather than merely
+    # both random. This CHANGES the numbers relative to dumps written before it existed
+    # (those drew from the unseeded global RNG), which is why `paired_seeds` is recorded and
+    # why paired and unpaired dumps must not be compared.
+    episode_seeds = None
+    if pair_seeds:
+        seeder = getattr(policy, 'set_sample_seeds', None)
+        if seeder is not None:
+            episode_seeds = [_episode_seed(seed, n, i) for i in range(len(states))]
+            seeder(episode_seeds)
+        else:
+            print('warning: policy has no set_sample_seeds; --pair-seeds is a no-op')
     env = build_envs(len(states), cfg.policy.n_obs_steps, cfg.policy.n_action_steps, max_steps)
     t0 = time.perf_counter()
     try:
-        scores, chosen, rewards, alive, score_final, reward_traj = rollout_candidate_scores(
+        (scores, chosen, rewards, alive, score_final, reward_traj,
+         terms) = rollout_candidate_scores(
             env, policy, list(states), torch.device(device), n, max_steps)
     finally:
         env.close()
@@ -242,6 +444,7 @@ def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, see
 
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    slot_sem, slot_note = _slot_semantics(getattr(policy, 'max_actions', 1), n)
     meta = {
         'arm': arm,
         'checkpoint': str(checkpoint),
@@ -254,203 +457,76 @@ def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, see
         'corrupt_obs': bool(cfg.get('corrupt_obs', False)),
         'n_demos': int(cfg.get('n_demos', 0) or 0),
         'episode_idxs': [int(i) for i in idxs],
+        'max_actions': int(getattr(policy, 'max_actions', 0) or 0),
+        'n_obs_steps': int(cfg.policy.n_obs_steps),
+        'n_action_steps': int(cfg.policy.n_action_steps),
+        'paired_seeds': bool(episode_seeds is not None),
+        'episode_seeds': episode_seeds,
+        'slot_semantics': slot_sem,
+        'slot_index_meaningful': slot_sem == 'trained_staircase',
+        'slot_note': slot_note,
+        # what this dump was SCORED with, which is what every downstream comparison keys on
+        'verifier_value': verifier_value or native_value,
+        # what the checkpoint's own config says, and whether they differ. An artifact that
+        # does not say it was overridden cannot be told apart from a native one.
+        'verifier_value_native': native_value,
+        'verifier_value_overridden': bool(
+            verifier_value is not None and verifier_value != native_value),
         'success_rate': float(np.mean(rewards >= SUCCESS_REWARD)),
         'mean_reward': float(np.mean(rewards)),
         **_reward_stats(reward_traj),
         'n_control_steps': int(alive.sum()),
+        # Whether the value could be split into its distance components. False for any
+        # verifier that does not decompose; downstream term analysis must skip those dumps
+        # rather than silently reporting nothing.
+        'has_terms': terms is not None,
+        'term_names': ['d_t_goal_px', 'd_arm_t_px'] if terms is not None else None,
+        'term_units': ('raw pixels, NOT the verifier value. armTn ranks on '
+                       '-(d_t_goal/13.6 + d_arm_t/52.1), so `value` is a normalized '
+                       'composite of these two and is not in pixels.'
+                       if terms is not None else None),
         'seconds': dt,
     }
     arrays = dict(scores=scores, chosen=chosen, rewards=rewards, alive=alive,
                   reward_traj=reward_traj, episode_idxs=np.asarray(idxs))
     if score_final is not None:
         arrays['score_final'] = score_final
+    if terms is not None:
+        arrays['terms'] = terms                      # (T, B, n, 2) raw px
     np.savez_compressed(out_dir / 'candidate_scores.npz', **arrays)
     (out_dir / 'candidate_scores_meta.json').write_text(json.dumps(meta, indent=2))
-    stats = analyse(scores, chosen, alive, score_final=score_final)
+    if per_step_json:
+        write_per_step_json(out_dir, meta, scores, chosen, alive, reward_traj, idxs,
+                            cfg.policy.n_action_steps, score_final=score_final,
+                            max_episodes=per_step_episodes, terms=terms)
+    stats = analyse(scores, chosen, alive, score_final=score_final, seed=seed)
     (out_dir / 'candidate_scores_stats.json').write_text(
         json.dumps({**meta, **stats}, indent=2))
     print(f"{arm} step {step}: {meta['n_control_steps']} control steps, "
           f"success {meta['success_rate']:.2f}, {dt:.0f}s -> {out_dir}")
+    print(f"  verifier value: {meta['verifier_value']}"
+          + (f" (OVERRIDDEN; checkpoint's own is {native_value})"
+             if meta['verifier_value_overridden'] else ' (from checkpoint cfg)'))
+    print(f"  slot semantics: {slot_sem}  |  blind {stats['blind_rate_overall']:.1%} of live "
+          f"steps, {stats['frac_blind_in_leading_run']:.0%} of those in the leading run")
+    print(f"  argmax slot (discriminating steps): unique "
+          f"{stats.get('argmax_slot_mean_unique', float('nan')):.2f} "
+          f"| first {stats.get('argmax_slot_mean_first', float('nan')):.2f} "
+          f"| perm null {stats.get('argmax_slot_perm_null', float('nan')):.2f} "
+          f"| uniform {stats.get('argmax_slot_uniform_null', float('nan')):.2f}")
     return meta, stats
 
 
 # ------------------------------------------------------------------------------ analysis
 
-def _record_rate(X):
-    """P(column k is a new running max over columns 0..k-1), per column."""
-    running_max = np.maximum.accumulate(X, axis=1)
-    is_record = np.zeros_like(X, dtype=bool)
-    is_record[:, 0] = True
-    is_record[:, 1:] = X[:, 1:] > running_max[:, :-1]
-    return is_record.mean(axis=0)
-
-
-def analyse(scores, chosen, alive, score_final=None, n_perm=200, seed=0):
-    """Per-candidate-index statistics over every live control step.
-
-    `scores` (T,B,n) -> flattened to (S,n) keeping only live steps, since a finished
-    episode's padded steps are not states the policy visited.
-    """
-    S = scores.reshape(-1, scores.shape[-1])[alive.reshape(-1)]        # (S, n)
-    ch = chosen.reshape(-1)[alive.reshape(-1)]                         # (S,)
-    n_steps, n = S.shape
-    idx = np.arange(n)
-
-    # Steps where every candidate scored identically carry no ordering information at all
-    # (the agent is nowhere near the block, so nothing any candidate does moves it). They
-    # are counted and reported, but excluded from the record test, where they would only
-    # dilute both the observed rate and the null by the same factor.
-    spread = S.max(axis=1) - S.min(axis=1)
-    degenerate = spread <= 1e-9
-    live = ~degenerate
-    Sl = S[live]
-
-    # per-index level. `centered` removes each control step's own difficulty -- raw means
-    # are dominated by which states happen to be easy, not by candidate order.
-    centered = S - S.mean(axis=1, keepdims=True)
-    sem = S.std(axis=0, ddof=1) / np.sqrt(n_steps)
-    csem = centered.std(axis=0, ddof=1) / np.sqrt(n_steps)
-
-    # THE TEST: is candidate k a new running max more often than ORDER ALONE predicts?
-    #
-    # The baseline is the permutation null -- each step's own candidate values, reshuffled.
-    # It is exchangeable by construction, so it isolates exactly the ordering effect while
-    # holding the value multiset (and its ties) fixed. The analytic 1/(k+1) is reported too
-    # but is NOT the comparison: these scores tie often enough that a shuffled sequence
-    # already sits ~30% below it, so measuring against 1/(k+1) would score a tie artefact as
-    # a real effect. See the module docstring.
-    record_rate = _record_rate(Sl)
-    rng = np.random.default_rng(seed)
-    perm = np.stack([_record_rate(rng.permuted(Sl, axis=1)) for _ in range(n_perm)])
-    perm_rate = perm.mean(axis=0)
-    perm_sd = perm.std(axis=0, ddof=1)
-    null_rate = 1.0 / (idx + 1.0)
-    # binomial SE of the empirical rate, for "is the gap real"
-    record_se = np.sqrt(np.clip(record_rate * (1 - record_rate), 0, None) / max(len(Sl), 1))
-
-    # trend of the centered score against index: OLS slope and Spearman rho
-    x = np.repeat(idx[None, :], n_steps, axis=0).reshape(-1)
-    y = centered.reshape(-1)
-    slope, intercept = np.polyfit(x, y, 1)
-    resid = y - (slope * x + intercept)
-    slope_se = float(np.sqrt((resid ** 2).sum() / (len(y) - 2) / ((x - x.mean()) ** 2).sum()))
-    rho = float(_spearman(x, y))
-
-    # "does a bigger n raise the AVERAGE candidate, or only the max?" -- prefix statistics
-    # over candidates 0..n-1. prefix_mean is the question as asked; prefix_max is the
-    # best-of-n curve, and the gap between them is the entire value of having a selector.
-    #
-    # NOTE a regime change at max_actions: predict_n_actions switches to a rolling window
-    # past K, so candidates 0..K-1 come from slots 0..K-1 while every candidate beyond that
-    # is drawn from slot K-1's conditional. A rise in prefix_mean across that boundary is
-    # partly a change of generator, not a trend within one.
-    csum = np.cumsum(S, axis=1)
-    denom = np.arange(1, n + 1, dtype=np.float64)[None, :]
-    prefix_mean = (csum / denom).mean(axis=0)                 # (n,)
-    prefix_max = np.maximum.accumulate(S, axis=1).mean(axis=0)
-
-    # Per-slot version of the deployed-sample analysis: treat EVERY candidate index as if it
-    # were the one executed, and ask the same questions. `rank_by_index` is how many of the n
-    # candidates beat candidate k (0 = best); `p_is_best_by_index` is how often it is the
-    # outright winner. Uniform expectations are (n-1)/2 and 1/n, so departures say whether a
-    # slot is systematically better-positioned than its siblings rather than merely different.
-    order = (S[:, :, None] < S[:, None, :]).sum(axis=2)      # (S_steps, n) rank of each slot
-    rank_by_index = order.mean(axis=0)
-    p_best_by_index = (order == 0).mean(axis=0)               # tie-INCLUSIVE: "is a maximizer"
-
-    # The baseline is the MEAN ACROSS SLOTS, not (n-1)/2 and 1/n. Under any exchangeable
-    # ordering every slot has the same expected rank, so the across-slot average IS the
-    # permutation null -- and unlike the analytic values it is unaffected by ties, which are
-    # rife here (many candidates never touch the block and return identical values, so a
-    # dozen slots can be jointly "best"). Quoting 1/n would make every slot look ~10x better
-    # than chance when the effect is entirely ties, the same trap as the 1/(k+1) record null.
-    out_final = {'rank_by_index': rank_by_index.tolist(),
-                 'p_is_best_by_index': p_best_by_index.tolist(),
-                 'rank_baseline': float(rank_by_index.mean()),
-                 'p_is_best_baseline': float(p_best_by_index.mean()),
-                 'rank_uniform_naive': float((n - 1) / 2)}
-    if score_final is not None:
-        F = score_final.reshape(-1)[alive.reshape(-1)]        # (S_all,) deployed sample
-        Sa = scores.reshape(-1, scores.shape[-1])[alive.reshape(-1)]
-        # rank of the deployed sample among the n candidates it was conditioned on;
-        # 0 == better than all of them. Uniform expectation is n/2.
-        rank = (Sa > F[:, None]).sum(axis=1)
-        # How often does the deployed sample beat the best of the FIRST n candidates, as a
-        # function of n? This is the crossover the arm lives or dies on: at n=1 it only has
-        # to beat a single draw, at n=64 it has to beat the max of 64. Where this curve
-        # crosses 0.5 is the search width past which selection wins.
-        pmax = np.maximum.accumulate(Sa, axis=1)             # (S_steps, n)
-        beats_prefix = (F[:, None] > pmax).mean(axis=0)      # (n,)
-        gap_prefix = (F[:, None] - pmax).mean(axis=0)        # (n,) px
-        out_final.update({
-            'final_beats_prefix_max': beats_prefix.tolist(),
-            'final_minus_prefix_max': gap_prefix.tolist(),
-        })
-        out_final.update({
-            'final_mean': float(F.mean()),
-            'final_rank_mean': float(rank.mean()),
-            'final_rank_uniform': float(n / 2),
-            'final_percentile': float((rank / max(n - 1, 1)).mean()),
-            'p_final_is_best': float((rank == 0).mean()),
-            'p_final_beats_argmax': float((F > Sa.max(axis=1)).mean()),
-            'final_minus_mean': float((F - Sa.mean(axis=1)).mean()),
-            'final_minus_best': float((F - Sa.max(axis=1)).mean()),
-            'final_minus_first': float((F - Sa[:, 0]).mean()),
-        })
-
-    return {
-        'n_control_steps': int(n_steps),
-        'n_degenerate_steps': int(degenerate.sum()),
-        'n_test_steps': int(live.sum()),
-        'prefix_mean': prefix_mean.tolist(),
-        'prefix_max': prefix_max.tolist(),
-        **out_final,
-        'index': idx.tolist(),
-        'mean_by_index': S.mean(axis=0).tolist(),
-        'sem_by_index': sem.tolist(),
-        'centered_mean_by_index': centered.mean(axis=0).tolist(),
-        'centered_sem_by_index': csem.tolist(),
-        # within-step spread of candidate k: how much room that slot still explores
-        'centered_sd_by_index': centered.std(axis=0, ddof=1).tolist(),
-        'running_max_by_index': np.maximum.accumulate(S, axis=1).mean(axis=0).tolist(),
-        'record_rate': record_rate.tolist(),
-        'record_rate_se': record_se.tolist(),
-        'perm_null_rate': perm_rate.tolist(),
-        'perm_null_sd': perm_sd.tolist(),
-        'iid_null_rate': null_rate.tolist(),
-        # summed over k>=1: how many more records than SHUFFLING the same values gives.
-        # 0 == order carries no information == the search is resampling.
-        'excess_records': float((record_rate[1:] - perm_rate[1:]).sum()),
-        'excess_records_iid': float((record_rate[1:] - null_rate[1:]).sum()),
-        'argmax_hist': (np.bincount(ch, minlength=n) / len(ch)).tolist(),
-        'p_argmax_late': float((ch >= n / 2).mean()),
-        'ols_slope': float(slope),
-        'ols_slope_se': slope_se,
-        'spearman_rho': rho,
-        'score_first_mean': float(S[:, 0].mean()),
-        'score_last_mean': float(S[:, -1].mean()),
-        'score_best_mean': float(S.max(axis=1).mean()),
-        'spread_mean': float((S.max(axis=1) - S.min(axis=1)).mean()),
-    }
-
-
-def _spearman(x, y):
-    """Spearman rho without scipy (not guaranteed in this env)."""
-    def rank(a):
-        order = a.argsort()
-        r = np.empty(len(a), dtype=np.float64)
-        r[order] = np.arange(len(a), dtype=np.float64)
-        # average ties, which x is full of (it is a repeated 0..n-1 grid)
-        _, inv, cnt = np.unique(a, return_inverse=True, return_counts=True)
-        sums = np.zeros(len(cnt))
-        np.add.at(sums, inv, r)
-        return (sums / cnt)[inv]
-    rx, ry = rank(np.asarray(x, float)), rank(np.asarray(y, float))
-    rx = rx - rx.mean()
-    ry = ry - ry.mean()
-    denom = np.sqrt((rx ** 2).sum() * (ry ** 2).sum())
-    return 0.0 if denom == 0 else float((rx * ry).sum() / denom)
-
+# The per-slot statistics live in diffusion_policy/common/slot_stats_util so the
+# read-only reporting scripts (scripts/slot_context_analysis.py) can share these exact
+# definitions without importing the simulator through this module. Imported here rather
+# than defined here, and re-exported, because several call sites reach for them by name.
+from diffusion_policy.common.slot_stats_util import (   # noqa: E402
+    BLIND_EPS, TIE_TAU, _argmax_slot_stats, _blindness_profile, _record_rate,
+    _slot_semantics, _spearman, analyse,
+)
 
 def plot(stats, out_path, title):
     import matplotlib
@@ -458,7 +534,7 @@ def plot(stats, out_path, title):
     import matplotlib.pyplot as plt
 
     idx = np.array(stats['index'])
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
     ax = axes[0]
     m = np.array(stats['centered_mean_by_index'])
@@ -496,6 +572,25 @@ def plot(stats, out_path, title):
     ax.set_ylabel('P(executed)')
     ax.set_title(f"which candidate wins\nP(k >= n/2) = {stats['p_argmax_late']:.3f}")
     ax.legend(fontsize=8)
+
+    ax = axes[3]
+    br = stats.get('blind_rate_by_step_index')
+    if br is not None:
+        t = np.arange(len(br))
+        ax.plot(t, br, marker='o', ms=2.5, lw=1, color='darkorange')
+        ax.axhline(stats['blind_rate_overall'], color='k', lw=0.9, ls='--',
+                   label=f"overall {stats['blind_rate_overall']:.1%}")
+        ax.set_ylim(0, 1)
+        ax.set_xlabel('control step index')
+        ax.set_ylabel('P(all n candidates identical)')
+        # frac_in_leading_run is the number that kills the "blind only during the approach"
+        # reading: measured ~0.17, i.e. ~83% of blind steps are MID-EPISODE contact losses.
+        ax.set_title('verifier blind: no candidate touches the T\n'
+                     f"{stats['frac_blind_in_leading_run']:.0%} of blind steps are in the "
+                     f"leading run")
+        ax.legend(fontsize=8)
+    else:
+        ax.set_axis_off()
 
     fig.suptitle(title, fontsize=10)
     fig.tight_layout()
@@ -584,11 +679,38 @@ def _slot_weight_table(stats):
     K = _cfg_num(cfg, (cfg.get('policy') or {}).get('max_actions', 0), 0)
     if not K:
         return None
-    return {
+    # Two config surfaces: the nested `slot_weights` block (current) and the legacy
+    # `slot_weight_decay` scalar. Prefer the block when it names a real profile, and fall
+    # back to the scalar otherwise, so a checkpoint from either generation renders. Wrapped
+    # because .hydra/config.yaml stores the RAW config -- nested values may be unresolved
+    # `${...}` strings, and a raise here took the whole report down once before.
+    sw = cfg.get('slot_weights') or {}
+    mode = sw.get('mode') if isinstance(sw, dict) else None
+    if isinstance(mode, str) and mode.startswith('${'):
+        mode = None
+    sn = cfg.get('slot_loss_norm') or {}
+    norm_mode = sn.get('mode') if isinstance(sn, dict) else None
+    if isinstance(norm_mode, str) and norm_mode.startswith('${'):
+        norm_mode = None
+    out = {
         'K': K,
         'slot_weight_decay': _cfg_num(cfg, cfg.get('slot_weight_decay', 1.0), 1.0),
         'context_decay': _cfg_num(cfg, cfg.get('context_decay', 1.0), 1.0),
+        'slot_weights_mode': mode or ('geometric'
+                                      if cfg.get('slot_weight_decay') not in (None, False, 1.0)
+                                      else 'uniform'),
+        # Orthogonal to the weights: which norm each slot's term used. Same defensive read
+        # -- a raw '${...}' means the config never resolved, not that the run used it.
+        'slot_loss_norm_mode': norm_mode or 'l2',
     }
+    if isinstance(sw, dict):
+        for k, default in (('decay', 0.0), ('ratio', 0.0)):
+            v = sw.get(k)
+            if v is not None:
+                out[f'slot_weights_{k}'] = _cfg_num(cfg, v, default)
+        if sw.get('schedule'):
+            out['slot_weights_schedule'] = str(sw.get('schedule'))
+    return out
 
 
 # Stats keys the report tables index directly. A dump lacking any of them predates the
@@ -657,10 +779,15 @@ def build_report(dirs, out_path, n_example_steps=8):
       '> WITHIN a control step: step-centered means, within-step SD, record rate against the\n'
       '> permutation null, the deployed sample\'s rank, and the prefix curves (every prefix\n'
       '> is measured on the same visited states).\n')
-    A('\nThe verifier value is `-mean_kp ||feedback||` in **pixels**: 0 at the goal, about\n'
-      '-300 at the worst. Higher (less negative) is better. Candidates are listed **in\n'
-      'generation order** — candidate 0 has an empty search context (the no-search\n'
-      'baseline) and candidate k is conditioned on candidates 0..k-1 and their feedback.\n')
+    A('\nThe verifier value is in **pixels**, ≤ 0, higher (less negative) is better. Which\n'
+      'value depends on the run (`pusht_verifier.VALUE_FNS`):\n'
+      '`t_goal` = `-mean_kp||feedback||` (0 on goal, ~-300 worst) — every run before\n'
+      '2026-08-19; `armT` = `-(mean_kp||feedback|| + ||agent - T_centre||)` (0 only with the\n'
+      'T on goal AND the arm at its centre, ~-800 worst) — runs after. The two are not\n'
+      'comparable; the run directory carries `ver-<value>` from the cutover onward.\n'
+      'Candidates are listed **in generation order** — candidate 0 has an empty search\n'
+      'context (the no-search baseline) and candidate k is conditioned on candidates\n'
+      '0..k-1 and their feedback.\n')
 
     A('\n## 0. The test, and how to read it\n')
     A('The question is whether candidate `k` is a new running maximum over `0..k-1` more\n'
@@ -846,6 +973,63 @@ def build_report(dirs, out_path, n_example_steps=8):
         A('| P(best) | ' + row + ' |')
 
     # ---- the ordering test
+    # ---- which slot the argmax lands on, and whether that beats the i.i.d. null
+    if any('argmax_slot_mean_unique' in st for _, st, _ in entries):
+        A('\n## 3b. Which candidate slot does the argmax land on?\n')
+        A('Scoped to **discriminating** control steps -- those where the candidates do not\n'
+          'all score identically. On a blind step every slot is a maximizer and `np.argmax`\n'
+          'returns 0 every time, so including them measures numpy\'s tiebreak rule rather\n'
+          'than the policy.\n')
+        A('\n**Two columns, two different questions.** `first` is `np.argmax`, which is what\n'
+          '`select_candidate` uses, so it is literally the slot the deployed policy executed\n'
+          '-- but it is a fact about the tiebreak rule wherever candidates tie. `unique`\n'
+          'restricts to steps with a single maximizer and answers which slot genuinely wins.\n')
+        A('\n**Compare against `perm null`, never against `uniform`.** The permutation null\n'
+          'reshuffles each step\'s own value multiset, holding the ties fixed and destroying\n'
+          'only the ordering -- the one thing under test. Ties are rife here, so a shuffled\n'
+          'sequence already departs from `(n-1)/2`.\n')
+        A('\n⚠️ **The i.i.d. arms are not baselines OF this statistic -- they ARE its null\n'
+          'distribution**, measured on real data with the real tie structure. UNet BC discards\n'
+          'the search context and ST k=1 has no context capacity, so neither has any reason to\n'
+          'prefer a slot. If a k>1 arm sits inside their band, the search context does not move\n'
+          'the argmax slot.\n')
+        A('\n| arm | step | slot semantics | n | **unique** | first | **perm null** | uniform | tied | blind |')
+        A('|---|---|---|---|---|---|---|---|---|---|')
+        for d, st, _ in entries:
+            if 'argmax_slot_mean_unique' not in st:
+                continue
+            sem = st.get('slot_semantics', '?')
+            note = '' if sem == 'trained_staircase' else ' *(null)*'
+            A(f"| {st['arm']} | {st['step']} | {sem}{note} | {st['n']} | "
+              f"**{st['argmax_slot_mean_unique']:.2f}** | "
+              f"{st['argmax_slot_mean_first']:.2f} | "
+              f"**{st['argmax_slot_perm_null']:.2f}** | "
+              f"{st['argmax_slot_uniform_null']:.1f} | "
+              f"{st['frac_steps_tied']:.0%} | "
+              f"{st.get('blind_rate_overall', float('nan')):.0%} |")
+        A('\nA `unique` value ABOVE `perm null` means later slots win more often than order\n'
+          'alone predicts; BELOW means earlier slots do. Either is a finding; equality means\n'
+          'the slot index carries no information.\n')
+
+        # blindness, which bounds what best-of-n can buy no matter how good the candidates are
+        if any('blind_rate_overall' in st for _, st, _ in entries):
+            A('\n### How often the verifier cannot discriminate at all\n')
+            A('The value is a function of where the T ends up, so when no candidate contacts\n'
+              'the block every candidate returns the identical current distance and the search\n'
+              'carries zero information. `in leading run` is the fraction of those steps that\n'
+              'sit in the episode\'s opening run: **a low number means blindness is a\n'
+              'mid-episode phenomenon** (the agent backing off, repositioning, circling the T),\n'
+              'not an approach-phase artifact that training will remove.\n')
+            A('\n| arm | step | blind | in leading run | mean blind/episode | median spread when discriminating |')
+            A('|---|---|---|---|---|---|')
+            for d, st, _ in entries:
+                if 'blind_rate_overall' not in st:
+                    continue
+                A(f"| {st['arm']} | {st['step']} | **{st['blind_rate_overall']:.1%}** | "
+                  f"{st['frac_blind_in_leading_run']:.0%} | "
+                  f"{st['blind_total_mean']:.1f} | "
+                  f"{st['spread_median_discriminating']:.1f} px |")
+
     A('\n## 4. Is the ordering informative? — permutation test\n')
     A('| arm | obs | step | steps | **excess records** | (vs i.i.d.) | '
       'OLS slope px/idx | Spearman ρ | P(argmax ≥ n/2) |')
@@ -922,7 +1106,9 @@ def build_report(dirs, out_path, n_example_steps=8):
         # and therefore exists only while training, whereas context_decay is an attention
         # bias inside the forward pass and is live at INFERENCE too.
         sw = _slot_weight_table(st)
-        if sw and (sw['slot_weight_decay'] < 1.0 or sw['context_decay'] < 1.0):
+        norm_mode = (sw or {}).get('slot_loss_norm_mode', 'l2')
+        if sw and (sw['slot_weight_decay'] < 1.0 or sw['context_decay'] < 1.0
+                   or norm_mode != 'l2'):
             K = sw['K']
             A(f"\n### Search weighting (K={K})\n")
             if sw['context_decay'] < 1.0:
@@ -969,6 +1155,20 @@ def build_report(dirs, out_path, n_example_steps=8):
                 A(f"\nBelow n={K} this penalizes the conditional actually being deployed — by\n"
                   f"{(1 - w[min(1, K - 1)]) * 100:.0f}% at n=1. `context_decay` has no such\n"
                   f"dependence, which is why the later arms use it instead.\n")
+            if norm_mode != 'l2':
+                # A norm per slot, not a scale per slot -- it changes the SHAPE of each
+                # term, so it is not comparable with the weights above and gets its own
+                # table. Training only, like the slot weights.
+                al = (np.arange(K) / max(K - 1, 1) if norm_mode == 'l2tol1'
+                      else np.ones(K))
+                A(f"\n**Slot loss norm `{norm_mode}` — TRAINING ONLY.** Slot `k`'s term is\n"
+                  f"`(1-α_k)·(pred-target)² + α_k·|pred-target|` (`_slot_norm_alphas`), so\n"
+                  f"α is the L1 fraction: 0 = pure L2, 1 = pure L1. Not renormalized — it\n"
+                  f"picks a norm rather than splitting a fixed loss budget.\n")
+                A('\n| slot | ' + ' | '.join(str(j) for j in range(K)) + ' |')
+                A('|---|' + '---|' * K)
+                A('| α (L1) | ' + ' | '.join(f'{v:.3f}' for v in al) + ' |')
+                A('| 1-α (L2) | ' + ' | '.join(f'{1 - v:.3f}' for v in al) + ' |')
 
         # §A the literal per-step table
         scores = npz['scores']
@@ -1025,9 +1225,9 @@ def build_report(dirs, out_path, n_example_steps=8):
         # render, so show a head slice and always the last slot.
         cols = list(range(min(12, n))) + ([n - 1] if n > 12 else [])
         A('\n### Value by candidate slot\n')
-        A('Same statistics as above, transposed. The verifier value is '
-          '`-mean_kp||feedback||`\nin PIXELS — distance to the goal T, so 0 is on-goal and '
-          'less negative is better.\n')
+        A('Same statistics as above, transposed. The verifier value is in PIXELS and less '
+          'negative\nis better; see the header for which of `t_goal` / `armT` this run '
+          'used.\n')
         A('\n| metric | ' + ' | '.join(f'slot {k}' for k in cols) + ' |')
         A('|---|' + '---|' * len(cols))
         for label, fn in (
@@ -1076,7 +1276,7 @@ def sweep_rewards(checkpoint, arm, out_dir, device, n_list, episodes, split, max
             torch.manual_seed(seed)
             np.random.seed(seed)
             t0 = time.perf_counter()
-            _, _, rewards, _, _, traj = rollout_candidate_scores(
+            _, _, rewards, _, _, traj, _ = rollout_candidate_scores(
                 env, policy, list(states), torch.device(device), n, max_steps)
             row = {'n': int(n),
                    'success_rate': float(np.mean(rewards >= SUCCESS_REWARD)),
@@ -1126,8 +1326,24 @@ def sweep_rewards(checkpoint, arm, out_dir, device, n_list, episodes, split, max
 @click.option('--reanalyse', multiple=True,
               help='recompute stats+plot from an existing dump, no rollouts')
 @click.option('--out', default='CANDIDATES_FROM_SUBGOAL.md')
+@click.option('--per-step-json/--no-per-step-json', default=False,
+              help="write per_step/ep<NN>_idx<M>.json: every candidate's distance value at "
+                   'every control step of the rollout')
+@click.option('--per-step-episodes', default=0,
+              help='cap how many episodes get a per-step file; 0 = all')
+@click.option('--verifier-value', default=None,
+              help='score with this VALUE_FNS key instead of the one in the checkpoint cfg '
+                   '(e.g. armTn). The value RANKS candidates, so this changes which one is '
+                   'executed and therefore the trajectory -- it is how a pre-cutover arm is '
+                   'made comparable to armTn arms, not a cosmetic relabel. Both the used '
+                   'and the native value are recorded in the meta.')
+@click.option('--pair-seeds/--no-pair-seeds', default=True,
+              help='give each episode its own noise stream keyed on its split position, so '
+                   'arms are paired episode-by-episode. Changes the numbers relative to '
+                   'dumps predating it -- see `paired_seeds` in the meta.')
 def main(checkpoint, arm, out_dir, device, n_actions, episodes, split, max_steps, seed,
-         n_list, report, reanalyse, out):
+         n_list, report, reanalyse, out, per_step_json, per_step_episodes, pair_seeds,
+         verifier_value):
     # Re-derive the statistics from the stored (T,B,n) tensor. The rollouts are the
     # expensive half and the npz holds everything they produced, so a change to the
     # analysis never costs another 4 minutes of physics per arm.
@@ -1136,7 +1352,8 @@ def main(checkpoint, arm, out_dir, device, n_actions, episodes, split, max_steps
         z = np.load(d / 'candidate_scores.npz')
         meta = json.loads((d / 'candidate_scores_meta.json').read_text())
         stats = analyse(z['scores'], z['chosen'], z['alive'],
-                        score_final=z['score_final'] if 'score_final' in z.files else None)
+                        score_final=z['score_final'] if 'score_final' in z.files else None,
+                        seed=int(meta.get('seed', 0) or 0))
         (d / 'candidate_scores_stats.json').write_text(
             json.dumps({**meta, **stats}, indent=2))
         plot(stats, d / 'candidate_scores.png',
@@ -1157,7 +1374,9 @@ def main(checkpoint, arm, out_dir, device, n_actions, episodes, split, max_steps
         sweep_rewards(checkpoint, arm, out_dir, device, ns, episodes, split, max_steps, seed)
         return
     meta, stats = collect(checkpoint, arm, out_dir, device, n_actions, episodes, split,
-                          max_steps, seed)
+                          max_steps, seed, per_step_json=per_step_json,
+                          per_step_episodes=per_step_episodes, pair_seeds=pair_seeds,
+                          verifier_value=verifier_value)
     plot(stats, pathlib.Path(out_dir) / 'candidate_scores.png',
          f"{arm} corrupt={meta['corrupt_obs']} step {meta['step']} n={n_actions}")
 

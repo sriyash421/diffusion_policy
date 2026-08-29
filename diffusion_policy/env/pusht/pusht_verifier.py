@@ -20,6 +20,10 @@ the value is <= 0 always. WHICH scalar is chosen by ``value_fn``, one of ``VALUE
   ``bon_search_ver-armT/`` curves stay readable and reproducible. Do not run it again.
 * ``'t_goal'`` -- ``-d_T->goal`` alone. THE PRE-2026-08-19 VALUE, kept so checkpoints
   trained against it are evaluated on exactly what they were trained on.
+* ``'d_t_goal'`` -- ``-d_T->goal/13.6``, the same term on armTn's normalized footing.
+  RANKS IDENTICALLY TO ``t_goal`` (a positive constant divisor is monotone); only the
+  magnitude differs, which is what the recorded scores and the training context read. See
+  ``value_d_t_goal``.
 
 and one value that is NOT in ``VALUE_FNS`` because it is not a function of one candidate:
 
@@ -125,6 +129,25 @@ def value_t_goal(agent_pos, feedback):
     the default for anything trained after the cutover.
     """
     return -t_goal_distance(feedback)
+
+
+def value_d_t_goal(agent_pos, feedback):
+    """``-(T-to-goal)/T_GOAL_SPREAD`` -- ``t_goal`` on armTn's normalized footing. (n,).
+
+    RANKS IDENTICALLY TO ``t_goal``. Dividing by a positive constant is monotone, so
+    ``argmax`` and ``softmax``-over-z pick the same candidate under either. What changes is
+    the MAGNITUDE: the scalar lands in the same spread-normalized units as each armTn term
+    instead of raw pixels, which is what makes a d_t_goal run's recorded candidate scores
+    and its training context comparable with the armTn family's.
+
+    Because the ranking is unchanged, a checkpoint's ``t_goal`` success curve IS its
+    ``d_t_goal`` curve for any policy whose executed action depends on the scalar only
+    through the ranking. Re-measuring one is a consistency check, not a new number.
+
+    ``agent_pos`` is accepted and ignored, exactly as in ``value_t_goal`` -- this value
+    inherits that flatness across candidates until the arm touches the block.
+    """
+    return -t_goal_distance(feedback) / T_GOAL_SPREAD
 
 
 def value_arm_t(agent_pos, feedback):
@@ -271,6 +294,7 @@ def value_arm_t_dyn(terms, eps: float = ARM_TD_EPS_PX):
 # apart. Signature: (agent_pos (n, 2), feedback (n, 16)) -> (n,), <= 0, higher is better.
 VALUE_FNS = {
     't_goal': value_t_goal,
+    'd_t_goal': value_d_t_goal,
     'armT': value_arm_t,
     'armTn': value_arm_t_norm,
 }

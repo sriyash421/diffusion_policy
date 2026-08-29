@@ -23,8 +23,8 @@ At each sampled decision point *t* it compares three ways of reaching the same f
                keeping the velocity the warm-up produced, replay. This is the P3.2 proposal.
 
 Reported per variant against (c): final block-pose position error in px, angle error in
-degrees, and mean keypoint distance -- the last being the quantity the verifier's value is
-actually built from, so it is the one that decides whether this matters.
+degrees, and mean keypoint distance -- the last being the quantity the T-to-goal half of the
+verifier's value is built from, so it is the one that decides whether this matters.
 
     python scripts/measure_verifier_fidelity.py --n-episodes 20 --per-episode 6
 """
@@ -42,7 +42,8 @@ import numpy as np
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.pusht_image_dataset import get_split_masks_3way
 from diffusion_policy.env.pusht.pusht_env import PushTEnv
-from diffusion_policy.env.pusht.feedback_util import compute_feedback_from_pose
+from diffusion_policy.env.pusht.feedback_util import (
+    compute_feedback_from_pose, t_goal_distance)
 
 
 def _state(env):
@@ -51,9 +52,15 @@ def _state(env):
 
 
 def _keypoint_dist(pose):
-    """Mean per-keypoint distance to the goal T -- the verifier's own value, up to sign."""
-    disp = compute_feedback_from_pose(np.asarray(pose, dtype=np.float32)[None]).reshape(-1, 2)
-    return float(np.linalg.norm(disp, axis=-1).mean())
+    """Mean per-keypoint distance to the goal T.
+
+    The T-to-goal HALF of the verifier value (the value is the negated sum of this and the
+    arm-to-T distance; see pusht_verifier). This script measures how far the sim's *block
+    pose* drifts from the true one, which is what this half is built from -- the arm-to-T
+    half is a function of the same reconstructed state, so it carries no independent error.
+    """
+    return float(t_goal_distance(
+        compute_feedback_from_pose(np.asarray(pose, dtype=np.float32)[None]))[0])
 
 
 def _replay(env, actions):

@@ -222,7 +222,12 @@ class PushTSearchMixin:
         scale = self.normalizer['feedback'].params_dict['scale'].to(feedback)
 
         base = base_value_fn(self._verifier_value_mode(self.kwargs))
-        if base == 't_goal':
+        # 'd_t_goal' shares this branch DELIBERATELY. It is t_goal divided by a positive
+        # constant, so it ranks identically; giving the context copy a different scale would
+        # make a d_t_goal run incomparable to the t_goal arms it exists to sit beside, for no
+        # gain -- the context is rescaled to O(1) here either way. What d_t_goal changes is
+        # the SELECTION scalar's units (see value_d_t_goal), which is what gets recorded.
+        if base in ('t_goal', 'd_t_goal'):
             # THE PRE-2026-08-19 BODY, VERBATIM. Not re-derived in the armT form below with
             # the arm term dropped: a checkpoint from that era was trained on the context
             # this exact expression produced (per-dim scale applied BEFORE the norm, which

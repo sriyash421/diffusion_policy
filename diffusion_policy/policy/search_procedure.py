@@ -74,7 +74,17 @@ class SearchProcedureMixin:
         def _fmt(v):
             return '[' + ', '.join(f'{x:.4f}' for x in v.tolist()) + f'] (mean {v.mean():.6f})'
         name = type(self).__name__
-        if spec['schedule'] is None:
+        if spec['mode'] == 'curriculum':
+            # Print EVERY waypoint: one vector is not an honest record of a run whose
+            # profile moves, and the log is the only place the schedule is recorded.
+            print(f'{name}: slot_weights curriculum, {len(spec["waypoints"])} waypoints, '
+                  f'interp={spec["interp"]}')
+            for wp in spec['waypoints']:
+                v = self._slot_profile(wp, self.max_actions,
+                                       torch.device('cpu'), torch.float32)
+                tag = wp['mode'] + (' reversed' if wp.get('reverse') else '')
+                print(f'  step {wp["step"]:>7,}  {tag:<16} {_fmt(v)}')
+        elif spec['schedule'] is None:
             print(f'{name}: slot_weights {spec["mode"]} -> per-slot weights {_fmt(w)}')
         else:
             # Under a curriculum ONE printed vector is not an honest record of what the run
@@ -89,10 +99,83 @@ class SearchProcedureMixin:
     # Every key the slot_weights block may contain. See _init_slot_weighting for why this
     # whitelist exists rather than a permissive .get().
     _SLOT_WEIGHT_KEYS = frozenset(
-        {'mode', 'decay', 'ratio', 'weights', 'schedule', 'val'})
+        {'mode', 'decay', 'ratio', 'weights', 'schedule', 'val', 'reverse', 'waypoints',
+         'interp'})
     _SLOT_SCHEDULE_KEYS = frozenset({'shape', 'start_step', 'end_step'})
-    _SLOT_MODES = ('uniform', 'geometric', 'linear', 'list', 'last_only')
+    # One waypoint of a curriculum: a profile spec plus the step it is reached at. The same
+    # profile keys mean the same thing here as at the top level -- that is what lets a
+    # curriculum reuse every shape without a second implementation.
+    _SLOT_WAYPOINT_KEYS = frozenset({'step', 'mode', 'decay', 'ratio', 'weights', 'reverse'})
+    _SLOT_MODES = ('uniform', 'geometric', 'linear', 'tent', 'list', 'last_only',
+                   'curriculum')
+    # Shapes a profile can take on its own, i.e. everything a curriculum waypoint may be.
+    # 'curriculum' is excluded: waypoints do not nest.
+    _SLOT_PROFILE_MODES = ('uniform', 'geometric', 'linear', 'tent', 'list', 'last_only')
     _SLOT_SHAPES = ('linear', 'cosine', 'step')
+
+    @classmethod
+    def _fill_profile(cls, src, spec, where):
+        """Validate one profile's shape parameters from `src` into `spec`. Pure.
+
+        Shared by the top-level slot_weights block and by every curriculum waypoint, so a
+        shape means exactly the same thing wherever it is written.
+        """
+        mode = spec['mode']
+        if mode == 'geometric':
+            if src.get('decay') is None:
+                raise ValueError(f"{where}.mode: geometric needs a `decay` in (0, 1)")
+            d = float(src['decay'])
+            if d == 1.0:
+                raise ValueError(f'{where}.decay: 1.0 is a no-op; use mode: uniform.')
+            assert 0.0 < d < 1.0, f'{where}.decay must be in (0, 1), got {d}'
+            spec['decay'] = d
+        elif mode in ('linear', 'tent'):
+            if src.get('ratio') is None:
+                raise ValueError(f"{where}.mode: {mode} needs a `ratio` > 1 "
+                                 f"(w_last/w_first for linear, w_peak/w_edge for tent)")
+            r = float(src['ratio'])
+            if r == 1.0:
+                raise ValueError(f'{where}.ratio: 1.0 is a no-op; use mode: uniform.')
+            assert r > 1.0, f'{where}.ratio must be > 1, got {r}'
+            spec['ratio'] = r
+        elif mode == 'list':
+            if src.get('weights') is None:
+                raise ValueError(f"{where}.mode: list needs an explicit `weights` list")
+            w = [float(x) for x in src['weights']]
+            assert w and all(x > 0 for x in w), \
+                f'{where}.weights must all be > 0 (they are renormalized to mean 1)'
+            spec['weights'] = w
+        # `reverse` mirrors the finished vector, so a DESCENDING profile is expressible
+        # without loosening the `ratio > 1` / `0 < decay < 1` asserts above -- those rule out
+        # the degenerate and no-op cases and are worth keeping.
+        spec['reverse'] = bool(src.get('reverse', False))
+        return spec
+
+    @classmethod
+    def _resolve_waypoint(cls, wp, i):
+        """Validate one curriculum waypoint into a profile spec carrying its `step`."""
+        try:
+            from omegaconf import OmegaConf
+            if OmegaConf.is_config(wp):
+                wp = OmegaConf.to_container(wp, resolve=True)
+        except ImportError:
+            pass
+        if not isinstance(wp, dict):
+            raise TypeError(f'slot_weights.waypoints[{i}] must be a mapping, got {wp!r}')
+        where = f'slot_weights.waypoints[{i}]'
+        bad = sorted(set(wp) - cls._SLOT_WAYPOINT_KEYS)
+        if bad:
+            raise TypeError(f'{where} got unknown key(s) {bad}; known: '
+                            f'{sorted(cls._SLOT_WAYPOINT_KEYS)}')
+        if wp.get('step') is None:
+            raise ValueError(f'{where} needs a `step`')
+        mode = wp.get('mode')
+        if mode not in cls._SLOT_PROFILE_MODES:
+            raise ValueError(f'{where}.mode must be one of {cls._SLOT_PROFILE_MODES}, '
+                             f'got {mode!r}')
+        spec = {'mode': mode, 'decay': None, 'ratio': None, 'weights': None,
+                'step': int(wp['step'])}
+        return cls._fill_profile(wp, spec, where)
 
     @classmethod
     def _resolve_slot_weight_spec(cls, slot_weight_decay=False, slot_weights=None):
@@ -134,7 +217,8 @@ class SearchProcedureMixin:
                     'schedule': None, 'val': 'trained', 'legacy_scalar': True}
 
         spec = {'mode': mode, 'decay': None, 'ratio': None, 'weights': None,
-                'schedule': None,
+                'schedule': None, 'reverse': False, 'waypoints': None,
+                'interp': 'linear',
                 # Default 'uniform': with topk retention removed val_loss no longer selects
                 # anything, but it is still the cross-arm comparison signal and a
                 # non-stationary reweighting would make it move for reasons unrelated to
@@ -145,29 +229,46 @@ class SearchProcedureMixin:
         if spec['val'] not in ('uniform', 'trained'):
             raise ValueError(f"slot_weights.val must be 'uniform' or 'trained', "
                              f"got {spec['val']!r}")
-        if mode == 'geometric':
-            if sw.get('decay') is None:
-                raise ValueError("slot_weights.mode: geometric needs a `decay` in (0, 1)")
-            d = float(sw['decay'])
-            if d == 1.0:
-                raise ValueError('slot_weights.decay: 1.0 is a no-op; use mode: uniform.')
-            assert 0.0 < d < 1.0, f'slot_weights.decay must be in (0, 1), got {d}'
-            spec['decay'] = d
-        elif mode == 'linear':
-            if sw.get('ratio') is None:
-                raise ValueError("slot_weights.mode: linear needs a `ratio` = w_last/w_first > 1")
-            r = float(sw['ratio'])
-            if r == 1.0:
-                raise ValueError('slot_weights.ratio: 1.0 is a no-op; use mode: uniform.')
-            assert r > 1.0, f'slot_weights.ratio must be > 1, got {r}'
-            spec['ratio'] = r
-        elif mode == 'list':
-            if sw.get('weights') is None:
-                raise ValueError("slot_weights.mode: list needs an explicit `weights` list")
-            w = [float(x) for x in sw['weights']]
-            assert w and all(x > 0 for x in w), \
-                'slot_weights.weights must all be > 0 (they are renormalized to mean 1)'
-            spec['weights'] = w
+        if mode == 'curriculum':
+            wps = sw.get('waypoints')
+            try:
+                from omegaconf import OmegaConf
+                if OmegaConf.is_config(wps):
+                    wps = OmegaConf.to_container(wps, resolve=True)
+            except ImportError:
+                pass
+            if not wps or len(wps) < 2:
+                raise ValueError('slot_weights.mode: curriculum needs at least 2 '
+                                 '`waypoints`; one waypoint is a fixed profile, so use '
+                                 'that profile directly instead.')
+            spec['waypoints'] = [cls._resolve_waypoint(w, i) for i, w in enumerate(wps)]
+            # How the profile moves BETWEEN waypoints.
+            #   'step'   -- hold each waypoint's profile until the next one's step. "20k
+            #               steps on slot-0-heavy, then 20k on the tent" is this one: each
+            #               profile is actually trained on for its whole stretch.
+            #   'linear' -- interpolate, so a waypoint's exact profile is touched for an
+            #               instant and the objective drifts continuously.
+            # Both keep mean 1 at every step, so neither moves the loss scale.
+            spec['interp'] = sw.get('interp', 'linear') or 'linear'
+            if spec['interp'] not in ('linear', 'step'):
+                raise ValueError(f"slot_weights.interp must be 'linear' or 'step', "
+                                 f"got {spec['interp']!r}")
+            steps = [w['step'] for w in spec['waypoints']]
+            if steps != sorted(steps) or len(set(steps)) != len(steps):
+                raise ValueError(f'slot_weights.waypoints steps must be strictly '
+                                 f'increasing, got {steps}')
+            if sw.get('schedule') is not None:
+                raise ValueError('slot_weights.schedule with mode: curriculum is two '
+                                 'schedules at once -- the waypoints ARE the schedule. '
+                                 'Drop one.')
+        else:
+            if sw.get('waypoints') is not None:
+                raise ValueError(f'slot_weights.waypoints only means anything with '
+                                 f'mode: curriculum, not mode: {mode}')
+            if sw.get('interp') is not None:
+                raise ValueError(f'slot_weights.interp only means anything with '
+                                 f'mode: curriculum, not mode: {mode}')
+            cls._fill_profile(sw, spec, 'slot_weights')
 
         sch = sw.get('schedule')
         if sch is not None:
@@ -219,39 +320,33 @@ class SearchProcedureMixin:
         """
         self._slot_weight_step = int(step)
 
-    def _slot_weights(self, device, dtype, step=None) -> Optional[torch.Tensor]:
-        """Per-slot loss weights: a length-K vector (K = max_actions) with mean 1, or None
-        for the uniform path.
+    @staticmethod
+    def _slot_profile(spec, K, device, dtype) -> torch.Tensor:
+        """One mean-1 weight vector from a profile spec. Pure; no self state.
 
-        One forward decodes all K candidate slots against the same expert action, slot k
-        attending to the first k scored context candidates; these weights say how much of
-        the gradient each of those conditionals gets.
-
-          geometric   w_k ∝ decay^(K-1-k)
-          linear      w_k ∝ 1 + (ratio-1)*k/(K-1)
-          list        an explicit K-length profile
-          last_only   slot K-1 only -- an extreme probe, not a recipe
-
-        `schedule` ramps the chosen profile up from uniform over training. The mean stays
-        exactly 1 at every point of the ramp, so changing profile never moves the loss
-        SCALE that gradient_clip_norm, the effective step size, and val_loss all read.
-        Which profile to use and why: the slot_weights block in
-        train_pusht_diffusion_search.yaml.
+        `spec` is either the slot_weights block itself or one curriculum waypoint -- the
+        keys mean the same thing in both, which is what lets a curriculum reuse every shape.
         """
-        # None == uniform; width 1 has a single slot, so there is nothing to weight
-        spec = self.slot_weight_spec
-        if spec['mode'] == 'uniform' or self.max_actions == 1:
-            return None
-        K = self.max_actions
         k = torch.arange(K, device=device, dtype=dtype)
         mode = spec['mode']
-        if mode == 'geometric':
+        if mode == 'uniform':
+            # Flat. Only reachable as a curriculum WAYPOINT -- at the top level 'uniform'
+            # short-circuits to None in _slot_weights, which is the bit-identical
+            # unweighted path. Here it has to be a real vector so it can be blended.
+            base = torch.ones(K, device=device, dtype=dtype)
+        elif mode == 'geometric':
             base = spec['decay'] ** (K - 1 - k)
         elif mode == 'linear':
             # w_k proportional to 1 + (ratio-1)*k/(K-1): same endpoint ratio as a geometric
             # decay of ratio^(-1/(K-1)), differing only in curvature. That pairing is what
             # makes geometric-vs-linear an experiment about SHAPE rather than about spread.
             base = 1.0 + (spec['ratio'] - 1.0) * k / max(K - 1, 1)
+        elif mode == 'tent':
+            # Symmetric peak at the centre, `ratio` = peak/edge. The middle-heavy waypoint
+            # of a curriculum: mass on the slots that are neither context-free nor fully
+            # conditioned. At even K the peak straddles the two central slots.
+            mid = (K - 1) / 2.0
+            base = 1.0 + (spec['ratio'] - 1.0) * (1.0 - (k - mid).abs() / max(mid, 1e-9))
         elif mode == 'last_only':
             base = (k == K - 1).to(dtype)
         elif mode == 'list':
@@ -264,10 +359,76 @@ class SearchProcedureMixin:
         else:
             raise ValueError(f'unhandled slot_weights mode {mode!r}')
         w = base / base.mean()
+        # Mirror LAST, so `reverse` flips the finished profile rather than its parameter --
+        # reversing a mean-1 vector is still mean-1, so the loss scale is untouched.
+        if spec.get('reverse'):
+            w = torch.flip(w, dims=(0,))
+        return w
+
+    def _slot_curriculum(self, waypoints, step, K, device, dtype,
+                         interp='linear') -> torch.Tensor:
+        """Interpolate between ordered waypoint profiles, in WEIGHT space.
+
+        Held flat before the first waypoint's step and after the last one's. In between,
+        `interp='linear'` interpolates and `interp='step'` holds each waypoint's profile
+        until the next one's step -- the latter is what "N steps on this profile" means. Every waypoint is mean 1 and a convex combination of mean-1 vectors is
+        mean 1, so the loss SCALE is constant across the whole curriculum -- the same
+        invariant the single-target `schedule` blend relies on, and the reason
+        gradient_clip_norm and val_loss stay comparable while the profile moves.
+        """
+        ws = [self._slot_profile(p, K, device, dtype) for p in waypoints]
+        steps = [p['step'] for p in waypoints]
+        t = float(step)
+        if t <= steps[0]:
+            return ws[0]
+        if t >= steps[-1]:
+            return ws[-1]
+        for i in range(len(steps) - 1):
+            # HALF-OPEN [steps[i], steps[i+1]): the waypoint's own step belongs to the
+            # interval that STARTS there. With an inclusive upper bound the earlier
+            # interval claimed the boundary, so under interp='step' the new profile did
+            # not take effect until one interval later.
+            if steps[i] <= t < steps[i + 1]:
+                if interp == 'step':
+                    return ws[i]        # hold this profile until the next waypoint's step
+                a = (t - steps[i]) / max(steps[i + 1] - steps[i], 1)
+                return ws[i] + a * (ws[i + 1] - ws[i])
+        return ws[-1]           # unreachable: t is bracketed by the two guards above
+
+    def _slot_weights(self, device, dtype, step=None) -> Optional[torch.Tensor]:
+        """Per-slot loss weights: a length-K vector (K = max_actions) with mean 1, or None
+        for the uniform path.
+
+        One forward decodes all K candidate slots against the same expert action, slot k
+        attending to the first k scored context candidates; these weights say how much of
+        the gradient each of those conditionals gets.
+
+          geometric    w_k ∝ decay^(K-1-k)
+          linear       w_k ∝ 1 + (ratio-1)*k/(K-1)
+          tent         symmetric peak at the centre, ratio = peak/edge
+          list         an explicit K-length profile
+          last_only    slot K-1 only -- an extreme probe, not a recipe
+          curriculum   interpolate between `waypoints`, each of the above, over training
+
+        `reverse: true` mirrors any of them, which is how a slot-0-heavy profile is written.
+        `schedule` ramps a single profile up from uniform instead. The mean stays exactly 1
+        throughout, so changing profile never moves the loss SCALE that gradient_clip_norm,
+        the effective step size, and val_loss all read. Which profile to use and why: the
+        slot_weights block in train_pusht_diffusion_search.yaml.
+        """
+        # None == uniform; width 1 has a single slot, so there is nothing to weight
+        spec = self.slot_weight_spec
+        if spec['mode'] == 'uniform' or self.max_actions == 1:
+            return None
+        K = self.max_actions
+        t = self._slot_weight_step if step is None else step
+        if spec['mode'] == 'curriculum':
+            return self._slot_curriculum(spec['waypoints'], t, K, device, dtype,
+                                         spec['interp'])
+        w = self._slot_profile(spec, K, device, dtype)
 
         sch = spec['schedule']
         if sch is not None:
-            t = self._slot_weight_step if step is None else step
             a = self._slot_ramp(t, sch)
             # Blend in WEIGHT space, not by interpolating the profile's parameter. Because
             # mean(w) == 1 exactly, mean(w - 1) == 0, so mean(1 + a*(w-1)) == 1 for EVERY a
@@ -494,6 +655,12 @@ class SearchProcedureMixin:
         self.selection_temperature = float(
             kwargs.get('selection_temperature', 1.0) or 1.0)
         assert self.selection_temperature > 0, 'selection_temperature must be > 0'
+        # 1-based candidate to execute under selection 'index' (negatives count from
+        # the end). Eval-only: set by --selection/--selection-index on a trained
+        # checkpoint, never trained under. None everywhere else.
+        self.selection_index = kwargs.get('selection_index', None)
+        assert self.selection != 'index' or self.selection_index is not None, \
+            "selection 'index' needs selection_index"
         # Selection draws from its OWN stream, not the global one the diffusion sampler
         # uses, so turning softmax on does not perturb the trajectories themselves. Same
         # reason CropScopeMixin owns _crop_generator. Not a buffer: it holds no learnable
@@ -880,6 +1047,9 @@ class SearchProcedureMixin:
 
         WHICH chunk depends on ``self.selection``:
           * 'argmax'     -- the argmax-verifier-value candidate. Best-of-n over an oracle.
+          * 'index'      -- a FIXED candidate by generation order (``selection_index``,
+            1-based), scores ignored. What one slot of the search is worth with no
+            selection on top; requires n >= that slot.
           * 'final_pass' -- only n-1 candidates are searched and scored; the n'th
             generation is conditioned on them and returned. It is not simulated and not
             compared to anything, so the verifier scalar never touches selection; it
@@ -919,7 +1089,8 @@ class SearchProcedureMixin:
             if not final_pass:
                 action_pred = select_candidate(                         # (B, H, Da)
                     actions, scores, self.selection, self.selection_temperature,
-                    generator=self._selection_generator)
+                    generator=self._selection_generator,
+                    index=getattr(self, 'selection_index', None))
             else:
                 # Condition on the last max_actions-1 candidates: that is the widest
                 # context the model was ever trained at (the staircase memory mask tops out
