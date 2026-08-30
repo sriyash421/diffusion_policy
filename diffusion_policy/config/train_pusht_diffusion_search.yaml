@@ -459,6 +459,15 @@ policy:
   # time tractable. verifier_steps stays null: the policy already hands the verifier
   # exactly the executed action window (action_pred[n_obs_steps-1 : +n_action_steps]),
   # so any cap here could only truncate that window.
+  #
+  # A batch WIDER than the pool is scored in ceil(B / verifier_n_envs) SEQUENTIAL rounds,
+  # so 32 costs two rounds for the eval script's B=50 and three for the in-training
+  # runner's B=80 (30 val + 50 test), the tail of each padded with duplicate rows. Set
+  # this to null to size the pool to the first batch instead -- one round, no padding.
+  # The sims are per-row independent and deterministic, so the pool size is a wall-clock
+  # knob and cannot move a score; what it costs is one subprocess per env, alongside the
+  # rollout runner's own pool. 32 stays the default because that resource call belongs to
+  # whoever launches the job.
   verifier_n_envs: 32
   verifier_legacy: False
   verifier_use_async: True

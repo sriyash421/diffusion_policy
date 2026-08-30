@@ -945,7 +945,13 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             (obs_cond.shape[0], self.horizon, self.action_dim),
             obs_cond.dtype, obs_cond.device, generator)
 
-        scheduler.set_timesteps(self.num_inference_steps)
+        # Re-derived only when it would differ. The timestep grid is a pure function of
+        # num_inference_steps, but this runs once per CANDIDATE per decision -- 16 x ~38
+        # times per episode at k=16 -- rebuilding the same small tensor each time. The
+        # guard (rather than a one-shot init) keeps an eval harness that overrides
+        # num_inference_steps on a loaded policy correct.
+        if getattr(scheduler, 'num_inference_steps', None) != self.num_inference_steps:
+            scheduler.set_timesteps(self.num_inference_steps)
         for t in scheduler.timesteps:
             model_output = self.model(
                 trajectory,
@@ -1096,10 +1102,11 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         ramp instead of moving with the weighting.
         """
         with self._crop_scope(), self._corrupt_scope():
-            return self._compute_loss(batch, actions, values, return_aux, slot_weighting)
+            return self._compute_loss(batch, actions, values, return_aux, slot_weighting,
+                                      obs_features)
 
     def _compute_loss(self, batch, actions=None, values=None, return_aux=False,
-                      slot_weighting=True):
+                      slot_weighting=True, obs_features=None):
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon, \

@@ -108,8 +108,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             trajectory = _draw(tuple(condition_data.shape), condition_data.dtype,
                                condition_data.device, generator)
     
-        # set step values
-        scheduler.set_timesteps(self.num_inference_steps)
+        # set step values -- only when they would change; see the search policy's copy.
+        if getattr(scheduler, 'num_inference_steps', None) != self.num_inference_steps:
+            scheduler.set_timesteps(self.num_inference_steps)
 
         for t in scheduler.timesteps:
             # 1. apply conditioning

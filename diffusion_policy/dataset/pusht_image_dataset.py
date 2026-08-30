@@ -288,9 +288,19 @@ class PushTImageDataset(BaseImageDataset):
             n_train_episodes=None,
             split='train',
             return_sequences=False,
-            split_file=None
+            split_file=None,
+            obs_image_steps=None
             ):
+        """``obs_image_steps``: how many image frames of each window to actually load.
 
+        ``None`` loads the whole ``horizon`` (the original behaviour). Set it to
+        ``n_obs_steps`` and only the frames the policy conditions on are read: every
+        consumer of the ``image`` key slices ``[:, :n_obs_steps]`` before encoding
+        (``_encode_obs_features`` on the search transformer and the Gaussian arm,
+        ``_encode_images`` on the UNet arm under ``obs_as_global_cond``), so at
+        horizon 16 / n_obs_steps 2 this reads, copies and transfers 8x less image data
+        for a bit-identical result.
+        """
         super().__init__()
         assert split in ('train', 'val', 'test')
         # REQUIRED since 2026-08-29. The alternative -- deriving the partition from `seed` at
@@ -313,6 +323,15 @@ class PushTImageDataset(BaseImageDataset):
         # sample's obs dict (see _sample_to_data).
         self.replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path, keys=['img', 'agent_pos', 'block_pos', 'action'])
+
+        # FEEDBACK PRECOMPUTED ONCE, for all frames. It is an exact per-frame function of
+        # block_pos (compute_feedback_from_pose broadcasts over leading dims), so computing
+        # it here and slicing is identical to slicing and computing -- but the per-sample
+        # version re-ran the keypoint trig for every window on every epoch. 25650 x 16
+        # float32 is 1.6 MB. Registering it as a replay-buffer key lets the sampler slice
+        # it like any other, including the episode-boundary padding.
+        self.replay_buffer.data['feedback'] = compute_feedback_from_pose(
+            self.replay_buffer['block_pos'])
 
         self.split_file = split_file
         # The manifest is the SOURCE OF TRUTH: it names the exact episodes, and the count
@@ -346,11 +365,21 @@ class PushTImageDataset(BaseImageDataset):
             'test': self.test_pool,
         }[split]
 
+        # Sampler keys are named rather than left to default to every replay-buffer key:
+        # block_pos is in the buffer for get_episode_init_states and for the feedback
+        # precompute, but nothing reads it per sample any more (feedback replaced it), so
+        # naming the keys keeps it out of the per-window slice.
+        self.obs_image_steps = None if obs_image_steps is None else int(obs_image_steps)
+        self._sampler_keys = ['img', 'agent_pos', 'feedback', 'action']
+        self._key_first_k = ({} if self.obs_image_steps is None
+                             else {'img': self.obs_image_steps})
         self.sampler = SequenceSampler(
             replay_buffer=self.replay_buffer,
             sequence_length=horizon,
             pad_before=pad_before,
             pad_after=pad_after,
+            keys=self._sampler_keys,
+            key_first_k=self._key_first_k,
             episode_mask=episode_mask,
             return_sequences=return_sequences)
         self.episode_mask = episode_mask
@@ -367,6 +396,8 @@ class PushTImageDataset(BaseImageDataset):
             sequence_length=self.horizon,
             pad_before=self.pad_before,
             pad_after=self.pad_after,
+            keys=self._sampler_keys,
+            key_first_k=self._key_first_k,
             episode_mask=episode_mask,
             return_sequences=self.return_sequences
             )
@@ -447,8 +478,10 @@ class PushTImageDataset(BaseImageDataset):
             'action': lambda: self.replay_buffer['action'][frames],
             'agent_pos': lambda: self.replay_buffer['agent_pos'][frames],
             # goal-relative transform of block_pos; block_pos itself is never normalized.
-            'feedback': lambda: compute_feedback_from_pose(
-                self.replay_buffer['block_pos'][frames]),
+            # Read off the precompute rather than recomputed: compute_feedback_from_pose is
+            # per-frame, so slicing it gives the same values as computing on the slice, and
+            # one source keeps the fitted scale and the sampled key provably in step.
+            'feedback': lambda: self.replay_buffer['feedback'][frames],
         }
         normalizer = LinearNormalizer()
         normalizer.fit(data={k: source[k]() for k in NORMALIZER_KEYS},
@@ -460,10 +493,18 @@ class PushTImageDataset(BaseImageDataset):
         return len(self.sampler)
 
     def _sample_to_data(self, sample):
-        agent_pos = sample['agent_pos'].astype(np.float32)
-        block_pos = sample['block_pos'].astype(np.float32)  # T, 3
-        image = np.moveaxis(sample['img'],-1,1)/255
-        feedback = compute_feedback_from_pose(block_pos)  # T, 16
+        # No .astype(np.float32) on agent_pos / feedback: the zarr is already <f4 and the
+        # precompute emits <f4, so those calls were full copies that changed nothing.
+        agent_pos = sample['agent_pos']
+        feedback = sample['feedback']  # T, 16 -- precomputed, see __init__
+        # Truncated to the frames the policy actually encodes. Under obs_image_steps the
+        # sampler only READ that many (the rest is key_first_k's NaN fill), so the slice
+        # is what keeps the fill out of the batch entirely rather than normalizing and
+        # then discarding it.
+        img = sample['img']
+        if self.obs_image_steps is not None:
+            img = img[:self.obs_image_steps]
+        image = np.moveaxis(img, -1, 1) / 255
 
         # POLICY_OBS_KEYS + VERIFIER_OBS_KEYS. The obs dict is WIDER than shape_meta on
         # purpose: agent_pos and feedback are here for PushTVerifier, which resets a pymunk
@@ -474,7 +515,7 @@ class PushTImageDataset(BaseImageDataset):
         # bit-identical.
         data = {
             'obs': {
-                'image': image, # T, 3, 96, 96
+                'image': image, # To, 3, 96, 96 (T when obs_image_steps is None)
                 'agent_pos': agent_pos, # T, 2   verifier only
                 'feedback': feedback, # T, 16   verifier only (goal-relative)
             },

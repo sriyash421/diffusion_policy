@@ -113,3 +113,8 @@ dataset:
   # 25-episode set is a strict subset of the 100-episode one (verified in bc_prep.sbatch).
   n_train_episodes: ${n_demos}
   split: train
+  # Load only the image frames the policy conditions on. Every consumer of the `image`
+  # key slices [:, :n_obs_steps] before encoding, so at horizon 16 / n_obs_steps 2 this
+  # reads and copies 8x fewer image bytes per window for a bit-identical batch. Null
+  # restores the full-horizon window.
+  obs_image_steps: ${n_obs_steps}
