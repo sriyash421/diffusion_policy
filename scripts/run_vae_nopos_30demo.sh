@@ -70,20 +70,34 @@ ARMS=(
 
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 
+# Fail loudly on the wrong interpreter rather than once per arm. $PY defaults to bare
+# `python`, so running this outside the conda env makes every --cfg job below fail on the
+# hydra import and every arm skip with "CONFIG FAILED TO RESOLVE" -- indistinguishable
+# from a genuinely broken config, and it looks like the launcher ran and found nothing.
+if ! $PY -c 'import hydra' 2>/dev/null; then
+    echo "ERROR: '$PY' cannot import hydra. Activate the env first:" >&2
+    echo "         conda activate \${DP_CONDA_ENV:-vae_pushT_l2s}" >&2
+    echo "       or set DP_PY to an interpreter that has it." >&2
+    exit 1
+fi
+
 n=0
 for arm in "${ARMS[@]}"; do
     IFS='|' read -r cfg ov <<<"$arm"
     # Ask the config, rather than repeating it. Also acts as a config check: a resolution
     # error here stops the arm instead of surfacing 30 seconds into a SLURM job.
-    resolved=$($PY train.py --config-name="$cfg" $ov --cfg job --resolve 2>/dev/null) || true
+    err=$(mktemp); resolved=$($PY train.py --config-name="$cfg" $ov --cfg job --resolve 2>"$err") || true
     # Extracted BY NAME, not by position: --cfg job prints the keys in config order, which
     # is not the order of the path.
     run=$(sed -n 's/^run_name: //p'  <<<"$resolved")
     sub=$(sed -n 's/^trainer: //p'   <<<"$resolved")
     task=$(sed -n 's/^task_name: //p' <<<"$resolved")
     if [ -z "$run" ] || [ -z "$sub" ] || [ -z "$task" ]; then
-        printf '%-56s %s\n' "$cfg" "CONFIG FAILED TO RESOLVE, skipping"; continue
+        printf '%-56s %s\n' "$cfg" "CONFIG FAILED TO RESOLVE, skipping"
+        sed -e 's/^/    | /' "$err" | tail -5 >&2
+        rm -f "$err"; continue
     fi
+    rm -f "$err"
     dir="$ROOT/$task/$sub/$run"
     name="tr_$run"
     # Already training, or already finished? Resubmitting a live run is how two jobs end up
