@@ -182,6 +182,47 @@ def test_policies_resolve_the_real_crop_scope():
             f"CropScopeMixin's -- check the base-class order")
 
 
+def test_fill_pass_arithmetic_gives_each_inner_epoch_a_distinct_crop():
+    """The outer/inner fill caches one crop pass per inner epoch; the passes must differ.
+
+    `_fill_context_buffer` steps the crop by `global_step + start + e * len(pool)`. Two
+    ways that can silently degenerate, both of which cost crop parity against the BC and
+    k=1 arms while still producing a correctly-shaped cache:
+
+      * a step that ignores `e` gives all `n_crops` passes the identical crop, so the
+        cache holds `inner_epochs` copies of one crop;
+      * a stride shorter than `len(pool)` lets pass `e` of one chunk collide with pass
+        `e+1` of a later chunk, so two inner epochs share crops for part of the pool.
+    """
+    s = _Stub()
+    seed, global_step, pool_len, chunk, n_crops = 42, 7, 64, 32, 4
+    B = 8
+
+    seen = dict()
+    for start in range(0, pool_len, chunk):
+        for e in range(n_crops):
+            s.set_crop_step(seed, global_step + start + e * pool_len)
+            with s._crop_scope():
+                off = s._crop_offsets_for(B, repeat=2)
+            seen[(start, e)] = off
+
+    # every inner epoch sees a different crop for the same chunk
+    for start in range(0, pool_len, chunk):
+        rows = [seen[(start, e)] for e in range(n_crops)]
+        for e in range(1, n_crops):
+            assert not torch.equal(rows[0], rows[e]), \
+                f'chunk {start}: pass {e} reused pass 0 crops -- the cache holds one crop, ' \
+                f'not {n_crops}'
+
+    # and no pass of one chunk collides with a different pass of another
+    keys = list(seen)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            if a[1] != b[1]:
+                assert not torch.equal(seen[a], seen[b]), \
+                    f'{a} and {b} drew identical crops -- the pass stride collides'
+
+
 if __name__ == '__main__':
     n = 0
     for name, fn in sorted(globals().items()):

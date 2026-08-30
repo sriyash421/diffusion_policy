@@ -1,0 +1,160 @@
+{
+  "source": "train_pusht_diffusion_search slot_obs_noise.mode=geometric +slot_obs_noise.decay=0.7",
+  "task": "pusht_image_search_imgonly",
+  "split": "train",
+  "episode_sample_idxs": [
+    1584,
+    322,
+    2363,
+    2793
+  ],
+  "obs_feature_dim": 324,
+  "rgb_latent_dim": 324,
+  "latent_shape": [
+    4,
+    9,
+    9
+  ],
+  "scaling_factor": 0.18215,
+  "obs_feature_std": {
+    "source": "measured over 256 windows",
+    "min": 0.02621432952582836,
+    "median": 0.29562824964523315,
+    "mean": 0.31020161509513855,
+    "max": 0.9896044731140137
+  },
+  "slot_obs_noise": {
+    "mode": "geometric",
+    "decay": 0.7
+  },
+  "obs_noise_scheduler": {
+    "num_train_timesteps": 1000,
+    "beta_start": 0.0001,
+    "beta_end": 0.02
+  },
+  "columns": [
+    {
+      "column": "input",
+      "psnr_vs_input": Infinity,
+      "psnr_vs_clean_recon": 28.589770045804027
+    },
+    {
+      "column": "clean",
+      "psnr_vs_input": 28.589770045804027,
+      "psnr_vs_clean_recon": Infinity
+    },
+    {
+      "column": "slot0",
+      "psnr_vs_input": 5.342616786627083,
+      "psnr_vs_clean_recon": 5.3953109294002015,
+      "timestep": 999,
+      "sqrt_alpha_bar": 0.006352818571031094
+    },
+    {
+      "column": "slot1",
+      "psnr_vs_input": 6.228601876822052,
+      "psnr_vs_clean_recon": 6.28755874636541,
+      "timestep": 699,
+      "sqrt_alpha_bar": 0.08346322178840637
+    },
+    {
+      "column": "slot2",
+      "psnr_vs_input": 8.989750877589875,
+      "psnr_vs_clean_recon": 9.071764333185207,
+      "timestep": 490,
+      "sqrt_alpha_bar": 0.2932509183883667
+    },
+    {
+      "column": "slot3",
+      "psnr_vs_input": 13.297395704388027,
+      "psnr_vs_clean_recon": 13.431502326029552,
+      "timestep": 343,
+      "sqrt_alpha_bar": 0.5454180836677551
+    },
+    {
+      "column": "slot4",
+      "psnr_vs_input": 18.249905124129647,
+      "psnr_vs_clean_recon": 18.507954805290566,
+      "timestep": 240,
+      "sqrt_alpha_bar": 0.7403867244720459
+    },
+    {
+      "column": "slot5",
+      "psnr_vs_input": 22.498622841712468,
+      "psnr_vs_clean_recon": 23.065472271182017,
+      "timestep": 168,
+      "sqrt_alpha_bar": 0.8606953024864197
+    },
+    {
+      "column": "slot6",
+      "psnr_vs_input": 24.838188054089045,
+      "psnr_vs_clean_recon": 25.929622758222756,
+      "timestep": 118,
+      "sqrt_alpha_bar": 0.9268705248832703
+    },
+    {
+      "column": "slot7",
+      "psnr_vs_input": 26.249627981012182,
+      "psnr_vs_clean_recon": 28.248746020110538,
+      "timestep": 82,
+      "sqrt_alpha_bar": 0.9626493453979492
+    },
+    {
+      "column": "slot8",
+      "psnr_vs_input": 27.16932335948765,
+      "psnr_vs_clean_recon": 30.52785946482915,
+      "timestep": 58,
+      "sqrt_alpha_bar": 0.9801986217498779
+    },
+    {
+      "column": "slot9",
+      "psnr_vs_input": 27.80237626919037,
+      "psnr_vs_clean_recon": 33.09926768790512,
+      "timestep": 40,
+      "sqrt_alpha_bar": 0.9898316860198975
+    },
+    {
+      "column": "slot10",
+      "psnr_vs_input": 28.15165605447261,
+      "psnr_vs_clean_recon": 35.63504385767185,
+      "timestep": 28,
+      "sqrt_alpha_bar": 0.9945200681686401
+    },
+    {
+      "column": "slot11",
+      "psnr_vs_input": 28.33208443034525,
+      "psnr_vs_clean_recon": 37.983890800719855,
+      "timestep": 20,
+      "sqrt_alpha_bar": 0.9968627095222473
+    },
+    {
+      "column": "slot12",
+      "psnr_vs_input": 28.4376200454891,
+      "psnr_vs_clean_recon": 40.37977739311219,
+      "timestep": 14,
+      "sqrt_alpha_bar": 0.9982055425643921
+    },
+    {
+      "column": "slot13",
+      "psnr_vs_input": 28.493629678532297,
+      "psnr_vs_clean_recon": 42.46480180761822,
+      "timestep": 10,
+      "sqrt_alpha_bar": 0.9989026188850403
+    },
+    {
+      "column": "slot14",
+      "psnr_vs_input": 28.527285522510223,
+      "psnr_vs_clean_recon": 44.52140223316015,
+      "timestep": 7,
+      "sqrt_alpha_bar": 0.9993212819099426
+    },
+    {
+      "column": "slot15",
+      "psnr_vs_input": 28.54580629918809,
+      "psnr_vs_clean_recon": 46.29295027481567,
+      "timestep": 5,
+      "sqrt_alpha_bar": 0.9995506405830383
+    }
+  ],
+  "note": "grid rows are columns of this list, in order; each row of the image is one view, each column one sample."
+}
