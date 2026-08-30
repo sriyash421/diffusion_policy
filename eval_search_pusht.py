@@ -257,8 +257,14 @@ def _reduce_episode_rewards(rewards):
     return float(r.max()), float(r[-1]), float((1.0 - GAMMA) * np.sum(w * r))
 
 
-def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
+def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=None):
     """Roll one episode per env (reset to its state) using best-of-n search.
+
+    ``seeds``: optional list parallel to ``states``. Where ``states[i] is None`` the env is
+    RESET FROM ITS SEED instead -- PushTEnv.reset falls through to RandomState(seed) when
+    reset_to_state is None, generating an initial state that is not in the dataset at all.
+    That is the ORIGINAL Diffusion Policy protocol (test_start_seed=100000), as distinct
+    from ours, which replays the initial state of a held-out dataset episode.
 
     Returns (max, final, discounted) reward arrays, one entry per env. The name is kept
     because `max` remains the primary series -- success is defined on it.
@@ -273,14 +279,21 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None):
     predict_action_best returns it and it is otherwise discarded; storing it costs one
     .cpu() per step and nothing else.
     """
-    def make_init_fn(state):
+    def make_init_fn(state, seed=None):
+        if state is None:
+            def _fn(env, seed=seed):
+                env.unwrapped.reset_to_state = None   # -> RandomState(seed) in reset()
+                env.seed(seed)
+            return _fn
         state = np.asarray(state, dtype=np.float64)
         def _fn(env):
             env.unwrapped.reset_to_state = state
         return _fn
 
+    if seeds is None:
+        seeds = [None] * len(states)
     env.call_each('run_dill_function',
-        args_list=[(dill.dumps(make_init_fn(s)),) for s in states])
+        args_list=[(dill.dumps(make_init_fn(st, sd)),) for st, sd in zip(states, seeds)])
     obs = env.reset()
     policy.reset()
     done = False
@@ -327,12 +340,15 @@ def _episode_seed(seed, n, episode_idx):
 
 
 def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
-                     score_sink=None):
+                     score_sink=None, env_seeds=None):
     """Best-of-n success rate over one split at ONE n.
 
     Returns (rate, ci, rewards) where `rewards` is a dict of three per-episode arrays --
     'max', 'final', 'discounted' (see _reduce_episode_rewards). Success is defined on
     'max' only; the other two are reported alongside it and never selected on.
+
+    ``env_seeds``: parallel to ``states``, used only where a state is None -- the fresh-seed
+    (original-paper) protocol. Sliced with the states so chunking cannot desynchronise them.
     """
     n_resets = len(states)
     # Re-seed to the SAME base before every n. Two reasons: the run is reproducible at
@@ -349,9 +365,13 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     for start in tqdm.tqdm(range(0, n_resets, n_envs),
             desc=f'{label} n={n}', leave=False):
         chunk_states = list(states[start:start + n_envs])
+        chunk_seeds = (None if env_seeds is None
+                       else list(env_seeds[start:start + n_envs]))
         pad = n_envs - len(chunk_states)
         if pad > 0:
             chunk_states = chunk_states + [states[0]] * pad
+            if chunk_seeds is not None:
+                chunk_seeds = chunk_seeds + [env_seeds[0]] * pad
         # Give every episode its own noise stream, keyed on its GLOBAL index in the split
         # rather than its slot in this chunk. That is what makes a curve independent of
         # --n-envs, of where the chunk boundary falls, and of the padding slots (which now
@@ -363,7 +383,8 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
             seeder([_episode_seed(seed, n, start + i) for i in range(n_envs)])
         t0 = time.perf_counter()
         sink = [] if score_sink is not None else None
-        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink)
+        chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink,
+                                    seeds=chunk_seeds)
         dt = time.perf_counter() - t0
         if sink is not None:
             # env_i is the slot within this chunk; map it back to the episode index, and
@@ -402,8 +423,15 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                     run_dir=None, on_n_done=None, num_inference_steps=None,
                     selection=None, selection_temperature=1.0, skip_val=False,
                     noise_scheduler=None, score_writer=None, verifier_value=None,
-                    selection_index=None, corrupt_obs_eval=None):
+                    selection_index=None, corrupt_obs_eval=None, test_start_seed=None,
+                    n_test_seeds=50):
     """Sweep n_list, evaluating val and test at each n.
+
+    ``test_start_seed``: switch the TEST split from held-out dataset episodes to fresh
+    environment seeds, ``test_start_seed .. +n_test_seeds-1``. This is the ORIGINAL
+    Diffusion Policy protocol (100000), whose initial states PushTEnv generates itself and
+    which therefore appear nowhere in the dataset. Not comparable with the held-out-episode
+    numbers, so `_bon_subdir` keys on it and the two never share a curve.
 
     ``on_n_done(curve)`` is invoked after EVERY n with the curve accumulated so far, and is
     what makes the sweep interruption-tolerant: cost is linear in n and the levels sum to
@@ -458,7 +486,16 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # the splits.json cross-check applies to single-checkpoint evals too.
     if run_dir is None:
         run_dir = pathlib.Path(checkpoint).resolve().parent.parent
-    test_states, test_idxs = get_split_states(cfg, 'test', run_dir=run_dir)
+    if test_start_seed is not None:
+        # No dataset episodes at all: a None state makes PushTEnv.reset fall through to
+        # RandomState(seed). The seeds double as the episode indices, so per-episode noise
+        # streams (_episode_seed) stay keyed on a stable global id as they do for episodes.
+        test_idxs = np.arange(int(test_start_seed), int(test_start_seed) + int(n_test_seeds))
+        test_states = [None] * len(test_idxs)
+        test_env_seeds = [int(i) for i in test_idxs]
+    else:
+        test_states, test_idxs = get_split_states(cfg, 'test', run_dir=run_dir)
+        test_env_seeds = None
     # skip_val halves the cost: val's 10-or-30 episodes are padded out to n_envs=50, so the
     # two splits cost the SAME despite the episode counts (measured 505s vs 503s at n=32).
     # The tradeoff is that the run then has no val curve, so any checkpoint later picked
@@ -571,7 +608,8 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                     score_writer('val', n, vsink)
             tsink = [] if score_writer else None
             test_sr[n], test_ci[n], test_rewards[n] = _eval_split_at_n(
-                env, policy, test_states, device, n, n_envs, seed, 'test', tsink)
+                env, policy, test_states, device, n, n_envs, seed, 'test', tsink,
+                env_seeds=test_env_seeds)
             if score_writer:
                 score_writer('test', n, tsink)
             done.append(n)
@@ -756,7 +794,7 @@ def step_from_ckpt(path):
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
 def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
-                corrupt_obs_eval=None):
+                corrupt_obs_eval=None, test_start_seed=None):
     """Output subdirectory: bon_search[_sel-<mode>][_ver-<value>][_obs-<clean|corrupt>].
 
     An override of ANY readout rule is a different experiment on the same weights, so it
@@ -766,8 +804,14 @@ def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
     `corrupt_obs_eval` is keyed here for exactly that reason: whether rollouts see the obs
     corruption the run trained under changes the number and nothing else in the path, so
     without it the corrupt and clean sweeps of one selection rule overwrite each other.
+
+    `test_start_seed` is keyed for the same reason and is the largest difference of all: it
+    switches the episode source from held-out DATASET episodes to fresh ENV seeds (the
+    original paper's protocol), so the two are not comparable and must never share a curve.
     """
     sub = 'bon_search'
+    if test_start_seed is not None:
+        sub += f'_seeds{test_start_seed}'
     if selection is not None:
         # the candidate is part of the rule, so it is part of the directory: cand 8
         # and cand 1 are different experiments and must not share a curve file
@@ -984,6 +1028,15 @@ def read_curve_rows(out_root):
 @click.option('--corrupt-obs-eval/--no-corrupt-obs-eval', 'corrupt_obs_eval', default=None,
               help='override whether rollouts see the obs corruption the run trained under. '
                    'Unset keeps the checkpoint\'s own setting.')
+@click.option('--test-start-seed', 'test_start_seed', type=int, default=None,
+              help='evaluate on FRESH ENVIRONMENT SEEDS instead of held-out dataset '
+                   'episodes -- the original Diffusion Policy protocol, which uses 100000. '
+                   'PushTEnv generates those initial states itself, so they are not in the '
+                   'dataset and the numbers are NOT comparable with the held-out-episode '
+                   'curves; the output lands in bon_search_seeds<N>/ for that reason.')
+@click.option('--n-test-seeds', 'n_test_seeds', type=int, default=50,
+              help='how many fresh seeds to roll out under --test-start-seed (default 50, '
+                   'matching the paper).')
 @click.option('--store-scores', is_flag=True,
               help='write every candidate\'s raw verifier value '
                    '(in pixels, EXCEPT under armTd where it is standardized across the n '
@@ -995,7 +1048,8 @@ def read_curve_rows(out_root):
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
-         store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg):
+         store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg,
+         test_start_seed, n_test_seeds):
     grid = {int(2 ** k) for k in range(31)}
     if n_list_arg:
         n_list = sorted({int(x) for x in n_list_arg.split(',') if x.strip()})
@@ -1025,7 +1079,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
         # resolve() not a '..'-relative join: with a symlinked checkpoints/ the old form
         # resolved through the link and landed beside the target instead of in the run dir.
         run_root = pathlib.Path(checkpoint).resolve().parent.parent
-        sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval)
+        sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
+                          test_start_seed)
         out = pathlib.Path(output_dir) if output_dir else run_root.joinpath(sub)
         step = step_from_ckpt(checkpoint)
         # SAME per-step subdir convention as watch mode. Previously this wrote a flat
@@ -1047,6 +1102,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 verifier_value=verifier_value,
                                 selection_index=selection_index,
                                 corrupt_obs_eval=corrupt_obs_eval,
+                                test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
                                 skip_val=skip_val,
                                 noise_scheduler=noise_scheduler,
                                 score_writer=_make_score_writer(
@@ -1058,7 +1114,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
     # watch mode
     assert run_dir is not None, '--watch requires --run-dir'
     ckpt_dir = pathlib.Path(run_dir).joinpath('checkpoints')
-    sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval)
+    sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
+                      test_start_seed)
     out_root = pathlib.Path(output_dir or os.path.join(run_dir, sub))
     if not ckpt_dir.is_dir():
         # Fail loudly on a wrong --run-dir. Previously a bad path was indistinguishable
@@ -1123,6 +1180,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         verifier_value=verifier_value,
                                         selection_index=selection_index,
                                         corrupt_obs_eval=corrupt_obs_eval,
+                                test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
                                         skip_val=skip_val,
                                         noise_scheduler=noise_scheduler)
             except Exception as e:
