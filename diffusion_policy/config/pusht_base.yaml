@@ -35,7 +35,7 @@ shape_meta: ${task.shape_meta}
 # 2026-08-28; `resnet18` names the era before it. Declared HERE rather than in the search
 # master because the UNet BC arm is on the same backbone: the ST-vs-BC comparison is meant
 # to vary the algorithm, not the observation.
-encoder_tag: vae
+encoder_tag: resnet18
 
 # The encoder as a run-DIRECTORY component, and NEVER EMPTY. Without it a VAE run and a
 # pre-swap ResNet run at the same arm/k/verifier/demos/seed resolve to the same run_name,
@@ -58,63 +58,47 @@ enc_suffix: _enc-${encoder_tag}
 # `crop_shape` is separate because the POLICY also declares it -- the policy chooses the
 # offsets and hands them to the encoder, so the two must agree, and interpolating both from
 # one key is what makes that structural.
-crop_shape: [72, 72]
+crop_shape: [76, 76]
 
 obs_encoder:
   _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
   shape_meta: ${shape_meta}
-  # THE STABLE DIFFUSION VAE ENCODER, FROZEN. 34.2M params emitting a flattened 4x9x9 = 324-d
-  # latent at the 72x72 crop, in place of the ResNet18's 512-d post-ReLU avgpool output.
+  # ResNet18, ImageNet-pretrained, TRAINED END TO END with the policy.
   #
-  # Why: slot_obs_noise corrupts the encoded observation with a DDPM forward marginal, which
-  # on ResNet activations is an operator borrowed out of context and on a VAE latent is the
-  # space diffusion models are trained to operate in. That argument holds only while the
-  # encoder still produces SD latents, which is why SDVAEEncoder freezes itself and overrides
-  # train() to stay in eval -- see the note there.
+  # Reverted from the frozen SD VAE on 2026-08-30. The VAE was adopted so the obs corruption
+  # ladder would act on a latent space diffusion models are trained to operate in, and it
+  # required the encoder to stay frozen for that claim to hold. Measured, the freeze is what
+  # broke the policy: at step 10k, argmax n=1 was 0.00 on BOTH arms and stayed exactly 0.00
+  # at every checkpoint, while the SAME encoder trained end to end recovered most of the
+  # ResNet gap (BC 0.06/0.10/0.14 at n=1/2/4 against ResNet's 0.08/0.14/0.20) -- so the SD
+  # latent is a fine representation and freezing it is not. See success_rates_vae_debug.md.
   #
-  # Measured on PushT frames before adopting it: 29.6 dB reconstruction PSNR at 72x72
-  # (31.7 dB at the full 96x96), and the 0.18215 scale puts the latent at mean 0.48 /
-  # std 1.00 -- so the SD VAE does transfer to 96x96 synthetic images despite being trained
-  # on 512x512 natural ones. scripts/decode_obs_latents.py renders that round trip, and the
-  # corrupted latents beside it.
-  #
-  # To go back to the ResNet for an arm, override at THIS level -- `policy.obs_encoder` is
-  # an interpolation of this block, so hydra cannot reach inside it:
-  #   obs_encoder.rgb_model._target_=diffusion_policy.model.vision.model_getter.get_resnet \
-  #   +obs_encoder.rgb_model.name=resnet18 +obs_encoder.rgb_model.weights=IMAGENET1K_V1 \
-  #   '~obs_encoder.rgb_model.model_name' '~obs_encoder.rgb_model.scaling_factor' \
-  #   obs_encoder.use_group_norm=True crop_shape=[76,76] encoder_tag=resnet18
-  # encoder_tag drives enc_suffix, so that run lands in its own directory automatically.
+  # To put the VAE back for an arm, override at THIS level -- `policy.obs_encoder` is an
+  # interpolation of this block, so hydra cannot reach inside it:
+  #   obs_encoder.rgb_model._target_=diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder \
+  #   +obs_encoder.rgb_model.scaling_factor=0.18215 '~obs_encoder.rgb_model.name' \
+  #   '~obs_encoder.rgb_model.weights' obs_encoder.use_group_norm=False \
+  #   crop_shape=[72,72] encoder_tag=vae
+  # Add `+obs_encoder.rgb_model.trainable=True encoder_tag=vae-ft` for the unfrozen variant.
   rgb_model:
-    _target_: diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder
-    model_name: stabilityai/sd-vae-ft-mse
-    scaling_factor: 0.18215
+    _target_: diffusion_policy.model.vision.model_getter.get_resnet
+    name: resnet18
+    weights: IMAGENET1K_V1
   resize_shape: null
-  # The CropRandomizer lives here (so the encoder's declared input shape stays 96x96 and its
-  # shape assertion keeps working), but the POLICY chooses the offsets and passes them in.
-  # Left to itself CropRandomizer samples one offset per IMAGE, which cannot express "the
-  # observation and the subgoals predicted from it must share a crop".
-  #
-  # 72, not the 76 the ResNet era used: the VAE downsamples by 8 and 76 is not divisible by
-  # 8. Its stride-2 stages floor 76 to the same 9x9 latent anyway, so 72 is the identical 324
-  # dims with well-defined arithmetic rather than a compromise. The random crop STAYS --
-  # removing it is what let an earlier run memorize the train set in ~3k steps.
   crop_shape: ${crop_shape}
   random_crop: True
-  # No-op against a VAE, which has GroupNorm natively and no BatchNorm2d for
-  # replace_submodules to find. Off so the config does not imply otherwise.
-  use_group_norm: False
+  # Replaces the ResNet's BatchNorm2d with GroupNorm. Standard for diffusion policy: batch
+  # statistics are wrong under EMA and at the small batches this trains at.
+  use_group_norm: True
   share_rgb_model: False
   # MUST be False: PushTImageDataset.get_normalizer already maps images to [-1,1] via
   # get_image_range_normalizer, while torchvision's ImageNet Normalize expects [0,1].
   # Stacking them gave the encoder roughly [-6.5, +2.25]. (train_online_search.yaml sets
   # imagenet_norm: True on this same dataset and is miscalibrated for this reason.)
   imagenet_norm: False
-  # OFF, and it should stay off. With image-only observations the encoder output IS the raw
-  # VAE latent -- already ~unit scale by construction, which is what the 0.18215 factor is
-  # for. The heterogeneous concat this was written for (unbounded ResNet activations beside
-  # LinearNormalizer-scaled low_dim keys) no longer exists, and normalizing here would take
-  # the conditioning off the SD manifold the corruption ladder is defined on.
+  # Off, as it was through every ResNet-era run. It normalizes the CONCATENATED feature
+  # vector; turning it on adds parameters and changes the conditioning distribution, so it
+  # would make existing checkpoints unloadable and every trained arm a different model.
   feature_layernorm: False
 # ---------------------------------------------------------------------------
 

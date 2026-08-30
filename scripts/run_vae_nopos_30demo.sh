@@ -77,6 +77,7 @@ LADDER_ARMS=(
 # enc_suffix, so all six land in distinct run dirs and cannot resume each other.
 RESNET="obs_encoder.rgb_model._target_=diffusion_policy.model.vision.model_getter.get_resnet +obs_encoder.rgb_model.name=resnet18 +obs_encoder.rgb_model.weights=IMAGENET1K_V1 ~obs_encoder.rgb_model.model_name ~obs_encoder.rgb_model.scaling_factor obs_encoder.use_group_norm=True crop_shape=[76,76] encoder_tag=resnet18"
 VAE_FT="+obs_encoder.rgb_model.trainable=True encoder_tag=vae-ft"
+RESNET_FROZEN="+training.freeze_encoder=True encoder_tag=resnet18-frozen"
 
 DEBUG_ARMS=(
   "train_pusht_unet_bc|$RESNET"
@@ -85,6 +86,15 @@ DEBUG_ARMS=(
   "train_pusht_diffusion_search_single|n_candidates=1"
   "train_pusht_unet_bc|$VAE_FT"
   "train_pusht_diffusion_search_single|n_candidates=1 $VAE_FT"
+  # Frozen ResNet -- the missing cell of the encoder x freeze 2x2. No obs_encoder override:
+  # the default IS ResNet18 now, so this differs from the trainable ResNet arm ONLY by the
+  # freeze. `+` because freeze_encoder is not declared in the composed PushT config.
+  #
+  # ST k=1 MUST use _single: `train_pusht_diffusion_search n_candidates=1` selects
+  # TrainSearchOuterInnerWorkspace, which has no freeze_encoder handler, so the freeze would
+  # be a SILENT no-op and the arm a duplicate of the trainable one.
+  "train_pusht_unet_bc|$RESNET_FROZEN"
+  "train_pusht_diffusion_search_single|n_candidates=1 $RESNET_FROZEN"
 )
 
 # ARMS_SET=debug runs the encoder debug set; anything else runs the ladder matrix.

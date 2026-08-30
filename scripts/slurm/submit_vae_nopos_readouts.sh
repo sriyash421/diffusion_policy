@@ -66,6 +66,8 @@ unet_bc/unetbc_ver-t_goal_enc-vae_demos-30_seed-42
 offline/value_k1_ver-t_goal_enc-vae_demos-30_seed-42
 unet_bc/unetbc_ver-t_goal_enc-vae-ft_demos-30_seed-42
 offline/value_k1_ver-t_goal_enc-vae-ft_demos-30_seed-42
+unet_bc/unetbc_ver-t_goal_enc-resnet18-frozen_demos-30_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18-frozen_demos-30_seed-42
 "
 
 # RUNS_SET=debug reads the encoder debug set; anything else reads the ladder matrix.

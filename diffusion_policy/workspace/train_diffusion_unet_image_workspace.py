@@ -64,6 +64,17 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
 
+        # FREEZE BEFORE the optimizer is built, so the frozen parameters are excluded from it
+        # and the trainable_parameters() print below reports the real count. The handler in
+        # run()'s epoch loop applies the same two lines, but it runs strictly later -- so on
+        # its own it would leave the startup line reading "(0 frozen)" on a genuinely frozen
+        # run, which is exactly the signal a freeze ablation is read off. That loop copy is
+        # kept: it re-asserts .eval() each epoch, which is needed because self.model.train()
+        # is called mid-epoch and nn.Module.train() recurses into children.
+        if cfg.training.get('freeze_encoder', False):
+            self.model.obs_encoder.eval()
+            self.model.obs_encoder.requires_grad_(False)
+
         # configure training state
         # Frozen parameters are excluded, not merely skipped by AdamW: the SD VAE obs
         # backbone is 34.2M frozen parameters and there is no reason for them to sit in the
