@@ -46,7 +46,7 @@ N_ENVS="${N_ENVS:-50}"
 # Run dirs, relative to $ROOT/$TASK. The three clean baselines first: a ladder number with
 # nothing to compare it against says nothing. Then the five ladders, matching the eight arms
 # scripts/run_vae_nopos_30demo.sh trains.
-RUNS="
+LADDER_RUNS="
 unet_bc/unetbc_ver-t_goal_enc-vae_demos-30_seed-42
 offline/value_k1_ver-t_goal_enc-vae_demos-30_seed-42
 outer_inner/value_k16_ver-t_goal_enc-vae_demos-30_seed-42
@@ -56,6 +56,24 @@ outer_inner/value_k16_ver-t_goal_son-linsig_enc-vae_demos-30_seed-42
 outer_inner/value_k16_ver-t_goal_son-geo7_enc-vae_demos-30_seed-42
 outer_inner/value_k16_ver-t_goal_son-rndlinsig_enc-vae_demos-30_seed-42
 "
+
+# The ENCODER DEBUG set: 3 encoders x {BC UNet, ST k=1}, no ladder on any of them, so the
+# case below gives them the clean rules only -- argmax n=1..64 and final_pass n=1,8,16.
+DEBUG_RUNS="
+unet_bc/unetbc_ver-t_goal_enc-resnet18_demos-30_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18_demos-30_seed-42
+unet_bc/unetbc_ver-t_goal_enc-vae_demos-30_seed-42
+offline/value_k1_ver-t_goal_enc-vae_demos-30_seed-42
+unet_bc/unetbc_ver-t_goal_enc-vae-ft_demos-30_seed-42
+offline/value_k1_ver-t_goal_enc-vae-ft_demos-30_seed-42
+"
+
+# RUNS_SET=debug reads the encoder debug set; anything else reads the ladder matrix.
+if [ "${RUNS_SET:-ladder}" = "debug" ]; then
+  RUNS="$DEBUG_RUNS"
+else
+  RUNS="$LADDER_RUNS"
+fi
 
 # label:flags. The label goes in the job name only; the OUTPUT directory comes from
 # eval_search_pusht._bon_subdir, which keys on selection and corrupt_obs_eval both --
