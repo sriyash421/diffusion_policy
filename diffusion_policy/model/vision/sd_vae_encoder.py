@@ -25,7 +25,14 @@ class SDVAEEncoder(nn.Module):
 
     At the 72x72 crop that is a 4x9x9 latent, i.e. 324 dims, against the ResNet18's 512.
 
-    FROZEN, UNCONDITIONALLY. Not a flag: the whole reason the obs corruption ladder
+    FROZEN BY DEFAULT. `trainable=True` exists only to answer "is the freeze what costs
+    the policy its low-n performance?" -- it is a DEBUG configuration and invalidates two
+    things the frozen path guarantees: the corruption ladder stops acting on SD latents
+    (the encoder drifts off the SD manifold, so the DDPM forward marginal is no longer the
+    right operator), and scripts/decode_obs_latents.py stops decoding anything meaningful.
+    Do not use it for a ladder arm.
+
+    Otherwise: frozen. Not a flag: the whole reason the obs corruption ladder
     (slot_obs_noise) applies a DDPM forward marginal to this output is that the output is an
     SD latent, and that stops being true the moment the optimizer moves the encoder off the
     SD manifold. A frozen encoder also makes the latent decodable by a stock AutoencoderKL
@@ -38,6 +45,7 @@ class SDVAEEncoder(nn.Module):
             self,
             model_name: str = 'stabilityai/sd-vae-ft-mse',
             scaling_factor: float = 0.18215,
+            trainable: bool = False,
         ) -> None:
         super().__init__()
         vae = AutoencoderKL.from_pretrained(model_name)
@@ -55,11 +63,13 @@ class SDVAEEncoder(nn.Module):
         # and was honoured by two of the three workspaces, so on the default ST trainer it
         # silently did nothing. A property of the module cannot be missed by whichever
         # workspace happens to run it.
-        self.requires_grad_(False)
-        self.eval()
+        self.trainable = bool(trainable)
+        if not self.trainable:
+            self.requires_grad_(False)
+            self.eval()
 
     def train(self, mode: bool = True):
-        """Always eval. Ignores `mode` so the parent policy's .train() cannot flip it back.
+        """Always eval unless `trainable`. Ignores `mode` so .train() cannot flip it back.
 
         nn.Module.train() recurses into children, so without this override every
         `policy.train()` in the training loop would put the VAE back into training mode. It
@@ -67,7 +77,7 @@ class SDVAEEncoder(nn.Module):
         that `.training` is the flag the freeze is read off, by this file and by any future
         caller.
         """
-        return super().train(False)
+        return super().train(mode if self.trainable else False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # The posterior MEAN, never a sample. Under the per-slot corruption ladder

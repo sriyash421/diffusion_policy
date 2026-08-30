@@ -50,7 +50,7 @@ PY="${DP_PY:-python}"
 # train_pusht_diffusion_search.yaml, so `max_t` and `base_range` below are absolute timesteps
 # of THAT schedule -- they must be re-derived if it ever changes.
 LADDER_TAGS='son_suffix=%s son_tag=%s obs_noise_tag=obs_noised'
-ARMS=(
+LADDER_ARMS=(
   # --- baselines: no ladder ---
   "train_pusht_unet_bc|"
   "train_pusht_diffusion_search_single|n_candidates=1"
@@ -67,6 +67,32 @@ ARMS=(
   #     at all), with the linear-in-signal shape rescaled into [0, base] ---
   "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=random_base +slot_obs_noise.shape=linear_signal +slot_obs_noise.base_range=[0,999] son_suffix=_son-rndlinsig son_tag=random_base-linsig obs_noise_tag=obs_noised"
 )
+
+# The ENCODER DEBUG set: 3 encoders x {BC UNet, ST k=1}, no ladder on any of them.
+# Isolates the low-n collapse -- run 2 vs the ResNet curve already on disk tests the
+# speedup revert; ResNet->vae isolates the encoder; vae->vae-ft isolates the freeze.
+#
+# The ResNet override reaches INSIDE obs_encoder because `policy.obs_encoder` is an
+# interpolation of that block, so hydra cannot address it any other way. encoder_tag drives
+# enc_suffix, so all six land in distinct run dirs and cannot resume each other.
+RESNET="obs_encoder.rgb_model._target_=diffusion_policy.model.vision.model_getter.get_resnet +obs_encoder.rgb_model.name=resnet18 +obs_encoder.rgb_model.weights=IMAGENET1K_V1 ~obs_encoder.rgb_model.model_name ~obs_encoder.rgb_model.scaling_factor obs_encoder.use_group_norm=True crop_shape=[76,76] encoder_tag=resnet18"
+VAE_FT="+obs_encoder.rgb_model.trainable=True encoder_tag=vae-ft"
+
+DEBUG_ARMS=(
+  "train_pusht_unet_bc|$RESNET"
+  "train_pusht_diffusion_search_single|n_candidates=1 $RESNET"
+  "train_pusht_unet_bc|"
+  "train_pusht_diffusion_search_single|n_candidates=1"
+  "train_pusht_unet_bc|$VAE_FT"
+  "train_pusht_diffusion_search_single|n_candidates=1 $VAE_FT"
+)
+
+# ARMS_SET=debug runs the encoder debug set; anything else runs the ladder matrix.
+if [ "${ARMS_SET:-ladder}" = "debug" ]; then
+  ARMS=("${DEBUG_ARMS[@]}")
+else
+  ARMS=("${LADDER_ARMS[@]}")
+fi
 
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 

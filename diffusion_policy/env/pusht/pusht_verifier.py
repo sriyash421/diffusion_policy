@@ -405,14 +405,7 @@ class PushTVerifier:
         """
         Args:
             n_envs: size of the persistent vectorized PushT sim pool; candidates are
-                scored in chunks of this size (the envs step in parallel). ``None`` sizes
-                the pool to the first batch it is asked to score, so that batch runs in
-                ONE parallel round instead of ``ceil(B / n_envs)`` sequential ones -- at
-                the default 32 an eval batch of 50 takes two rounds and the in-training
-                runner's 80 takes three, the last of each mostly padding. Per-row sims are
-                independent and deterministic, so the pool size changes wall-clock only,
-                never a score. It does cost one subprocess per env, on top of the rollout
-                runner's own pool, which is why it is opt-in rather than the default.
+                scored in chunks of this size (the envs step in parallel).
             legacy: must be False so ``reset_to_state`` round-trips a recorded state
                 exactly (see runner/eval_bon notes); kept configurable for parity.
             use_async: run the pool with AsyncVectorEnv (parallel worker processes).
@@ -430,9 +423,7 @@ class PushTVerifier:
                 its base value; the policy applies the real rule at the (B, n) stack.
         """
         self.value_fn = value_fn        # validated by the property setter below
-        # None means "decide on first use" -- resolved in _get_vec, which is where the
-        # batch width is known.
-        self.n_envs = None if n_envs is None else int(n_envs)
+        self.n_envs = n_envs
         self.legacy = legacy
         self.use_async = use_async
         self.verifier_steps = verifier_steps
@@ -464,13 +455,8 @@ class PushTVerifier:
         # (SearchProcedureMixin.predict_n_actions), not here.
         self._score_key = base_value_fn(value)
 
-    def _get_vec(self, want: int = None):
+    def _get_vec(self):
         if self._vec is None:
-            if self.n_envs is None:
-                assert want is not None, \
-                    'PushTVerifier(n_envs=None) sizes its pool on the first rollout; ' \
-                    '_get_vec needs that batch width.'
-                self.n_envs = int(want)
             env_fns = [_make_verifier_env(self.legacy, self.render_size)
                        for _ in range(self.n_envs)]
             if self.use_async:
@@ -552,7 +538,7 @@ class PushTVerifier:
         B, H, _ = actions.shape
         n_steps = H if self.verifier_steps is None else min(H, self.verifier_steps)
 
-        vec = self._get_vec(want=B)
+        vec = self._get_vec()
         values = np.empty(B, dtype=np.float32)
         end_states = np.empty((B, self.STATE_DIM), dtype=np.float32)
         images = np.empty(

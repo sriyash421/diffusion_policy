@@ -117,4 +117,3 @@ dataset:
   # key slices [:, :n_obs_steps] before encoding, so at horizon 16 / n_obs_steps 2 this
   # reads and copies 8x fewer image bytes per window for a bit-identical batch. Null
   # restores the full-horizon window.
-  obs_image_steps: ${n_obs_steps}

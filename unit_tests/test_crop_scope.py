@@ -16,9 +16,6 @@ WHAT THE CONTRACT IS, and why each half matters:
     later batch of the same size silently reuses the first batch's crops -- augmentation that
     looks alive and is not.
   * EVAL IS THE CENTRE CROP, deterministically, matching CropRandomizer's own eval branch.
-  * `train_crops()` asks for a training crop without asking for training MODE, which is what
-    lets a trainer pre-encode a pool under eval() (dropout off) and still get the crop the
-    inner updates will train on.
 """
 import os
 import sys
@@ -100,54 +97,29 @@ def test_offsets_are_a_pure_function_of_seed_and_step():
         assert not torch.equal(a._crop_offsets_for(6), c._crop_offsets_for(6))
 
 
-def test_eval_returns_none_meaning_the_centre_crop():
-    """None is not "no crop" -- it means the DETERMINISTIC CENTRE crop.
+def test_eval_is_the_deterministic_centre_crop():
+    """Outside training every image gets the SAME, centre, offset -- explicitly.
 
-    `_crop_offsets_for` deliberately returns None outside training so CropRandomizer takes
-    its own `ttf.center_crop` slice. Handing it explicit centre offsets gives the identical
-    pixels, but by the forced-offset route, whose bounds assertions `.item()` device tensors
-    and stall the pipeline -- ~4(n+1) syncs per control step in subgoal mode, for a crop that
-    never varies. The offsets it declines to build are still the centre:
+    Returning None here instead (letting CropRandomizer take its own `ttf.center_crop`
+    slice) gives the identical pixels and skips four device syncs per encode, but that
+    shortcut was reverted with the 2026-08-30 speedup pass, so the offsets are materialised.
     """
     s = _Stub(training=False)
     with s._crop_scope():
-        assert s._crop_offsets_for(4, repeat=2) is None
+        off = s._crop_offsets_for(4, repeat=2)
+    assert off is not None, 'eval must materialise explicit centre offsets'
+    assert off.shape == (8, 2), off.shape
+    assert bool((off == CENTRE).all()), off
     assert bool((s._draw_crop_offsets(4, H, W) == CENTRE).all())
 
 
 def test_random_crop_off_is_the_centre_crop_even_in_train():
     s = _Stub(training=True, random_crop=False)
     with s._crop_scope():
-        assert s._crop_offsets_for(4) is None
+        off = s._crop_offsets_for(4)
+    assert off is not None and bool((off == CENTRE).all()), off
     assert bool((s._draw_crop_offsets(4, H, W) == CENTRE).all())
 
-
-def test_centre_shortcut_only_when_it_matches_center_crop():
-    """The None shortcut is guarded: it is only valid where floor and round agree, i.e.
-    where our centre is the same pixel as torchvision's. At an odd gap they differ, and the
-    offsets must then be materialised rather than delegated."""
-    even = _Stub(training=False, crop_shape=(72, 72))     # gap 24 -> 12 either way
-    odd = _Stub(training=False, crop_shape=(73, 73))      # gap 23 -> 11 vs 12
-    assert even._centre_is_default
-    assert not odd._centre_is_default
-    with odd._crop_scope():
-        assert odd._crop_offsets_for(4) is not None
-
-
-def test_train_crops_gives_training_offsets_without_training_mode():
-    """What lets a pooled trainer pre-encode under eval() and still get the trained crop."""
-    s = _Stub(training=False)
-    s.set_crop_step(1, 1)
-    with s._crop_scope():
-        assert s._crop_offsets_for(4) is None, 'eval should delegate to the centre crop'
-    with s.train_crops(), s._crop_scope():
-        randomised = s._crop_offsets_for(4)
-    assert randomised is not None, 'train_crops must materialise offsets'
-    assert not bool((randomised == CENTRE).all()), 'train_crops did not randomise'
-    assert not s.training, 'train_crops must not flip the module into training mode'
-    # and it must restore
-    with s._crop_scope():
-        assert s._crop_offsets_for(4) is None
 
 
 def test_offsets_are_in_range():
@@ -181,46 +153,6 @@ def test_policies_resolve_the_real_crop_scope():
             f'{cls.__name__}._crop_scope resolves to {cls._crop_scope.__qualname__}, not '
             f"CropScopeMixin's -- check the base-class order")
 
-
-def test_fill_pass_arithmetic_gives_each_inner_epoch_a_distinct_crop():
-    """The outer/inner fill caches one crop pass per inner epoch; the passes must differ.
-
-    `_fill_context_buffer` steps the crop by `global_step + start + e * len(pool)`. Two
-    ways that can silently degenerate, both of which cost crop parity against the BC and
-    k=1 arms while still producing a correctly-shaped cache:
-
-      * a step that ignores `e` gives all `n_crops` passes the identical crop, so the
-        cache holds `inner_epochs` copies of one crop;
-      * a stride shorter than `len(pool)` lets pass `e` of one chunk collide with pass
-        `e+1` of a later chunk, so two inner epochs share crops for part of the pool.
-    """
-    s = _Stub()
-    seed, global_step, pool_len, chunk, n_crops = 42, 7, 64, 32, 4
-    B = 8
-
-    seen = dict()
-    for start in range(0, pool_len, chunk):
-        for e in range(n_crops):
-            s.set_crop_step(seed, global_step + start + e * pool_len)
-            with s._crop_scope():
-                off = s._crop_offsets_for(B, repeat=2)
-            seen[(start, e)] = off
-
-    # every inner epoch sees a different crop for the same chunk
-    for start in range(0, pool_len, chunk):
-        rows = [seen[(start, e)] for e in range(n_crops)]
-        for e in range(1, n_crops):
-            assert not torch.equal(rows[0], rows[e]), \
-                f'chunk {start}: pass {e} reused pass 0 crops -- the cache holds one crop, ' \
-                f'not {n_crops}'
-
-    # and no pass of one chunk collides with a different pass of another
-    keys = list(seen)
-    for i, a in enumerate(keys):
-        for b in keys[i + 1:]:
-            if a[1] != b[1]:
-                assert not torch.equal(seen[a], seen[b]), \
-                    f'{a} and {b} drew identical crops -- the pass stride collides'
 
 
 if __name__ == '__main__':

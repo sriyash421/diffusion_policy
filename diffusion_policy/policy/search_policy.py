@@ -206,17 +206,14 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
         return self.obs_encoder(this_nobs, crop_offsets=offsets).reshape(B, T, -1)
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim).
-
-        Sliced to To BEFORE normalizing; see the diffusion policy's copy for why the two
-        orders are bit-identical and why this one is cheaper.
-        """
+        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim)."""
         To = self.n_obs_steps
-        if isinstance(obs_dict, dict):
-            obs_dict = dict_apply(obs_dict, lambda x: x[:, :To, ...])
+        nobs = self.normalizer.normalize(obs_dict)
+        if isinstance(nobs, dict):
+            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
         else:
-            obs_dict = obs_dict[:, :To, ...]
-        return self._encode_obs(self.normalizer.normalize(obs_dict))
+            nobs = nobs[:, :To, ...]
+        return self._encode_obs(nobs)
 
     def predict_action(
             self,

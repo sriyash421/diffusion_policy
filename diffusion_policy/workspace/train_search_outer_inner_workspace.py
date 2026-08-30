@@ -56,29 +56,6 @@ def _val_slot_weighting(policy) -> bool:
     return bool(spec and spec.get('val') == 'trained')
 
 
-# What an inner gradient step needs from a dataset window BESIDES the encoded features.
-# `action` is the denoising target; agent_pos and feedback are the verifier's obs keys
-# (pusht_search_mixin._VERIFIER_OBS_KEYS), carried so the obs dict handed to compute_loss
-# is well-formed even though nothing on the buffered path reads it. `image` is pointedly
-# NOT here -- see _fill_context_buffer.
-_WINDOW_OBS_KEYS = ('agent_pos', 'feedback')
-
-
-def _can_cache_obs(policy) -> bool:
-    """Whether the encoded observation may be reused across gradient steps.
-
-    ONLY when the obs backbone has no trainable parameter. With a trainable encoder the
-    cache would feed the model activations from an earlier step AND cut the encoder out of
-    the gradient entirely -- it would look like a speedup and silently stop training the
-    backbone. Checked here rather than assumed from the config, because `freeze` is a
-    property of the module (SDVAEEncoder freezes itself), not of a flag anyone can read.
-    """
-    enc = getattr(policy, 'obs_encoder', None)
-    if enc is None or not hasattr(policy, 'train_crops'):
-        return False
-    return not any(p.requires_grad for p in enc.parameters())
-
-
 class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     """Outer/inner trainer for the conditional-diffusion search policy.
 
@@ -120,29 +97,22 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         if cfg.training.use_ema:
             self.ema_model = _clone_policy(self.model)
 
-        # SUBGOAL CONTEXTS WERE MIS-REGISTERED ON THIS TRAINER, and it was not detectable
-        # from the loss. Fixed for a frozen encoder by caching the pool's encode (which pins
-        # its crop); still live if the encoder is trainable, hence the guard below. _fill_context_buffer runs under policy.eval(), so a buffered subgoal
-        # image is CENTER-cropped, while the observation re-encoded in the inner step is
-        # RANDOMLY cropped -- the exact registration mismatch the per-sample shared crop
-        # offset exists to prevent. The offline trainer
-        # (train_pusht_diffusion_search_single) generates its context inside the same forward
-        # pass and shares one offset, so it does not have this.
+        # OPEN, UNFIXED: subgoal contexts are mis-registered on this trainer, and it is not
+        # detectable from the loss. _fill_context_buffer runs under policy.eval(), so a
+        # buffered subgoal image is CENTRE-cropped, while the observation re-encoded in the
+        # inner step is RANDOMLY cropped -- the registration mismatch the per-sample shared
+        # crop offset exists to prevent. The offline trainer generates its context inside
+        # the same forward pass and shares one offset, so it does not have this.
         #
-        # A warning rather than an error: which way to resolve it is the open question about
-        # whether the context should be generated in eval or train mode at all, and that is
-        # not a decision to make silently at construction. Under `search_context: value` --
-        # the default, and every arm currently trained -- the buffer holds scalars and there
-        # is no image to mis-register, so this never fires there.
-        if (str(cfg.get('search_context', 'value') or 'value').startswith('subgoal')
-                and not _can_cache_obs(self.model)):
+        # A warning rather than an error: whether the context should be generated in eval or
+        # train mode at all is the open question, and that is not a decision to make
+        # silently at construction. Under `search_context: value` -- the default, and every
+        # arm currently trained -- the buffer holds scalars and there is no image to
+        # mis-register, so this never fires there.
+        if str(cfg.get('search_context', 'value') or 'value').startswith('subgoal'):
             print(f'WARNING: {type(self).__name__} with search_context='
-                  f'{cfg.search_context!r} and a TRAINABLE obs encoder: the buffered subgoal '
-                  f'images and the observation re-encoded in the inner step carry different '
-                  f'crops, so the two are not spatially registered. A frozen encoder fixes '
-                  f'this -- the pool is encoded once and the crop is pinned with it (see '
-                  f'_fill_context_buffer). Otherwise use trainer: offline '
-                  f'(train_pusht_diffusion_search_single) for a subgoal arm.')
+                  f'{cfg.search_context!r}: buffered subgoal images are centre-cropped '
+                  f'while the inner step re-encodes the observation at a random crop.')
 
     # ------------------------------------------------------------------ drift metrics
 
@@ -167,17 +137,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         was_training = policy.training
         policy.eval()
         try:
-            # BOTH snapshots get the SAME obs features -- the ones the analysed forward
-            # actually used. Exact because the encoder is frozen: the two snapshots hold the
-            # identical backbone, so re-encoding would just compute the same tensor twice,
-            # at the centre crop rather than the training crop the loss saw.
-            obs_features = aux.get('obs_features')
             eps_new = policy.predict_epsilon(
                 batch, aux['actions'], aux['values'],
-                aux['noisy_trajectory'], aux['timesteps'], obs_features=obs_features)
+                aux['noisy_trajectory'], aux['timesteps'])
             eps_old = collector.predict_epsilon(
                 batch, aux['actions'], aux['values'],
-                aux['noisy_trajectory'], aux['timesteps'], obs_features=obs_features)
+                aux['noisy_trajectory'], aux['timesteps'])
         finally:
             if was_training:
                 policy.train()
@@ -212,131 +177,45 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
 
     # ------------------------------------------------------------------ context buffer
 
-    def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size,
-                             n_crops=1):
-        """Generate the search context AND the encoded observation for every window, once.
+    def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size):
+        """Generate the search context for every window in ``pool``, once.
 
-        Returns ``(actions, values, obs_features, window)``. Fetched and generated in chunks
-        of the configured dataloader batch size so the verifier's env pool sees the same
-        batch width it does during offline training.
-
-        ``window`` carries the non-image remainder of each pool window -- the loss target
-        and the verifier's obs keys -- so an inner step can be assembled without touching
-        the dataset again. ``None`` when the features are not cached, which is exactly when
-        the inner loop must re-read (and re-encode) the images anyway.
-
-        THE ENCODED OBSERVATION IS KEPT TOO, when the backbone is frozen. Caching the raw
-        image windows would cost GBs; caching their features is
-        ``n_crops x outer_batch_size x n_obs_steps x D`` floats -- 4 x 256 x 2 x 324 x 4 B =
-        2.65 MB.
-
-        ``n_crops`` IS WHAT KEEPS THE ARMS COMPARABLE, and is the whole reason this is not a
-        single cached pass. Each pool window is used once per ``inner_epoch``, so encoding it
-        once would pin ONE crop for all of its inner passes -- while the BC arm
-        (``unet_bc``) and ST k=1 (``offline``) draw a fresh crop every gradient step. That
-        would make "BC vs ST k=1 vs ST k=16" vary crop augmentation as well as algorithm, on
-        exactly the baseline comparison the experiment rests on. So the pool is encoded once
-        PER INNER EPOCH, each pass under its own crop, and epoch ``e`` reads row ``e``.
-
-        It is still cheaper than not caching, which is the happy part: at 256/32/4 the
-        uncached path pays 256 fill + 1024 inner = 1280 window-encodes, and this pays 1024
-        with none in the inner loop -- and the inner loop keeps skipping the dataset read
-        entirely. See ``_can_cache_obs`` for why the freeze is load-bearing.
-
-        The SEARCH still runs exactly once per chunk, on the first pass's crop. It is the
-        expensive half (``max_actions - 1`` samples plus a verifier rollout each) and
-        re-running it per crop would defeat the point of amortizing it.
-
-        WIDTH 1: there is no context to buffer -- ``generate_search_context`` would ask for
-        ``max_actions - 1 = 0`` candidates and return ``(None, None)``, which ``torch.cat``
-        cannot take -- so the search is skipped and the verifier pool is never spawned. The
-        obs encode still happens, so k=1 gets the cache like every other width.
-
-        This trainer buys nothing at k=1 (there is no search cost to amortize) and its pooled
-        ordering is strictly worse than full-dataset epochs. That is a deliberate trade: one
-        code path for every k, so the width-1 arm cannot drift from the k=16 arm in anything
-        but the width itself.
+        Fetched and generated in chunks of the configured dataloader batch size so the
+        verifier's env pool sees the same batch width it does during offline training.
+        Only the context is kept -- the observations themselves are re-fetched per inner
+        step, since caching ``outer_batch_size`` image windows would cost GBs while the
+        context is a few MB. That is safe because the dataset is deterministic per index
+        here (``random_crop: False``), so a re-fetch returns byte-identical obs.
         """
-        cache = _can_cache_obs(policy)
-        n_crops = max(1, int(n_crops)) if cache else 1
-        # feats[e] is the whole pool encoded under crop pass e, assembled chunk by chunk.
-        feats = [list() for _ in range(n_crops)]
-        window = {'action': list(), 'obs': {k: list() for k in _WINDOW_OBS_KEYS}}
+        # WIDTH 1: there is no context to buffer. generate_search_context asks
+        # search_candidates for max_actions - 1 = 0 candidates; its loop body never runs and
+        # it returns (None, None), which the torch.cat below cannot take. Return the None
+        # pair straight away -- the denoiser already treats a None context as the empty
+        # context, so k=1 trains here exactly as it would on the offline loop, just with the
+        # pooled sampling. Skipping the loop also means the verifier pool is never spawned.
+        #
+        # This trainer buys nothing at k=1 (there is no search cost to amortize) and its
+        # pooled ordering is strictly worse than full-dataset epochs. That is a deliberate
+        # trade: one code path for every k, so the width-1 arm cannot drift from the k=16
+        # arm in anything but the width itself.
+        if policy.max_actions == 1:
+            return None, None
         actions, values = list(), list()
-        want_context = policy.max_actions != 1
         was_training = policy.training
         policy.eval()
         try:
-            # train_crops(), not eval's centre crop: these features and these subgoals are
-            # what the inner updates will actually train on, so they must carry the crop a
-            # training step would have drawn. Dropout stays off -- that is the reason for
-            # eval() here and it is untouched.
-            with policy.train_crops() if cache else contextlib.nullcontext():
-                for start in tqdm.trange(0, len(pool), chunk_size, desc="context buffer",
-                        leave=False, mininterval=self.cfg.training.tqdm_interval_sec):
-                    idxs = pool[start:start + chunk_size]
-                    batch = collate([dataset[int(i)] for i in idxs])
-                    batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                    for e in range(n_crops):
-                        # Advance the crop step per CHUNK and per PASS. The offsets are a
-                        # pure function of (seed, step), so a shared step would give every
-                        # chunk the same 32 offsets, and a step that ignored `e` would give
-                        # all n_crops passes the identical crop -- defeating the point.
-                        # len(pool) spaces the passes so they cannot collide with `start`.
-                        if hasattr(policy, 'set_crop_step'):
-                            policy.set_crop_step(
-                                self.cfg.training.seed,
-                                self.global_step + start + e * len(pool))
-                        # One crop scope per pass, so the obs encode and every subgoal
-                        # generated from it share an offset -- the guarantee the offline
-                        # trainer gets for free by generating its context in one forward.
-                        # no_grad: these features are buffered (detached, moved to CPU) and
-                        # the search builds no graph either, so the only thing autograd
-                        # could do is record a graph for the whole pool and throw it away.
-                        with torch.no_grad(), policy._crop_scope():
-                            chunk_feats = policy._encode_obs_features(batch['obs'])
-                            # ONCE, on the first pass. The search is the expensive half and
-                            # is reused across every inner epoch by design; re-running it
-                            # per crop would undo the amortization this trainer exists for.
-                            if want_context and e == 0:
-                                chunk_actions, chunk_values = \
-                                    policy.generate_search_context(
-                                        batch['obs'], obs_features=chunk_feats)
-                                actions.append(chunk_actions)
-                                values.append(chunk_values)
-                        if cache:
-                            feats[e].append(chunk_feats.detach().cpu())
-                        if not cache:
-                            break
-                    if cache:
-                        # The rest of what an inner step needs from the window, kept
-                        # alongside the features so the inner loop can skip the dataset
-                        # entirely. `action` is the loss target; agent_pos/feedback are the
-                        # verifier's keys, carried so the obs dict stays well-formed for
-                        # the k=1 path (which calls generate_search_context with an empty
-                        # candidate budget). The IMAGE is deliberately absent -- it is what
-                        # `feats` already stands for, and 256 windows of it is the ~450 MB
-                        # this exists to stop copying. At 256 windows the three together
-                        # are ~330 kB.
-                        window['action'].append(batch['action'].detach().cpu())
-                        for k in _WINDOW_OBS_KEYS:
-                            window['obs'][k].append(batch['obs'][k].detach().cpu())
+            for start in tqdm.trange(0, len(pool), chunk_size, desc="context buffer",
+                    leave=False, mininterval=self.cfg.training.tqdm_interval_sec):
+                idxs = pool[start:start + chunk_size]
+                batch = collate([dataset[int(i)] for i in idxs])
+                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                chunk_actions, chunk_values = policy.generate_search_context(batch['obs'])
+                actions.append(chunk_actions)
+                values.append(chunk_values)
         finally:
             if was_training:
                 policy.train()
-        # (n_crops, N, To, D) -- row e is the pool under crop pass e.
-        obs_feats = (torch.stack([torch.cat(f, dim=0) for f in feats], dim=0)
-                     if cache else None)
-        buf_window = None
-        if cache:
-            buf_window = {
-                'action': torch.cat(window['action'], dim=0),
-                'obs': {k: torch.cat(v, dim=0) for k, v in window['obs'].items()},
-            }
-        if not want_context:
-            return None, None, obs_feats, buf_window
-        return (torch.cat(actions, dim=0), torch.cat(values, dim=0),
-                obs_feats, buf_window)
+        return torch.cat(actions, dim=0), torch.cat(values, dim=0)
 
     # ------------------------------------------------------------------ main loop
 
@@ -505,12 +384,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 pool_rng = np.random.default_rng([cfg.training.seed, self.epoch])
                 pool = pool_rng.choice(
                     len(dataset), size=outer_bs, replace=outer_bs > len(dataset))
-                # n_crops = inner_epochs: one cached crop per pass a window will get, so
-                # the k=16 arms see the same crop diversity as BC and ST k=1.
-                buf_actions, buf_values, buf_feats, buf_window = \
-                    self._fill_context_buffer(
-                        policy, dataset, collate, pool, device, buffer_chunk,
-                        n_crops=inner_epochs)
+                buf_actions, buf_values = self._fill_context_buffer(
+                    policy, dataset, collate, pool, device, buffer_chunk)
 
                 # ======== inner: reuse that buffer for inner_epochs passes ============
                 self.model.train()
@@ -523,54 +398,27 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         if self.global_step >= max_steps:
                             break
                         sel = order[start:start + inner_bs]
-                        want_aux = (inner_idx % drift_every) == 0
-
-                        # THE WINDOW IS ONLY FETCHED WHEN SOMETHING READS IT. With the
-                        # features buffered, compute_loss touches nothing but
-                        # batch['action'] -- the two branches that read batch['obs'] are
-                        # both guarded by `actions is None` / `obs_features is None`, and
-                        # both are supplied here. So the dataset fetch, which is a
-                        # synchronous single-threaded decode of 32 x horizon images on the
-                        # training thread (~113 MB of memcpy), was pure overhead on every
-                        # step that is not a drift step.
-                        #
-                        # Drift steps no longer need it either: predict_epsilon now takes
-                        # the features from `aux` instead of re-encoding, so nothing on a
-                        # drift step reads batch['obs']. Only the sampling batch captured
-                        # once below still does. When the features are NOT cached,
-                        # buf_window is None and this is True anyway, which is the case
-                        # where predict_epsilon does re-encode.
-                        need_window = (buf_window is None
-                                       or train_sampling_batch is None)
-                        # Hoisted: the cached-feature lookup below needs it on EVERY step,
-                        # not only on the branch that reads the window buffer.
-                        sel_cpu = torch.as_tensor(sel, dtype=torch.long)
-                        if need_window:
-                            batch = collate([dataset[int(pool[p])] for p in sel])
-                            batch = dict_apply(
-                                batch, lambda x: x.to(device, non_blocking=True))
-                            if train_sampling_batch is None:
-                                train_sampling_batch = batch
-                        else:
-                            batch = {
-                                'action': buf_window['action'][sel_cpu].to(
-                                    device, non_blocking=True),
-                                'obs': {k: v[sel_cpu].to(device, non_blocking=True)
-                                        for k, v in buf_window['obs'].items()},
-                            }
+                        batch = collate([dataset[int(pool[p])] for p in sel])
+                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        if train_sampling_batch is None:
+                            train_sampling_batch = batch
                         # device from the batch, not the buffer: at k=1 the buffer is None.
                         sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
+
+                        want_aux = (inner_idx % drift_every) == 0
                         # Crop offsets are a pure function of (seed, global_step). This
                         # workspace overrides run(), so without setting it here the step
                         # would stay 0 and every update would see the SAME crop -- no
                         # augmentation at all.
                         #
-                        # Only meaningful when the obs is re-encoded here, i.e. when the
-                        # pool's features were NOT cached. With the cache the crop is the
-                        # one the fill drew for THIS inner epoch -- a different one per
-                        # epoch, so the window still sees `inner_epochs` distinct crops --
-                        # and the observation and the subgoals predicted from it share it.
-                        if buf_feats is None and hasattr(policy, 'set_crop_step'):
+                        # Known gap, inherent to amortizing the search: _build_context_buffer
+                        # runs under policy.eval(), so the buffered subgoal images are
+                        # CENTER-cropped, while the obs re-encoded here is randomly cropped.
+                        # The offline trainer shares one offset between the two because it
+                        # generates the context inside the same forward pass; a buffer reused
+                        # across many updates cannot. Fold into the P1-2 decision (that path
+                        # also generates its context in eval mode).
+                        if hasattr(policy, 'set_crop_step'):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
                         # beside set_crop_step so the crop offset and the
                         # slot-weight curriculum share one notion of 'now'
@@ -580,11 +428,6 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             batch,
                             actions=None if buf_actions is None else buf_actions[sel_t],
                             values=None if buf_values is None else buf_values[sel_t],
-                            # Row `epoch_idx`: this window's crop for this pass. Indexing
-                            # the wrong row would silently train on another epoch's crop --
-                            # not an error, just a quietly different augmentation.
-                            obs_features=(None if buf_feats is None
-                                          else buf_feats[epoch_idx][sel_cpu].to(device)),
                             return_aux=want_aux)
                         raw_loss, aux = result if want_aux else (result, None)
 

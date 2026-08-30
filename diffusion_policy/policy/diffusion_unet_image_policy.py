@@ -162,11 +162,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         bit-identical, so n-1 of those forwards were pure waste. Only meaningful with
         ``obs_as_global_cond``; ``None`` encodes as before.
 
-        Supplying it also skips the NORMALIZE, not just the encode. Under
-        ``obs_as_global_cond`` the sole consumer of ``nobs`` is the encode that
-        ``global_cond`` stands in for, so the normalizer used to run over the whole image
-        tensor once per candidate for a result that was then dropped on the floor. ``B``
-        comes off ``global_cond`` instead of off the obs.
+        The NORMALIZE still runs either way. Skipping it when ``global_cond`` is supplied
+        was a speedup, and it was reverted: it is not part of the ResNet-era path these
+        arms are being compared against.
         """
         assert 'past_action' not in obs_dict # not implemented yet
         T = self.horizon
@@ -174,12 +172,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         Do = self.obs_feature_dim
         To = self.n_obs_steps
 
-        # normalize input -- only when something below will actually read it
-        nobs = None
-        if global_cond is None:
-            nobs = self.normalizer.normalize(self._select_obs(obs_dict))
-            B = next(iter(nobs.values())).shape[0]
-        else:
+        # normalize input
+        nobs = self.normalizer.normalize(self._select_obs(obs_dict))
+        B = next(iter(nobs.values())).shape[0]
+        if global_cond is not None:
             # Asserted rather than ignored. The inpainting branch conditions on
             # PER-TIMESTEP obs features spliced into cond_data, which a flat (B, To*D)
             # vector cannot supply -- so it used to silently drop `global_cond` and

@@ -107,23 +107,15 @@ class PushTUNetSearchPolicy(PushTSearchMixin, CropScopeMixin, SearchProcedureMix
             return self.obs_encoder(this_nobs, crop_offsets=offsets)
 
     def _encode_obs_features(self, obs_dict):
-        """Encode the obs window ONCE per decision -> the (B, To*D) global conditioning.
+        """None -- every candidate re-encodes, as it did before the 2026-08-30 speedup pass.
 
-        Returned rather than recomputed because the search loop hands it back to every
-        candidate: all n condition on the SAME observation, and the encoder is frozen, so the
-        n-1 repeat forwards were bit-identical waste. That is 34.2M parameters run 16 times
-        per control step at n=16 instead of once -- the single largest avoidable cost in a
-        best-of-n sweep on this arm. (It used to return None, which is what made
-        predict_action re-encode.)
+        Caching the encode here was a real saving (34.2M parameters run once per decision
+        instead of once per candidate), but it is not part of the ResNet-era path these arms
+        are being measured against, so it is off. `predict_action` still ACCEPTS the
+        conditioning and asserts on the branch that cannot consume it; returning None simply
+        means nothing supplies it.
         """
-        To = self.n_obs_steps
-        # Sliced to To BEFORE normalizing; see DiffusionTransformerSearchPolicy's copy for
-        # why the two orders are bit-identical and why this one is cheaper.
-        obs = dict_apply(self._select_obs(obs_dict), lambda x: x[:, :To, ...])
-        nobs = self.normalizer.normalize(obs)
-        B = next(iter(nobs.values())).shape[0]
-        this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-        return self._encode_images(this_nobs, B).reshape(B, -1)
+        return None
 
     def predict_action(
             self,
@@ -138,8 +130,8 @@ class PushTUNetSearchPolicy(PushTSearchMixin, CropScopeMixin, SearchProcedureMix
         this policy has no context input, so every call is an i.i.d. draw from the same
         conditional. That is what best-of-n means here.
 
-        ``obs_features`` is NOT discarded -- it is the already-encoded conditioning from
-        `_encode_obs_features`, passed straight through so the backbone runs once per
-        decision instead of once per candidate.
+        ``obs_features`` is the already-encoded conditioning, passed straight through when
+        supplied. `_encode_obs_features` currently returns None, so in practice each call
+        encodes -- see the note there.
         """
         return super().predict_action(obs_dict, global_cond=obs_features)

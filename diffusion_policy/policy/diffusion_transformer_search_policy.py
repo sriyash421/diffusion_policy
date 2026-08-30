@@ -808,19 +808,17 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         candidates -- they all condition on the same observation, so re-encoding per
         candidate ran the encoder max_actions times per step for identical inputs.
 
-        SLICED TO To BEFORE NORMALIZING, not after. LinearNormalizer is elementwise
-        (`_normalize` is `x * scale + offset` with per-key broadcast params), so the two
-        orders give bit-identical output -- but normalizing first paid for the whole
-        `horizon` window, of which the dataset yields 16 steps and this reads 2. It also
-        makes the method safe against a dataset that emits only the observed frames (see
-        PushTImageDataset.obs_image_steps): the discarded steps are never touched.
+        Normalizes the whole window and then slices to To. Slicing first is bit-identical
+        (LinearNormalizer is elementwise) and cheaper, but it is not the ResNet-era order
+        these arms are measured against, so it was reverted with the rest of that pass.
         """
         To = self.n_obs_steps
-        if isinstance(obs_dict, dict):
-            obs_dict = dict_apply(obs_dict, lambda x: x[:, :To, ...])
+        nobs = self.normalizer.normalize(obs_dict)
+        if isinstance(nobs, dict):
+            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
         else:
-            obs_dict = obs_dict[:, :To, ...]
-        return self._encode_obs(self.normalizer.normalize(obs_dict))
+            nobs = nobs[:, :To, ...]
+        return self._encode_obs(nobs)
 
     # ------------------------------------------------- per-slot observation corruption
 
@@ -945,13 +943,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             (obs_cond.shape[0], self.horizon, self.action_dim),
             obs_cond.dtype, obs_cond.device, generator)
 
-        # Re-derived only when it would differ. The timestep grid is a pure function of
-        # num_inference_steps, but this runs once per CANDIDATE per decision -- 16 x ~38
-        # times per episode at k=16 -- rebuilding the same small tensor each time. The
-        # guard (rather than a one-shot init) keeps an eval harness that overrides
-        # num_inference_steps on a loaded policy correct.
-        if getattr(scheduler, 'num_inference_steps', None) != self.num_inference_steps:
-            scheduler.set_timesteps(self.num_inference_steps)
+        scheduler.set_timesteps(self.num_inference_steps)
         for t in scheduler.timesteps:
             model_output = self.model(
                 trajectory,
@@ -1049,8 +1041,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
                 obs_features=obs_features,
             )
 
-    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps,
-                        obs_features=None):
+    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
         """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
 
         Used to compare two snapshots of this policy at matched inputs. For a fixed
@@ -1063,26 +1054,15 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         closed-form ``log p(a|s)`` to take a ratio of).
 
         Obs corruption is deliberately NOT applied: ``corrupt_obs_features`` draws fresh
-        noise per call, so including it would book corruption noise as policy drift. Pass
-        the PRE-corruption features for the same reason.
-
-        ``obs_features`` is the encode from the forward being analysed, handed in so BOTH
-        snapshots share it. That is exact because the obs backbone is frozen -- the two
-        snapshots hold the identical encoder, so re-encoding would produce the identical
-        tensor twice. (It used to re-encode, on the grounds that "the vision backbone is
-        part of what drifts and each snapshot must use its own". That stopped being true
-        when the encoder was frozen.) Sharing also makes the comparison matched to the
-        forward it is about: re-encoding happens under `eval()`, i.e. at the CENTRE crop,
-        while the loss ran on a random training crop. ``None`` still re-encodes, for callers
-        with no features to hand.
+        noise per call, so including it would book corruption noise as policy drift. The
+        obs ARE re-encoded here rather than taken from the caller, because the vision
+        backbone is part of what drifts and each snapshot must use its own.
         """
         with torch.no_grad():
-            if obs_features is None:
-                obs_features = self._encode_obs_features(batch['obs'])
             return self.model(
                 noisy_trajectory,
                 timesteps,
-                obs_cond=obs_features,
+                obs_cond=self._encode_obs_features(batch['obs']),
                 actions=self._normalize_context_actions(actions),
                 values=values,
             )
@@ -1215,7 +1195,4 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             'timesteps': timesteps,
             'actions': actions,
             'values': values,
-            # PRE-corruption, and pre-slot-expansion: predict_epsilon omits the corruption
-            # on purpose (it redraws per call, which would book corruption noise as drift).
-            'obs_features': obs_features,
         }

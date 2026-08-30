@@ -92,19 +92,11 @@ class CropRandomizer(nn.Module):
         if self._forced_offsets is not None:
             # caller-supplied offsets: one per image in this batch, already accounting for
             # whichever images are meant to share a crop
-            forced = self._forced_offsets
-            assert forced.shape[0] == inputs.shape[0], (
-                f'got {forced.shape[0]} crop offsets for {inputs.shape[0]} images')
-            # Bounds-checked HERE, on the offsets as the caller built them -- which
-            # CropScopeMixin builds on the CPU -- rather than inside
-            # crop_image_from_indices, which would check them after the transfer and so
-            # `.item()` four device tensors per encode. Same check, no sync.
-            _assert_crop_indices_in_range(
-                forced, inputs.shape[-2], inputs.shape[-1],
-                self.crop_height, self.crop_width)
-            offsets = forced.to(inputs.device)
+            offsets = self._forced_offsets.to(inputs.device)
+            assert offsets.shape[0] == inputs.shape[0], (
+                f'got {offsets.shape[0]} crop offsets for {inputs.shape[0]} images')
             out = crop_image_from_indices(
-                inputs, offsets, self.crop_height, self.crop_width, validate=False)
+                inputs, offsets, self.crop_height, self.crop_width)
             if self.num_crops > 1:
                 out = out.unsqueeze(1).expand(
                     -1, self.num_crops, *out.shape[1:]).reshape(-1, *out.shape[1:])
@@ -155,22 +147,7 @@ class CropRandomizer(nn.Module):
         return msg
 
 
-def _assert_crop_indices_in_range(crop_indices, image_h, image_w,
-                                  crop_height, crop_width):
-    """The four bounds `crop_image_from_indices` requires of its indices.
-
-    Split out so a caller holding the indices on the CPU can check them there. Each check
-    is a `.all().item()`, which on a device tensor forces a host sync -- cheap once, but
-    this runs on every encode, and a search decision does one per candidate subgoal.
-    """
-    assert crop_indices.shape[-1] == 2
-    assert (crop_indices[..., 0] >= 0).all().item()
-    assert (crop_indices[..., 0] < (image_h - crop_height)).all().item()
-    assert (crop_indices[..., 1] >= 0).all().item()
-    assert (crop_indices[..., 1] < (image_w - crop_width)).all().item()
-
-
-def crop_image_from_indices(images, crop_indices, crop_height, crop_width, validate=True):
+def crop_image_from_indices(images, crop_indices, crop_height, crop_width):
     """
     Crops images at the locations specified by @crop_indices. Crops will be 
     taken across all channels.
@@ -215,11 +192,11 @@ def crop_image_from_indices(images, crop_indices, crop_height, crop_width, valid
     image_c, image_h, image_w = images.shape[-3:]
     num_crops = crop_indices.shape[-2]
 
-    # make sure @crop_indices are in valid range. @validate=False when the caller has
-    # already checked them somewhere cheaper -- see _assert_crop_indices_in_range.
-    if validate:
-        _assert_crop_indices_in_range(
-            crop_indices, image_h, image_w, crop_height, crop_width)
+    # make sure @crop_indices are in valid range
+    assert (crop_indices[..., 0] >= 0).all().item()
+    assert (crop_indices[..., 0] < (image_h - crop_height)).all().item()
+    assert (crop_indices[..., 1] >= 0).all().item()
+    assert (crop_indices[..., 1] < (image_w - crop_width)).all().item()
 
     # convert each crop index (ch, cw) into a list of pixel indices that correspond to the entire window.
 
