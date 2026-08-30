@@ -7,8 +7,7 @@ import numpy as np
 import copy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.common.sampler import (
-    SequenceSampler, downsample_mask)
+from diffusion_policy.common.sampler import SequenceSampler
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
@@ -257,6 +256,26 @@ def masks_from_manifest(manifest, n_episodes):
     return tuple(out)
 
 
+# ---------------------------------------------------------------------------------------
+# THE OBS CONTRACT. Which keys exist, and what each is for. These were previously implicit:
+# _sample_to_data and get_normalizer each hardcoded their own list, independent of
+# shape_meta and of each other, so the three could disagree forever without anything
+# noticing. PushTSearchMixin asserts shape_meta.obs against POLICY_OBS_KEYS at policy
+# construction, which is what makes "the observation is image-only" a checked invariant
+# rather than a property of the current default.
+#
+# The sample dict is deliberately WIDER than shape_meta: the verifier reads its two keys off
+# the raw obs dict, never through the encoder.
+POLICY_OBS_KEYS = ('image',)
+# Emitted for PushTVerifier.rollout, which resets a pymunk sim to [agent_pos, feedback], and
+# for PushTSearchMixin._normalize_value. Never encoded, never in shape_meta.
+VERIFIER_OBS_KEYS = ('agent_pos', 'feedback')
+# What LinearNormalizer fits. 'image' is added separately with a fixed [0,1] -> [-1,1] map.
+# 'feedback' is fitted ONLY so _normalize_value has a scale to rescale the verifier's
+# context scalar by -- it is not a policy input and is not normalized on the sample path.
+NORMALIZER_KEYS = ('action', 'agent_pos', 'feedback')
+
+
 class PushTImageDataset(BaseImageDataset):
     def __init__(self,
             zarr_path,
@@ -268,16 +287,23 @@ class PushTImageDataset(BaseImageDataset):
             n_val_episodes=0,
             n_train_episodes=None,
             split='train',
-            max_train_episodes=None,
-            train_ratio=None,
             return_sequences=False,
             split_file=None
             ):
 
         super().__init__()
         assert split in ('train', 'val', 'test')
-        assert train_ratio is None or 0 < train_ratio <= 1, (
-            f'train_ratio must be in (0, 1], got {train_ratio}')
+        # REQUIRED since 2026-08-29. The alternative -- deriving the partition from `seed` at
+        # runtime -- was a second, independent way to answer "which episodes are train?", and
+        # its n_val_episodes==0 path silently ran validation on the TEST set. One code path to
+        # the split means BC UNet, ST k=1, ST k=16 and every ladder arm provably share it.
+        # `max_train_episodes` / `train_ratio` went with it: they existed only to subsample
+        # what that branch produced, and the manifest already names the exact train episodes.
+        if split_file is None:
+            raise ValueError(
+                'PushTImageDataset requires split_file: the split manifest is the only '
+                'source of truth for the partition. Generate one with '
+                'scripts/dump_pusht_splits.py.')
         if return_sequences:
             assert pad_before == 0 and pad_after == 0 and horizon >= 100
 
@@ -289,70 +315,27 @@ class PushTImageDataset(BaseImageDataset):
             zarr_path, keys=['img', 'agent_pos', 'block_pos', 'action'])
 
         self.split_file = split_file
-        self._manifest = None
-        if split_file is not None:
-            # The manifest is the SOURCE OF TRUTH: it names the exact episodes, and the
-            # count keys below are validated against it rather than generating anything.
-            # This is what stops a change to n_val_episodes (or to train_ratio, or to the
-            # seed) from silently repartitioning the data underneath a running experiment.
-            self._manifest = load_split_manifest(
-                split_file,
-                episode_ends=self.replay_buffer.episode_ends[:],
-                expected_counts={
-                    'test': n_test_episodes,
-                    'val': n_val_episodes if n_val_episodes else None,
-                    'train': n_train_episodes,
-                })
-            train_mask, val_mask, test_mask = masks_from_manifest(
-                self._manifest, self.replay_buffer.n_episodes)
-            self.train_pool = train_mask
-            self.val_pool = val_mask
-            self.test_pool = test_mask
-            # train_ratio / max_train_episodes would re-subsample what the manifest already
-            # pinned, so the budget would stop being a property of the file. Refuse rather
-            # than silently applying one on top of the other.
-            if train_ratio is not None or max_train_episodes is not None:
-                raise ValueError(
-                    'train_ratio / max_train_episodes cannot be combined with split_file: '
-                    'the manifest already names the exact train episodes. Set them to null '
-                    'and regenerate the manifest if you want a different budget.')
-            self.train_used = train_mask
-        else:
-            # Legacy: derive from the seed. Kept so the 2-way configs and any dataset
-            # without a manifest behave exactly as before.
-            #
-            # With n_val_episodes>0 this is a seeded, recreatable 3-way split
-            # (train/val/test); the test set is identical to the legacy 2-way split for the
-            # same seed. With n_val_episodes==0 val falls back to the test set (legacy).
-            if n_val_episodes > 0:
-                train_mask, val_mask, test_mask = get_split_masks_3way(
-                    n_episodes=self.replay_buffer.n_episodes,
-                    n_test_episodes=n_test_episodes,
-                    n_val_episodes=n_val_episodes,
-                    seed=seed,
-                    n_train_episodes=n_train_episodes)
-            else:
-                train_mask, test_mask = get_split_masks(
-                    n_episodes=self.replay_buffer.n_episodes,
-                    n_test_episodes=n_test_episodes,
-                    seed=seed,
-                    n_train_episodes=n_train_episodes)
-                val_mask = test_mask
-            self.train_pool = train_mask
-            self.val_pool = val_mask
-            self.test_pool = test_mask
-
-            # train_ratio keeps that fraction of the train episodes (0.2 -> 20%). NOTE this
-            # is a fraction of whatever is LEFT after test and val are taken, so changing
-            # either split size changes the training budget -- the drift a manifest exists
-            # to prevent. The test/val splits are never subsampled.
-            max_n = max_train_episodes
-            if train_ratio is not None:
-                ratio_n = max(1, int(round(train_ratio * train_mask.sum())))
-                max_n = ratio_n if max_n is None else min(max_n, ratio_n)
-            # the episodes actually trained on; also the only data the normalizer sees,
-            # so a reduced train_ratio really does mean less data used.
-            self.train_used = downsample_mask(mask=train_mask, max_n=max_n, seed=seed)
+        # The manifest is the SOURCE OF TRUTH: it names the exact episodes, and the count
+        # keys are validated against it rather than generating anything. This is what stops a
+        # change to n_val_episodes, or to the seed, from silently repartitioning the data
+        # underneath a running experiment.
+        self._manifest = load_split_manifest(
+            split_file,
+            episode_ends=self.replay_buffer.episode_ends[:],
+            expected_counts={
+                'test': n_test_episodes,
+                'val': n_val_episodes if n_val_episodes else None,
+                'train': n_train_episodes,
+            })
+        train_mask, val_mask, test_mask = masks_from_manifest(
+            self._manifest, self.replay_buffer.n_episodes)
+        self.train_pool = train_mask
+        self.val_pool = val_mask
+        self.test_pool = test_mask
+        # No budget is applied on top: the manifest already names the exact train episodes,
+        # so train_used IS train_pool. (n_demos selects WHICH manifest, so a smaller budget
+        # is a different file, not a runtime subsample of this one.)
+        self.train_used = train_mask
 
         self.zarr_path = zarr_path
         self.seed = seed
@@ -414,26 +397,25 @@ class PushTImageDataset(BaseImageDataset):
         """The partition this dataset actually resolved, in manifest form.
 
         Written to <run_dir>/splits.json by BaseWorkspace.write_splits so a run directory
-        records which episodes its checkpoints were trained on -- whether the split came
-        from a manifest or from the seed. ``train`` is ``train_used`` (post-budget), i.e.
-        the episodes really trained on, not the pool they were drawn from.
+        records which episodes its checkpoints were trained on. Since the manifest is the
+        only source of the partition, this is a faithful copy of it plus the frame counts
+        and a checksum -- which is what makes "did these two arms train on the same data?"
+        a byte comparison rather than an argument.
+
+        Note this reports the whole partition, not the split THIS object samples: a
+        validation copy from get_validation_dataset() returns the same three lists, by
+        design.
         """
         episode_ends = np.asarray(self.replay_buffer.episode_ends[:])
         masks = {'train': self.train_used, 'val': self.val_pool, 'test': self.test_pool}
         out = {
             'generated_by': type(self).__name__ + '.get_split_indices',
             'zarr_path': str(self.zarr_path),
-            'split_file': None if self.split_file is None else str(self.split_file),
+            'split_file': str(self.split_file),
             'n_episodes': int(len(episode_ends)),
             'episode_ends_checksum': episode_ends_checksum(episode_ends),
         }
-        if self._manifest is not None:
-            out['derivation'] = self._manifest.get('derivation')
-        else:
-            out['derivation'] = {
-                'method': 'derived at runtime from the seed (no split_file)',
-                'seed': int(self.seed),
-            }
+        out['derivation'] = self._manifest.get('derivation')
         for name in SPLIT_NAMES:
             out[name] = [int(i) for i in np.nonzero(masks[name])[0]]
             out[f'{name}_frames'] = int(
@@ -451,20 +433,26 @@ class PushTImageDataset(BaseImageDataset):
         return np.nonzero(mask)[0][:n]
 
     def get_normalizer(self, mode='limits', **kwargs):
-        # fit on the train episodes actually used (after train_ratio), never on the
-        # held-out test episodes
+        """Fit on the train episodes only -- never on val or test.
+
+        Keys come from NORMALIZER_KEYS, which is a superset of what the policy encodes:
+        'feedback' is fitted although it is not a policy input, because
+        PushTSearchMixin._normalize_value reads its scale to rescale the verifier's context
+        scalar to O(1). 'agent_pos' is fitted for the same reason the dataset still emits it
+        -- the verifier path -- and costs one 2-d min/max.
+        """
         frames = episode_frame_mask(
             self.replay_buffer.episode_ends[:], self.train_used)
-        data = {
-            'action': self.replay_buffer['action'][frames],
-            'agent_pos': self.replay_buffer['agent_pos'][frames],
-            # feedback is a goal-relative transform of block_pos (a valid policy input);
-            # block_pos itself is reset-only and never normalized.
-            'feedback': compute_feedback_from_pose(
+        source = {
+            'action': lambda: self.replay_buffer['action'][frames],
+            'agent_pos': lambda: self.replay_buffer['agent_pos'][frames],
+            # goal-relative transform of block_pos; block_pos itself is never normalized.
+            'feedback': lambda: compute_feedback_from_pose(
                 self.replay_buffer['block_pos'][frames]),
         }
         normalizer = LinearNormalizer()
-        normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)
+        normalizer.fit(data={k: source[k]() for k in NORMALIZER_KEYS},
+                       last_n_dims=1, mode=mode, **kwargs)
         normalizer['image'] = get_image_range_normalizer()
         return normalizer
 
@@ -477,22 +465,20 @@ class PushTImageDataset(BaseImageDataset):
         image = np.moveaxis(sample['img'],-1,1)/255
         feedback = compute_feedback_from_pose(block_pos)  # T, 16
 
-        # obs is exactly shape_meta['obs'] -- no extra keys. block_pos is NOT emitted:
-        # feedback is an exact, invertible function of it (see
-        # pusht_verifier.block_pose_from_feedback), so anything needing the block pose
-        # reconstructs it from feedback. That keeps the obs dict normalizer-complete (an
-        # unnormalized extra key KeyErrors in every policy that does not filter obs) and
-        # makes the verifier's train-time and eval-time resets bit-identical.
+        # POLICY_OBS_KEYS + VERIFIER_OBS_KEYS. The obs dict is WIDER than shape_meta on
+        # purpose: agent_pos and feedback are here for PushTVerifier, which resets a pymunk
+        # sim from them off the raw dict, and are not in shape_meta so the encoder never
+        # reads them. block_pos is NOT emitted -- feedback is an exact, invertible function
+        # of it (pusht_verifier.block_pose_from_feedback), so anything needing the block
+        # pose reconstructs it, and the verifier's train-time and eval-time resets stay
+        # bit-identical.
         data = {
             'obs': {
                 'image': image, # T, 3, 96, 96
-                'agent_pos': agent_pos, # T, 2
-                'feedback': feedback, # T, 16 (goal-relative, a policy input)
+                'agent_pos': agent_pos, # T, 2   verifier only
+                'feedback': feedback, # T, 16   verifier only (goal-relative)
             },
             'action': sample['action'].astype(np.float32), # T, 2
-            # all-ones so the shared get_collate_fn (which requires expert_mask) works;
-            # every expert step is a valid supervision target.
-            'expert_mask': np.ones((agent_pos.shape[0], 1), dtype=np.float32),
         }
         return data
 

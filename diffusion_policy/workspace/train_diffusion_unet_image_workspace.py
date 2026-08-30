@@ -30,7 +30,8 @@ from diffusion_policy.policy.diffusion_unet_image_policy import (
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.json_logger import JsonLogger
-from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
+from diffusion_policy.common.pytorch_util import (
+    dict_apply, optimizer_to, trainable_parameters)
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
@@ -64,8 +65,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             self.ema_model = copy.deepcopy(self.model)
 
         # configure training state
+        # Frozen parameters are excluded, not merely skipped by AdamW: the SD VAE obs
+        # backbone is 34.2M frozen parameters and there is no reason for them to sit in the
+        # optimizer's state_dict or under its weight_decay.
         self.optimizer = hydra.utils.instantiate(
-            cfg.optimizer, params=self.model.parameters())
+            cfg.optimizer,
+            params=trainable_parameters(self.model, type(self).__name__))
 
         # configure training state
         self.global_step = 0
@@ -254,11 +259,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
-                if cfg.training.freeze_encoder:
-                    # unwrap first: accelerate's DDP wrapper does not forward attribute
-                    # access, so `self.model.obs_encoder` would raise once prepare() wraps
-                    # the model. Inert at freeze_encoder: False, which is what the PushT
-                    # UNet configs set.
+                # `.get`, because the PushT configs no longer declare the key: their obs
+                # backbone (SDVAEEncoder) freezes itself unconditionally. Kept for
+                # train_diffusion_unet_{image,real}_pretrained_workspace, which set it True.
+                # unwrap first: accelerate's DDP wrapper does not forward attribute access,
+                # so `self.model.obs_encoder` would raise once prepare() wraps the model.
+                if cfg.training.get('freeze_encoder', False):
                     self.accelerator.unwrap_model(self.model).obs_encoder.eval()
                     self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
 
@@ -266,6 +272,14 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
+                        # The crop offsets are a pure function of (seed, global_step), so
+                        # they must be told which step this is -- without this call they stay
+                        # frozen at step 0 and every batch gets the identical crop, which is
+                        # worse than no augmentation. `hasattr` because this workspace also
+                        # serves the upstream UNet configs, whose policies have no crop scope.
+                        if hasattr(self.accelerator.unwrap_model(self.model), 'set_crop_step'):
+                            self.accelerator.unwrap_model(self.model).set_crop_step(
+                                cfg.training.seed, self.global_step)
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         # Refreshed every batch, NOT frozen at epoch 0. The old

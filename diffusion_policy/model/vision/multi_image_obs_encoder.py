@@ -73,7 +73,22 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             imagenet_norm: bool=False,
             extra_randomizations=None,
             feature_dim: int=None,
-            depth_model: nn.Module = None
+            depth_model: nn.Module = None,
+            # LayerNorm over the CONCATENATED feature vector, before it leaves this
+            # encoder. Off by default, and it must stay that way: it adds parameters and
+            # changes the conditioning distribution, so flipping it silently would make
+            # every existing checkpoint unloadable and every trained arm a different model.
+            #
+            # What it is for: the concat is heterogeneous. The rgb half is a ResNet
+            # global-avg-pool taken straight after layer4's final ReLU -- non-negative and
+            # unbounded -- while the low_dim half arrives LinearNormalizer-scaled to about
+            # [-1, 1]. Both halves are then handed to a single Linear (`obs_emb` on the
+            # search transformer, the FiLM `cond_encoder` via `global_cond` on the UNet)
+            # with nothing in between. This is the same scale asymmetry that
+            # PushTSearchMixin._normalize_value exists to prevent on the search-context
+            # side, where the verifier scalar is rescaled to O(1) before being concatenated
+            # with a normalized action.
+            feature_layernorm: bool=False
         ):
         """
         Assumes rgb input: B,C,H,W
@@ -202,6 +217,13 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         self.key_shape_map = key_shape_map
         self.feature_dim = feature_dim
         self.projector = None
+        # Sized EAGERLY, not on first forward: a module created inside forward() misses
+        # the optimizer's parameter list (it is built from the policy at construction) and
+        # breaks strict state_dict loads. output_shape() runs one example forward, which is
+        # why feature_norm must already exist -- as None -- when it is called.
+        self.feature_norm = None
+        if feature_layernorm:
+            self.feature_norm = nn.LayerNorm(self.output_shape()[0])
 
     @contextlib.contextmanager
     def _forced_crop_offsets(self, offsets):
@@ -299,6 +321,11 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         
         # concatenate all features
         result = torch.cat(features, dim=-1)
+
+        # Before the projector, so a configuration using both normalizes the concat and
+        # then projects it, rather than normalizing a projection.
+        if self.feature_norm is not None:
+            result = self.feature_norm(result)
 
         if self.feature_dim is not None:
             if self.projector is None:

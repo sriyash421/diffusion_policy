@@ -18,6 +18,7 @@ from build_30_100_success_doc import BASE, NS, by_step, read_rows   # noqa: E402
 TARGET = 100000
 _K16 = 'outer_inner/value_k16_ver-armTn%s_corrupt-False_demos-30_seed-42'
 _DTG = 'outer_inner/value_k16_ver-d_t_goal%s_corrupt-False_demos-30_seed-42'
+_SON = 'outer_inner/value_k16_ver-t_goal%s_demos-30_seed-42'
 ARMS = [
     # round 1 -- finished, kept so a regression in the shared tooling shows up here
     ('k=1  l2tol1', 'offline/value_k1_ver-armTn_l2tol1_corrupt-False_demos-30_seed-42'),
@@ -37,6 +38,14 @@ ARMS = [
     ('dtg geo735 l2tol1', _DTG % '_sw-geo735-l2tol1'),
     ('dtg curr-lin100 l2', _DTG % '_sw-curr-lin100-l2'),
     ('dtg curr-lin100 l2tol1', _DTG % '_sw-curr-lin100-l2tol1'),
+    # TMRL graded obs corruption, SD-VAE encoder, wandb project pushT_tmrl
+    ('tmrl linear_t', _SON % '_son-lint'),
+    ('tmrl geometric.7', _SON % '_son-geo7'),
+    ('tmrl linear_signal', _SON % '_son-linsig'),
+    # the no-position arms (separate experiment, tracked here so one command covers all)
+    ('nopos k=1', 'offline/value_k1_ver-t_goal_nopos_corrupt-False_demos-30_seed-42'),
+    ('nopos k=16', 'outer_inner/value_k16_ver-t_goal_nopos_corrupt-False_demos-30_seed-42'),
+    ('nopos unetbc', 'unet_bc/unetbc_ver-t_goal_nopos_demos-30_seed-42'),
 ]
 
 

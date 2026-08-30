@@ -201,7 +201,7 @@ def _swap_value(policy, value):
     init, and every "the action changed" assertion below would fire on that rather than on
     anything to do with the verifier.
     """
-    policy._search_kwargs['verifier_value'] = value
+    policy.search_kwargs['verifier_value'] = value
     built = policy.__dict__.get('_verifier')
     if built is not None:
         built.value_fn = value

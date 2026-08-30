@@ -9,6 +9,11 @@ to build its ladder:
 
     slot 0 is the MOST corrupted (highest t), slot K-1 the least, because slot k conditions
     on the first k scored context candidates.
+
+`mode: random_base` has no fixed ladder to print: it borrows a shape and rescales it into
+`[0, t_base]` for a `t_base` drawn per sample, so slot 0's corruption is random and the
+schedule runs from it down to clean. What is asserted there is that every draw is that same
+shape under a positive scaling.
 """
 import os
 import sys
@@ -119,6 +124,19 @@ def test_explicit_list():
         raise AssertionError('a short explicit profile must raise')
 
 
+def test_reversed_list_is_flagged(capsys=None):
+    """`list` is the only mode that can point the ladder the wrong way; it must say so."""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _Stub({'mode': 'list', 'timesteps': list(range(K))})   # ASCENDING == reversed
+    assert 'not non-increasing' in buf.getvalue(), buf.getvalue()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _Stub({'mode': 'list', 'timesteps': list(range(99, 99 - K, -1))})
+    assert 'not non-increasing' not in buf.getvalue()
+
+
 def test_config_validation():
     """A typo'd key must raise, not silently train an uncorrupted run."""
     for cfg, exc, frag in (
@@ -143,6 +161,154 @@ def test_refuses_to_stack_with_corrupt_obs():
         assert 'noises it twice' in str(e)
     else:
         raise AssertionError('corrupt_obs + slot_obs_noise must raise')
+
+
+# ------------------------------------------------------------------ mode: random_base
+#
+# Slot 0's level is drawn per sample and the borrowed shape is rescaled into [0, base], so
+# there is no fixed ladder to assert. What has to hold is that every draw is the same shape
+# under a positive scaling: monotone, clean at slot K-1, and exactly the fixed ladder when
+# the base is drawn at the top of its range.
+
+RANDOM_BASE = {'mode': 'random_base', 'shape': 'linear_signal'}
+T = 100
+
+
+def test_random_base_has_no_fixed_ladder():
+    """It registers a shape profile, not timesteps: the levels do not exist until a draw."""
+    s = _Stub(RANDOM_BASE)
+    assert s._slot_obs_timesteps() is None, 'random_base must not pin a fixed ladder'
+    sh = s._slot_obs_shape()
+    assert sh is not None and sh.shape == (K,)
+    assert int(sh[0]) == T - 1 and int(sh[-1]) == 0
+
+
+def test_random_base_borrows_its_shape_exactly():
+    """A random_base arm and its fixed counterpart must not be able to drift apart."""
+    for shape, cfg in (('linear_t', {}), ('linear_signal', {}),
+                       ('geometric', {'decay': 0.7})):
+        fixed = _Stub({'mode': shape, **cfg})._slot_obs_timesteps()
+        sh = _Stub({'mode': 'random_base', 'shape': shape, **cfg})._slot_obs_shape()
+        assert torch.equal(fixed, sh), f'{shape}: random_base shape differs from the fixed ladder'
+
+
+def test_random_base_at_max_base_is_the_fixed_ladder():
+    """base = T-1 is the identity rescale, so the arm degenerates to its shape there."""
+    s = _Stub(RANDOM_BASE)
+    lo, hi = s.slot_obs_base_range()
+    assert (lo, hi) == (0, T - 1)
+    t = s.rescale_slot_timesteps(s._slot_obs_shape(), hi)
+    assert torch.equal(t, _Stub(SHAPES['linear_signal'])._slot_obs_timesteps())
+
+
+def test_random_base_every_draw_is_ordered_and_ends_clean():
+    s = _Stub(RANDOM_BASE)
+    sh = s._slot_obs_shape()
+    for base in range(0, T):
+        t = s.rescale_slot_timesteps(sh, base)
+        assert bool((t[1:] <= t[:-1]).all()), f'base {base}: not monotone: {t.tolist()}'
+        assert int(t[0]) == base, f'base {base}: slot 0 must sit AT the drawn level'
+        assert int(t[-1]) == 0, f'base {base}: slot K-1 must stay clean'
+
+
+def test_random_base_extent_scales_with_the_draw():
+    """The point of the mode: a lower base is a SHORTER ladder, not a shifted one."""
+    s = _Stub(RANDOM_BASE)
+    sh = s._slot_obs_shape()
+    spans = [int(s.rescale_slot_timesteps(sh, b).max()) for b in (20, 50, 99)]
+    assert spans == [20, 50, 99], spans
+    # and the mid-slot level is monotone in the base
+    mids = [int(s.rescale_slot_timesteps(sh, b)[K // 2]) for b in (20, 50, 99)]
+    assert mids[0] < mids[1] < mids[2], mids
+
+
+def test_random_base_is_batched():
+    """A (B,) base gives a (B, K) ladder, one row per sample."""
+    s = _Stub(RANDOM_BASE)
+    base = torch.tensor([10, 55, 99])
+    t = s.rescale_slot_timesteps(s._slot_obs_shape(), base)
+    assert t.shape == (3, K)
+    for row, b in zip(t, base.tolist()):
+        assert int(row[0]) == b and int(row[-1]) == 0
+
+
+def test_random_base_config_validation():
+    for cfg, exc, frag in (
+        ({'mode': 'random_base', 'shape': 'list'}, ValueError, 'shape must be one of'),
+        ({'mode': 'random_base', 'shape': 'geometric'}, ValueError, 'needs a `decay`'),
+        ({'mode': 'random_base', 'shape': 'linear_t', 'decay': 0.7},
+         ValueError, 'only means something under shape: geometric'),
+        ({'mode': 'random_base', 'base_range': [50, 10]}, ValueError, 'base_range must be'),
+        # shape/base_range are meaningless on the fixed ladders and must not be ignored
+        ({'mode': 'linear_signal', 'shape': 'linear_t'}, ValueError, 'only mean something'),
+        ({'mode': 'linear_signal', 'base_range': [0, 9]}, ValueError, 'only mean something'),
+    ):
+        try:
+            _Stub(cfg)
+        except exc as e:
+            assert frag in str(e), f'{cfg}: wrong message {e}'
+        else:
+            raise AssertionError(f'{cfg} should have raised {exc.__name__}')
+
+
+def test_random_base_off_at_width_one():
+    assert _Stub(RANDOM_BASE, max_actions=1)._slot_obs_shape() is None
+
+
+# ---------------------------------------------------- the schedule sets the noise FLOOR
+#
+# The shapes decide how the range is distributed across slots; the SCHEDULE decides how
+# corrupted the noisiest slot can be at all. These pin that, because it is the thing that
+# silently caps the whole method: on the legacy T=100 schedule no shape, cap or timestep can
+# take slot 0 below 59% retained signal.
+
+def _stub_on(T, b0, b1, cfg=None):
+    s = _Stub.__new__(_Stub)
+    s.max_actions = K
+    s.corrupt_obs = False
+    s.obs_noise_scheduler = DDPMScheduler(
+        num_train_timesteps=T, beta_start=b0, beta_end=b1,
+        beta_schedule='linear', prediction_type='epsilon')
+    s._init_slot_obs_noise(cfg or SHAPES['linear_signal'])
+    return s
+
+
+def test_legacy_schedule_cannot_make_slot0_noise():
+    """The default T=100 schedule retains ~59% of the signal at its noisiest timestep."""
+    s = _stub_on(100, 0.001, 0.02)
+    floor = float(s.obs_noise_scheduler.alphas_cumprod[-1].sqrt())
+    assert 0.58 < floor < 0.60, floor
+    assert float(s.sig()[0]) == pytest_approx(floor), 'slot 0 should sit AT the floor'
+
+
+def test_tmrl_vla_schedule_drives_slot0_to_the_marginal():
+    """TMRL's VLA schedule (T=1000, beta 1e-4->0.02) reaches ~0.6% signal -- pure noise."""
+    s = _stub_on(1000, 1e-4, 0.02)
+    floor = float(s.obs_noise_scheduler.alphas_cumprod[-1].sqrt())
+    assert floor < 0.01, f'expected the marginal, got sqrt(abar)={floor}'
+    sig = s.sig()
+    assert float(sig[0]) == pytest_approx(floor), 'slot 0 should sit AT the floor'
+    assert float(sig[-1]) > 0.99, 'slot K-1 should still be clean'
+
+
+def test_linear_signal_still_grades_evenly_on_the_long_schedule():
+    """The property linear_signal exists for must survive the 10x longer schedule."""
+    step = _stub_on(1000, 1e-4, 0.02).sig().diff()
+    assert bool((step > 0).all())
+    assert float(step.max() / step.min()) < 1.1, \
+        f'steps not even on T=1000: {step.tolist()}'
+
+
+def test_linear_t_is_badly_uneven_on_the_long_schedule():
+    """Documented weakness, asserted so the linear_t arm is read for what it is."""
+    step = _stub_on(1000, 1e-4, 0.02, {'mode': 'linear_t'}).sig().diff()
+    assert float(step.max() / step.min()) > 10.0
+
+
+def pytest_approx(x, tol=1e-4):
+    class _A:
+        def __eq__(self, other): return abs(other - x) < tol
+    return _A()
 
 
 if __name__ == '__main__':

@@ -56,6 +56,21 @@ def _val_slot_weighting(policy) -> bool:
     return bool(spec and spec.get('val') == 'trained')
 
 
+def _can_cache_obs(policy) -> bool:
+    """Whether the encoded observation may be reused across gradient steps.
+
+    ONLY when the obs backbone has no trainable parameter. With a trainable encoder the
+    cache would feed the model activations from an earlier step AND cut the encoder out of
+    the gradient entirely -- it would look like a speedup and silently stop training the
+    backbone. Checked here rather than assumed from the config, because `freeze` is a
+    property of the module (SDVAEEncoder freezes itself), not of a flag anyone can read.
+    """
+    enc = getattr(policy, 'obs_encoder', None)
+    if enc is None or not hasattr(policy, 'train_crops'):
+        return False
+    return not any(p.requires_grad for p in enc.parameters())
+
+
 class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     """Outer/inner trainer for the conditional-diffusion search policy.
 
@@ -96,6 +111,30 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         self.ema_model = None
         if cfg.training.use_ema:
             self.ema_model = _clone_policy(self.model)
+
+        # SUBGOAL CONTEXTS WERE MIS-REGISTERED ON THIS TRAINER, and it was not detectable
+        # from the loss. Fixed for a frozen encoder by caching the pool's encode (which pins
+        # its crop); still live if the encoder is trainable, hence the guard below. _fill_context_buffer runs under policy.eval(), so a buffered subgoal
+        # image is CENTER-cropped, while the observation re-encoded in the inner step is
+        # RANDOMLY cropped -- the exact registration mismatch the per-sample shared crop
+        # offset exists to prevent. The offline trainer
+        # (train_pusht_diffusion_search_single) generates its context inside the same forward
+        # pass and shares one offset, so it does not have this.
+        #
+        # A warning rather than an error: which way to resolve it is the open question about
+        # whether the context should be generated in eval or train mode at all, and that is
+        # not a decision to make silently at construction. Under `search_context: value` --
+        # the default, and every arm currently trained -- the buffer holds scalars and there
+        # is no image to mis-register, so this never fires there.
+        if (str(cfg.get('search_context', 'value') or 'value').startswith('subgoal')
+                and not _can_cache_obs(self.model)):
+            print(f'WARNING: {type(self).__name__} with search_context='
+                  f'{cfg.search_context!r} and a TRAINABLE obs encoder: the buffered subgoal '
+                  f'images and the observation re-encoded in the inner step carry different '
+                  f'crops, so the two are not spatially registered. A frozen encoder fixes '
+                  f'this -- the pool is encoded once and the crop is pinned with it (see '
+                  f'_fill_context_buffer). Otherwise use trainer: offline '
+                  f'(train_pusht_diffusion_search_single) for a subgoal arm.')
 
     # ------------------------------------------------------------------ drift metrics
 
@@ -161,44 +200,76 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     # ------------------------------------------------------------------ context buffer
 
     def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size):
-        """Generate the search context for every window in ``pool``, once.
+        """Generate the search context AND the encoded observation for every window, once.
 
-        Fetched and generated in chunks of the configured dataloader batch size so the
-        verifier's env pool sees the same batch width it does during offline training.
-        Only the context is kept -- the observations themselves are re-fetched per inner
-        step, since caching ``outer_batch_size`` image windows would cost GBs while the
-        context is a few MB. That is safe because the dataset is deterministic per index
-        here (``random_crop: False``), so a re-fetch returns byte-identical obs.
+        Returns ``(actions, values, obs_features)``. Fetched and generated in chunks of the
+        configured dataloader batch size so the verifier's env pool sees the same batch width
+        it does during offline training.
+
+        THE ENCODED OBSERVATION IS KEPT TOO, when the backbone is frozen. Caching the raw
+        image windows would cost GBs; caching their features is ``outer_batch_size x
+        n_obs_steps x D`` floats -- 256 x 2 x 324 x 4 B = 663 kB -- and it removes the
+        ``inner_epochs`` re-encodes of every pool window, which on a frozen 34.2M-parameter
+        VAE is the dominant per-update cost once the search is amortized. It also PINS THE
+        CROP for the pool, which is the fix for the buffered-subgoal mis-registration: the
+        observation and the subgoals predicted from it now carry the same offset by
+        construction. Cost: a window is cropped the same way for all of its inner passes
+        instead of getting a fresh crop each time. See ``_can_cache_obs`` for why the freeze
+        is load-bearing.
+
+        WIDTH 1: there is no context to buffer -- ``generate_search_context`` would ask for
+        ``max_actions - 1 = 0`` candidates and return ``(None, None)``, which ``torch.cat``
+        cannot take -- so the search is skipped and the verifier pool is never spawned. The
+        obs encode still happens, so k=1 gets the cache like every other width.
+
+        This trainer buys nothing at k=1 (there is no search cost to amortize) and its pooled
+        ordering is strictly worse than full-dataset epochs. That is a deliberate trade: one
+        code path for every k, so the width-1 arm cannot drift from the k=16 arm in anything
+        but the width itself.
         """
-        # WIDTH 1: there is no context to buffer. generate_search_context asks
-        # search_candidates for max_actions - 1 = 0 candidates; its loop body never runs and
-        # it returns (None, None), which the torch.cat below cannot take. Return the None
-        # pair straight away -- the denoiser already treats a None context as the empty
-        # context, so k=1 trains here exactly as it would on the offline loop, just with the
-        # pooled sampling. Skipping the loop also means the verifier pool is never spawned.
-        #
-        # This trainer buys nothing at k=1 (there is no search cost to amortize) and its
-        # pooled ordering is strictly worse than full-dataset epochs. That is a deliberate
-        # trade: one code path for every k, so the width-1 arm cannot drift from the k=16
-        # arm in anything but the width itself.
-        if policy.max_actions == 1:
-            return None, None
+        cache = _can_cache_obs(policy)
+        feats = list()
         actions, values = list(), list()
+        want_context = policy.max_actions != 1
         was_training = policy.training
         policy.eval()
         try:
-            for start in tqdm.trange(0, len(pool), chunk_size, desc="context buffer",
-                    leave=False, mininterval=self.cfg.training.tqdm_interval_sec):
-                idxs = pool[start:start + chunk_size]
-                batch = collate([dataset[int(i)] for i in idxs])
-                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                chunk_actions, chunk_values = policy.generate_search_context(batch['obs'])
-                actions.append(chunk_actions)
-                values.append(chunk_values)
+            # train_crops(), not eval's centre crop: these features and these subgoals are
+            # what the inner updates will actually train on, so they must carry the crop a
+            # training step would have drawn. Dropout stays off -- that is the reason for
+            # eval() here and it is untouched.
+            with policy.train_crops() if cache else contextlib.nullcontext():
+                for start in tqdm.trange(0, len(pool), chunk_size, desc="context buffer",
+                        leave=False, mininterval=self.cfg.training.tqdm_interval_sec):
+                    idxs = pool[start:start + chunk_size]
+                    batch = collate([dataset[int(i)] for i in idxs])
+                    batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                    # Advance the crop step PER CHUNK. The offsets are a pure function of
+                    # (seed, step), so without this every chunk of the pool would draw the
+                    # identical 32 offsets and the pool would carry only chunk_size distinct
+                    # crops instead of outer_batch_size.
+                    if hasattr(policy, 'set_crop_step'):
+                        policy.set_crop_step(self.cfg.training.seed,
+                                             self.global_step + start)
+                    # One crop scope per chunk, so the obs encode and every subgoal generated
+                    # from it share an offset -- the same guarantee the offline trainer gets
+                    # for free by generating the context inside one forward pass.
+                    with policy._crop_scope():
+                        chunk_feats = policy._encode_obs_features(batch['obs'])
+                        if want_context:
+                            chunk_actions, chunk_values = policy.generate_search_context(
+                                batch['obs'], obs_features=chunk_feats)
+                            actions.append(chunk_actions)
+                            values.append(chunk_values)
+                    if cache:
+                        feats.append(chunk_feats.detach().cpu())
         finally:
             if was_training:
                 policy.train()
-        return torch.cat(actions, dim=0), torch.cat(values, dim=0)
+        obs_feats = torch.cat(feats, dim=0) if cache else None
+        if not want_context:
+            return None, None, obs_feats
+        return torch.cat(actions, dim=0), torch.cat(values, dim=0), obs_feats
 
     # ------------------------------------------------------------------ main loop
 
@@ -367,7 +438,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 pool_rng = np.random.default_rng([cfg.training.seed, self.epoch])
                 pool = pool_rng.choice(
                     len(dataset), size=outer_bs, replace=outer_bs > len(dataset))
-                buf_actions, buf_values = self._fill_context_buffer(
+                buf_actions, buf_values, buf_feats = self._fill_context_buffer(
                     policy, dataset, collate, pool, device, buffer_chunk)
 
                 # ======== inner: reuse that buffer for inner_epochs passes ============
@@ -394,14 +465,13 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         # would stay 0 and every update would see the SAME crop -- no
                         # augmentation at all.
                         #
-                        # Known gap, inherent to amortizing the search: _build_context_buffer
-                        # runs under policy.eval(), so the buffered subgoal images are
-                        # CENTER-cropped, while the obs re-encoded here is randomly cropped.
-                        # The offline trainer shares one offset between the two because it
-                        # generates the context inside the same forward pass; a buffer reused
-                        # across many updates cannot. Fold into the P1-2 decision (that path
-                        # also generates its context in eval mode).
-                        if hasattr(policy, 'set_crop_step'):
+                        # Only meaningful when the obs is re-encoded here, i.e. when the
+                        # pool's features were NOT cached. With the cache the crop is
+                        # whatever the buffer fill drew, which is the point: the observation
+                        # and the subgoals predicted from it then share one offset, instead
+                        # of the buffer holding centre-cropped subgoals against a randomly
+                        # cropped obs.
+                        if buf_feats is None and hasattr(policy, 'set_crop_step'):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
                         # beside set_crop_step so the crop offset and the
                         # slot-weight curriculum share one notion of 'now'
@@ -411,6 +481,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             batch,
                             actions=None if buf_actions is None else buf_actions[sel_t],
                             values=None if buf_values is None else buf_values[sel_t],
+                            obs_features=(None if buf_feats is None
+                                          else buf_feats[sel_t.cpu()].to(device)),
                             return_aux=want_aux)
                         raw_loss, aux = result if want_aux else (result, None)
 

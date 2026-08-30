@@ -6,10 +6,11 @@ three things differ, so the maze path is left untouched:
 
 1. Verifier -- builds a feedback-based ``PushTVerifier`` instead of the maze-only
    ``MazeVerifier`` (see ``_build_verifier``).
-2. Obs handling -- some runner paths add an ``attention_mask`` to the obs dict. It is in
-   neither ``shape_meta`` nor the normalizer, so it is popped before encode/normalize --
-   on a *copy*, leaving the caller's obs dict intact. (The block pose the verifier needs
-   is reconstructed from the declared ``feedback`` key, so no reset carrier rides along.)
+2. Obs handling -- the obs dict is WIDER than ``shape_meta``. ``agent_pos`` and
+   ``feedback`` ride in it for the verifier (which resets a sim from them), and some
+   workspace paths add an ``attention_mask``; none is a policy input. ``_encode_obs_features``
+   keeps only the keys the encoder declares, on a *copy*, leaving the caller's dict intact.
+   The block pose the verifier needs is reconstructed from ``feedback``.
 3. Search context (``search_context``) -- what feedback each already-generated candidate
    contributes to the context the next candidate is conditioned on:
 
@@ -51,9 +52,6 @@ from diffusion_policy.env.pusht.pusht_verifier import (
     T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE)
 from diffusion_policy.env.pusht.feedback_util import GOAL_KEYPOINTS, N_KEYPOINTS
 
-# obs keys that ride in the obs dict but must never reach the encoder/normalizer
-_NON_ENCODED_OBS_KEYS = ('attention_mask',)
-
 # obs keys the verifier reads to reset the sim: agent_pos plus feedback, from which the
 # block pose is reconstructed exactly (pusht_verifier.block_pose_from_feedback).
 _VERIFIER_OBS_KEYS = ('agent_pos', 'feedback')
@@ -85,6 +83,42 @@ class PushTSearchMixin:
     # over all n candidates does not exist at the time a causal context is built.
     consumes_search_context = True
 
+    def __init__(self, *args, **kwargs):
+        """Build the host policy, then check its observation contract.
+
+        A plain pass-through, present only so the check below runs for every PushT arm --
+        ST k=1/k=16, UNet BC and Gaussian -- from one place. PushTSearchMixin is FIRST in
+        all three MROs, so this runs before control returns to the caller in every case.
+        """
+        super().__init__(*args, **kwargs)
+        self._check_obs_contract()
+
+    def _check_obs_contract(self):
+        """The policy observation is IMAGE ONLY, and this is what enforces it.
+
+        `agent_pos` and `feedback` ride in the obs dict for the verifier -- it resets a
+        pymunk sim from them (_VERIFIER_OBS_KEYS) and _normalize_value rescales the context
+        scalar by the fitted `feedback` scale -- but they must never reach the encoder.
+        `feedback` is an exact invertible transform of the block pose, so encoding it hands
+        the policy the ground-truth T pose in closed form, and it defeats the per-slot
+        corruption ladder outright: slot 0 would still know its own position and the
+        goal-relative error exactly, which is the one thing the ladder exists to take away.
+
+        Checked here rather than trusted to the task config so that a hydra override
+        (`+task.shape_meta.obs.agent_pos...`) fails at startup instead of quietly training a
+        different model. See pusht_image_dataset.POLICY_OBS_KEYS.
+        """
+        encoder = getattr(self, 'obs_encoder', None)
+        low_dim = list(getattr(encoder, 'low_dim_keys', None) or [])
+        if low_dim:
+            raise ValueError(
+                f'{type(self).__name__}: shape_meta declares low_dim observation key(s) '
+                f'{sorted(low_dim)}, but the PushT policy observation is image only. '
+                f'agent_pos and feedback are emitted by the dataset for the VERIFIER and '
+                f'must not be encoded -- feedback is an exact transform of the block pose, '
+                f'so encoding it hands the policy the ground-truth T pose. Remove them from '
+                f'task.shape_meta.obs (see config/task/pusht_image_search_imgonly.yaml).')
+
     def _check_cross_candidate_value(self, mode):
         """A cross-candidate value cannot coexist with a consumed search context.
 
@@ -108,11 +142,11 @@ class PushTSearchMixin:
                 f'context first.')
 
     def _fuses_scores(self) -> bool:
-        return self._verifier_value_mode(self.kwargs) in CROSS_CANDIDATE_VALUES
+        return self._verifier_value_mode(self.search_kwargs) in CROSS_CANDIDATE_VALUES
 
     def _fuse_scores(self, scores, terms):
         """Re-rank the whole candidate set under a cross-candidate value. (B,n),(B,n,K)->(B,n)."""
-        mode = self._verifier_value_mode(self.kwargs)
+        mode = self._verifier_value_mode(self.search_kwargs)
         # re-checked here, not only at construction: eval_search_pusht.py's
         # --verifier-value override swaps the value on an ALREADY-BUILT policy.
         self._check_cross_candidate_value(mode)
@@ -221,7 +255,7 @@ class PushTSearchMixin:
         feedback = state[..., agent_dim:]              # (B, 2*N_KEYPOINTS), raw pixels
         scale = self.normalizer['feedback'].params_dict['scale'].to(feedback)
 
-        base = base_value_fn(self._verifier_value_mode(self.kwargs))
+        base = base_value_fn(self._verifier_value_mode(self.search_kwargs))
         # 'd_t_goal' shares this branch DELIBERATELY. It is t_goal divided by a positive
         # constant, so it ranks identically; giving the context copy a different scale would
         # make a d_t_goal run incomparable to the t_goal arms it exists to sit beside, for no
@@ -260,23 +294,29 @@ class PushTSearchMixin:
     def _encode_subgoal(self, image: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         """Encode the reached observation -> (B, obs_feature_dim).
 
-        Goes through the SAME normalize -> _encode_obs path as the observation
-        conditioning (and as OnlineSearchPolicy's context tokens), so the subgoal
-        embedding lands in the same feature space as the obs tokens the search is already
-        conditioned on, reuses the fitted normalizer and obs encoder, and adds no
-        parameters. MultiImageObsEncoder.forward requires every shape_meta obs key, which
-        is exactly what the rollout returns: the rendered frame plus the two low_dim keys.
+        Goes through the SAME normalize -> _encode_obs path as the observation conditioning
+        (and as OnlineSearchPolicy's context tokens), so the subgoal embedding lands in the
+        same feature space as the obs tokens the search is already conditioned on, reuses the
+        fitted normalizer and obs encoder, and adds no parameters.
+
+        IMAGE ONLY, matching the observation. This used to also build `agent_pos` and
+        `feedback` out of `state`, back when they were in shape_meta; since the observation
+        became image-only they were dead weight -- MultiImageObsEncoder enumerates its own
+        key lists, so it ignored them silently and the embedding was 324-d either way. The
+        policy asserts no low_dim obs key at construction (`_check_obs_contract`), so `image`
+        is the whole of it. `state` is still taken because the caller has it and the raw pose
+        is what the verifier scored; it is deliberately NOT encoded -- feeding it to the model
+        would hand back in closed form exactly the block pose the image-only observation
+        exists to withhold.
+
+        The subgoal shares the observation's crop: `_crop_scope` is open for the whole
+        decision, so the offsets drawn for the obs are reused here. That is the point of the
+        scope -- an unregistered subgoal is a subgoal of a different scene.
 
         The subgoal is a single step, so it is given a length-1 time axis for _encode_obs
         (which is shaped (B, T, ...) like online's) and squeezed back afterwards.
         """
-        agent_dim = PushTVerifier.AGENT_DIM
-        subgoal_obs = {
-            'image': image,                      # (B, 3, 96, 96) in [0, 1]
-            'agent_pos': state[..., :agent_dim],
-            'feedback': state[..., agent_dim:],
-        }
-        nobs = self.normalizer.normalize(subgoal_obs)
+        nobs = self.normalizer.normalize({'image': image})  # (B, 3, 96, 96) in [0, 1]
         nobs = dict_apply(nobs, lambda x: x.unsqueeze(1))   # (B, 1, ...)
         return self._encode_obs(nobs)[:, 0]                 # (B, obs_feature_dim)
 
@@ -289,7 +329,7 @@ class PushTSearchMixin:
         ``want_subgoals`` forces the render even in modes that would not otherwise need
         it, so a `value`-mode run can still log subgoal panels comparable to the others.
         """
-        mode = self._search_context_mode(self.kwargs)
+        mode = self._search_context_mode(self.search_kwargs)
         render = want_subgoals or mode in _RENDER_CONTEXTS
         # simulate the EXECUTED chunk from the CURRENT state (see _verifier_inputs);
         # neither is the default the verifier would pick on its own.
@@ -325,14 +365,28 @@ class PushTSearchMixin:
         return context, value, subgoal, terms
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
-        # Filtering happens here rather than in encode_obs_cond because the search loop
-        # calls _encode_obs_features directly (to encode once and reuse across
-        # candidates); encode_obs_cond just adds corruption on top of this.
-        #
-        # Pop the mask key on a shallow copy so the caller's obs_dict is left intact
-        # (verifier.get_value reads the same dict).
-        clean = {k: v for k, v in obs_dict.items()
-                 if k not in _NON_ENCODED_OBS_KEYS}
+        """Encode only the keys shape_meta declares.
+
+        The obs dict is deliberately wider than shape_meta: `agent_pos` and `feedback` are
+        in it for the verifier (which resets a sim from them off this same dict), and some
+        workspace paths add an `attention_mask` alongside. Neither is in shape_meta or the
+        normalizer, so both must be dropped before normalize/encode.
+
+        Keyed on the ENCODER'S OWN key lists rather than on a hardcoded name tuple, which is
+        what the previous `_NON_ENCODED_OBS_KEYS = ('attention_mask',)` was: a list that had
+        to be extended by hand every time the obs dict grew a carrier key, and that said
+        nothing about agent_pos/feedback because those used to be in shape_meta. Both lists
+        are built from shape_meta in MultiImageObsEncoder.__init__, so this cannot drift
+        from what the encoder will actually read.
+
+        Filtered here rather than in encode_obs_cond because the search loop calls
+        _encode_obs_features directly (to encode once and reuse across candidates);
+        encode_obs_cond only adds corruption on top. A shallow copy, so the caller's dict --
+        which verifier.get_value reads -- is left intact.
+        """
+        encoder = self.obs_encoder
+        declared = tuple(encoder.rgb_keys) + tuple(encoder.low_dim_keys)
+        clean = {k: obs_dict[k] for k in declared}
         return super()._encode_obs_features(clean)
 
     def close(self):

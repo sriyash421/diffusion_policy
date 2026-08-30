@@ -1,29 +1,38 @@
+# THE PushT search task. The only one -- `pusht_image_search.yaml` was deleted on
+# 2026-08-29 and this file absorbed its `env_runner` / `dataset` blocks, which were
+# duplicated between the two verbatim (~90 lines, stale comments included) so that a change
+# to one silently missed the other.
+#
+# IMAGE-ONLY OBSERVATION, AND THIS IS STRUCTURAL. `agent_pos` and `feedback` are not in
+# shape_meta and there is no configuration that puts them back: the policy asserts at
+# construction that shape_meta.obs declares no low_dim key (see PushTSearchMixin), so a
+# hydra override that re-adds one fails at startup rather than training a different model.
+#
+# WHY. `feedback` is an exact invertible transform of the block pose, so with those two keys
+# in the observation the policy is handed the ground-truth T pose in closed form instead of
+# extracting it from pixels -- a strictly stronger observation than the standard PushT-image
+# setup, and one that makes success rates non-comparable to published image baselines. It
+# also makes the per-slot corruption ladder (policy.slot_obs_noise) unable to bite: those 18
+# dims arrive LinearNormalizer-scaled while the image half is a VAE latent, so they would be
+# corrupted at a wholly different SNR, and slot 0 -- the slot the ladder exists to make
+# uncertain -- would still know its own position and the goal-relative error exactly.
+#
+# THE DATASET STILL EMITS BOTH, and the normalizer still fits `feedback`. That is not an
+# oversight: PushTVerifier resets a pymunk sim from [agent_pos, feedback] read off the RAW
+# obs dict (pusht_search_mixin._VERIFIER_OBS_KEYS), and PushTSearchMixin._normalize_value
+# rescales the verifier's context scalar by the fitted `feedback` scale. Neither goes
+# through shape_meta, so neither is affected by their absence here.
+#
+# task_name is a hydra.run.dir component, so runs from here land under
+# .../pusht_image_search_imgonly/ and the with-pos runs under .../pusht_image_search/ stay
+# exactly where the reporting scripts expect to find them.
 name: pusht_image_search_imgonly
 
-# IMAGE-ONLY OBSERVATION. Identical to pusht_image_search except that `agent_pos` and
-# `feedback` are out of shape_meta, so obs_feature_dim is 512 (pure ResNet) rather than 530.
-#
-# WHY, and it is not a cleanup: this task exists for the per-slot corruption ladder
-# (policy.slot_obs_noise). With agent_pos and feedback in the observation they arrive
-# NORMALIZED and would be corrupted at a wholly different SNR from the unnormalized ResNet
-# block -- and, worse, the ladder could not bite at all, because slot 0 would still know its
-# own position and the goal-relative error exactly. Those 18 dims are most of the
-# task-relevant state; leaving them clean makes "slot 0 is uncertain" false.
-#
-# A SEPARATE FILE, not an edit to pusht_image_search: this changes the policy's input, so
-# runs against the two are not comparable and must not share a task name.
-#
-# The dataset still EMITS agent_pos and feedback and the normalizer still fits them; keys
-# absent from shape_meta are simply not picked up by MultiImageObsEncoder, which builds its
-# key lists from shape_meta. The verifier (pusht_verifier.py) and env runner
-# (pusht_search_image_runner.py) read feedback off the raw env obs, not the encoded vector,
-# so both are unaffected.
 image_shape: &image_shape [3, 96, 96]
-shape_meta: &shape_meta
+shape_meta:
   # acceptable types: rgb, low_dim
-  # block_pos is emitted by the dataset (reset-only) but deliberately kept out of
-  # shape_meta so the encoder never sees it. agent_pos and feedback are ALSO withheld here
-  # -- see the header.
+  # IMAGE ONLY -- see the header. block_pos, agent_pos and feedback are all emitted by the
+  # dataset and all deliberately absent here, so the encoder never sees any of them.
   obs:
     image:
       shape: *image_shape
@@ -65,9 +74,12 @@ dataset:
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42
   # ---------------------------------------------------------------------------
-  # THE SPLIT MANIFEST IS THE SOURCE OF TRUTH. It names the exact episode indices;
-  # the four count keys below are VALIDATED against it and generate nothing. A config
-  # that disagrees with the manifest raises rather than silently repartitioning.
+  # THE SPLIT MANIFEST IS THE SOURCE OF TRUTH, and since 2026-08-29 it is the ONLY way to
+  # partition the data -- PushTImageDataset raises without a split_file, and the
+  # derive-from-seed branch (whose n_val_episodes==0 path ran validation on the TEST set)
+  # is gone. It names the exact episode indices; the count keys below are VALIDATED against
+  # it and generate nothing. A config that disagrees with the manifest raises rather than
+  # silently repartitioning.
   #
   # This exists because the splits used to be derived at runtime, independently, in the
   # dataset, the env runner and the eval script, from (seed, n_test, n_val, n_train,
@@ -75,6 +87,10 @@ dataset:
   # when n_val_episodes went 10 -> 30 to fix the checkpoint selector, train_ratio: 0.2 of
   # a shrinking pool silently cut the training budget from 29 episodes to 25, and every
   # result collected in between was on a different dataset than the one before it.
+  #
+  # BC UNet, ST k=1, ST k=16 and every ladder arm read this one block -- none of them
+  # overrides task.dataset -- so all of them train, validate and roll out on 50 test /
+  # 30 val / 30 train, the same episodes.
   #
   # Regenerate with:  python scripts/dump_pusht_splits.py
   # Check it still matches the derivation / the zarr:  --verify / --check-zarr
@@ -97,7 +113,3 @@ dataset:
   # 25-episode set is a strict subset of the 100-episode one (verified in bc_prep.sbatch).
   n_train_episodes: ${n_demos}
   split: train
-  # both must stay null with a split_file: they would re-subsample what the manifest
-  # already pinned, and the dataset raises rather than apply one on top of the other.
-  max_train_episodes: null
-  train_ratio: null

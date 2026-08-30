@@ -2,7 +2,7 @@
 #
 # Every arm before this one selects the executed action with `argmax_k verifier_value_k`.
 # That makes each reported success rate a best-of-N over a ground-truth simulator, and it
-# is why AUDIT.md 2 records n=1 at 0-2% everywhere: the oracle argmax, not the model, is
+# is why the 2026-08 results tables record n=1 at 0-2% everywhere: the oracle argmax, not the model, is
 # doing the work. Nothing so far can tell whether the model has learned to READ the search
 # context or is merely being rescued by that argmax.
 #
@@ -52,7 +52,7 @@ slot_weight_decay: 0.9
 
 # This arm has no existing directory to resume, so it takes the post-rename naming now
 # while every other arm is still on the ctx-* form. Delete this override when the base
-# config's run_name is flipped -- see AUDIT.md 9.9.
+# config's run_name is flipped -- see the 2026-08-05 run-directory rename.
 
 # Budget and cadence are INHERITED now: the base sets max_gradient_steps 100000,
 # checkpoint_every 10000 and rollout_every_steps 20000. This file used to re-state the 100k

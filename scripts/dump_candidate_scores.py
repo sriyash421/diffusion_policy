@@ -218,9 +218,14 @@ def rollout_candidate_scores(env, policy, states, device, n, max_steps):
                     return_terms=True)          # (B,n,H,Da), ctx, (B,n), (B,n,2)|None
                 best = scores.argmax(dim=1)                          # (B,)
                 if final_pass:
-                    keep = policy.max_actions - 1
+                    # Same bound predict_action_best uses. `keep` may be 0 (the ST k=1 arm,
+                    # or a policy that consumes no context at all) and `x[:, -0:]` is the
+                    # WHOLE tensor, so the empty case must pass None rather than a slice.
+                    keep = min(n, policy.context_capacity)
                     final = policy.predict_action(
-                        obs_dict, actions=actions[:, -keep:], values=values[:, -keep:],
+                        obs_dict,
+                        actions=actions[:, -keep:] if keep else None,
+                        values=values[:, -keep:] if keep else None,
                         obs_features=obs_features)['action_pred']    # (B, H, Da)
                     # SIMULATED FOR LOGGING ONLY. The deployed policy never scores this --
                     # one extra verifier rollout per control step buys the ability to place
@@ -392,15 +397,15 @@ def collect(checkpoint, arm, out_dir, device, n, episodes, split, max_steps, see
     # never be silently mixed.
     native_value = resolved_verifier_value(policy, cfg)
     if verifier_value is not None:
-        search_kwargs = getattr(policy, '_search_kwargs', None)   # UNet BC arm
-        target = search_kwargs if search_kwargs is not None else policy.kwargs
-        target['verifier_value'] = verifier_value
+        policy.search_kwargs['verifier_value'] = verifier_value
         # The transformer arms build the verifier in __init__, so theirs must be swapped in
         # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
         # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
         # property here, which would force that fork now.
-        built = (policy.__dict__.get('_verifier') if search_kwargs is not None
-                 else getattr(policy, 'verifier', None))
+        # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
+        # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
+        # would fork its 32-process sim pool just to check whether it exists.
+        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
             built.value_fn = verifier_value
     if seed is None:

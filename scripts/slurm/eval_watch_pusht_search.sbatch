@@ -28,7 +28,13 @@ shift
 # which kills the job under `set -u` if sbatch was run from an active robodiff shell
 set +u
 source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
-conda activate robodiff
+# The environment. `vae_pushT_l2s` (conda_environment_vae_pusht.yaml), NOT `robodiff`:
+# robodiff cannot import AutoencoderKL at all -- it has diffusers 0.36 against accelerate
+# 0.13.2 -- so every SD-VAE arm dies at startup there with 0 steps. Both envs carry the same
+# diffusers, so the DDIM/DDPM sampling is unchanged and ResNet-era checkpoints evaluate
+# identically under either. Override DP_CONDA_ENV to pin a different one.
+DP_CONDA_ENV="${DP_CONDA_ENV:-vae_pushT_l2s}"
+conda activate "$DP_CONDA_ENV"
 set -u
 cd /mmfs1/home/harine/diffusion_policy_standalone
 

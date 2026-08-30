@@ -29,7 +29,8 @@ from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.json_logger import JsonLogger
-from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
+from diffusion_policy.common.pytorch_util import (
+    dict_apply, optimizer_to, trainable_parameters)
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 from diffusion_policy.common.sampler import get_collate_fn
@@ -128,6 +129,66 @@ def _check_arm_label(cfg):
             f'the results under the wrong ablation.')
 
 
+def _check_obs_noise_labels(cfg):
+    """Fail fast if the obs-corruption LABELS disagree with the obs-corruption CONFIG.
+
+    Four surfaces name the same fact and none can be derived from the others in yaml:
+
+      policy.slot_obs_noise / corrupt_obs   the actual corruption
+      son_suffix / corrupt_suffix           run-directory fragments, so two corruption
+                                            settings cannot share a directory
+      son_tag / obs_noise_tag               wandb tags, so a corrupted run is filterable
+
+    Hydra has no conditionals, so the labels are set by hand -- which means they can be
+    forgotten, and a forgotten son_suffix is not cosmetic: run_name IS hydra.run.dir and
+    `training.resume: True` would have two different ladders resume each other. This turns
+    that into a startup error.
+
+    Only checked when the config declares the keys; the maze and pre-ladder configs do not.
+    """
+    if cfg.get('son_suffix', None) is None and cfg.get('son_tag', None) is None:
+        return
+    mode = str(((cfg.get('policy', None) or {}).get('slot_obs_noise', None)
+                or {}).get('mode', 'uniform') or 'uniform')
+    on = mode != 'uniform'
+    suffix = str(cfg.get('son_suffix', '') or '')
+    tag = str(cfg.get('son_tag', 'uniform') or 'uniform')
+    noise_tag = str(cfg.get('obs_noise_tag', 'clean') or 'clean')
+    if on and not suffix:
+        raise ValueError(
+            f'slot_obs_noise.mode={mode!r} but son_suffix is empty. run_name is '
+            f'hydra.run.dir, so this ladder would share a directory with the uncorrupted '
+            f'arm and `training.resume` would have them resume each other. Set son_suffix '
+            f"(e.g. '_son-linsig').")
+    if not on and suffix:
+        raise ValueError(
+            f'son_suffix={suffix!r} but slot_obs_noise.mode is uniform -- the directory '
+            f'would claim a ladder the run does not have.')
+    if on != (tag != 'uniform'):
+        raise ValueError(
+            f'son_tag={tag!r} does not agree with slot_obs_noise.mode={mode!r}. The wandb '
+            f'tag is how these runs are found; set son_tag to the mode (with its shape or '
+            f"decay), or to 'uniform' when the ladder is off.")
+    if on != (noise_tag == 'obs_noised'):
+        raise ValueError(
+            f'obs_noise_tag={noise_tag!r} does not agree with slot_obs_noise.mode='
+            f"{mode!r}. Use 'obs_noised' when the ladder is on and 'clean' when it is off.")
+
+    # The FLAT corruption arm has the same shape of hazard, and it bit for real:
+    # train_pusht_diffusion_search_subgoal_only_corrupt set corrupt_obs: True and no
+    # corrupt_suffix, so from the day the bare `corrupt-${corrupt_obs}` left run_name it
+    # resolved to the same hydra.run.dir as the CLEAN subgoal-only arm.
+    if cfg.get('corrupt_suffix', None) is not None:
+        flat = bool(cfg.get('corrupt_obs', False))
+        csuf = str(cfg.get('corrupt_suffix', '') or '')
+        if flat != bool(csuf):
+            raise ValueError(
+                f'corrupt_obs={flat} but corrupt_suffix={csuf!r}. run_name is hydra.run.dir '
+                f"and `training.resume: True` finds latest.ckpt there, so the corrupted and "
+                f"clean arms would resume each other. Set corrupt_suffix='_corrupt' when "
+                f'corrupt_obs is True, and leave it empty when it is False.')
+
+
 def _is_search_policy(policy) -> bool:
     """Whether this policy exposes the best-of-n search interface.
 
@@ -169,6 +230,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
         _check_arm_label(cfg)
+        _check_obs_noise_labels(cfg)
         check_verifier_value(cfg)
 
         # set seed
@@ -190,8 +252,12 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             self.ema_model = clone_policy(self.model)
 
         # configure training state
+        # Frozen parameters are excluded, not merely skipped by AdamW: the SD VAE obs
+        # backbone is 34.2M frozen parameters and there is no reason for them to sit in the
+        # optimizer's state_dict or under its weight_decay.
         self.optimizer = hydra.utils.instantiate(
-            cfg.optimizer, params=self.model.parameters())
+            cfg.optimizer,
+            params=trainable_parameters(self.model, type(self).__name__))
 
         # configure training state
         self.global_step = 0
@@ -299,11 +365,15 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 vals_best.append(scores.max(dim=1).values)                   # B
                 vals_first.append(scores[:, 0])                              # B
                 if final_pass:
-                    # exactly what predict_action_best deploys, plus one sim to score it
-                    keep = policy.max_actions - 1
+                    # exactly what predict_action_best deploys, plus one sim to score it --
+                    # same `context_capacity` bound, so the two cannot drift apart. keep may
+                    # be 0 (the ST k=1 arm), and `x[:, -0:]` is the WHOLE tensor, so the
+                    # empty case must pass None rather than a slice.
+                    keep = policy.context_capacity
                     final = policy.predict_action(
-                        obs_dict, actions=pred_action[:, -keep:],
-                        values=values[:, -keep:])['action_pred']             # B, H, Da
+                        obs_dict,
+                        actions=pred_action[:, -keep:] if keep else None,
+                        values=values[:, -keep:] if keep else None)['action_pred']  # B,H,Da
                     nfinal = action_normalizer.normalize(final[:, sl])       # B, Ta, Da
                     finals.append(
                         (nfinal - ngt[:, 0]).pow(2).mean(dim=(-1, -2)).sqrt())
@@ -520,7 +590,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     break
                 step_log = dict()
                 # ========= train for this epoch ==========
-                if cfg.training.freeze_encoder:
+                # `.get`, because the PushT configs no longer declare the key: their obs
+                # backbone (SDVAEEncoder) freezes itself unconditionally. Kept for the maze,
+                # procgen and in-context configs that still set it.
+                if cfg.training.get('freeze_encoder', False):
                     self.accelerator.unwrap_model(self.model).obs_encoder.eval()
                     self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
 
@@ -772,10 +845,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             if getattr(eval_policy, 'selection', 'argmax') == 'final_pass':
                                 # the sample this arm deploys is none of the candidates
                                 # above -- draw it and log it alongside them
-                                keep = eval_policy.max_actions - 1
+                                keep = eval_policy.context_capacity
                                 final = eval_policy.predict_action(
-                                    obs_dict, actions=all_action[:, -keep:],
-                                    values=values[:, -keep:])['action_pred']
+                                    obs_dict,
+                                    actions=all_action[:, -keep:] if keep else None,
+                                    values=values[:, -keep:] if keep else None)['action_pred']
                                 fscore = eval_policy._score_candidates(
                                     eval_policy.verifier, obs_dict, final)[1]
                                 step_log['train_action_mse_error_final'] = (

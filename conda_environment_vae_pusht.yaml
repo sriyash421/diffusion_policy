@@ -1,0 +1,93 @@
+# The PushT SD-VAE environment. Build this, not `robodiff`, for anything on the VAE obs
+# backbone -- which since 2026-08-28 is every PushT search and BC arm.
+#
+# WHY A SECOND ENVIRONMENT. `robodiff` cannot construct SDVAEEncoder at all:
+#
+#     from diffusers import AutoencoderKL
+#     ImportError: cannot import name 'CustomDtype' from 'accelerate.utils'
+#
+# It has diffusers 0.36.0 installed against accelerate 0.13.2. Those are two years apart --
+# `conda_environment.yaml` still declares diffusers 0.11.1, so the installed env drifted from
+# the file and the pair stopped being consistent. AutoencoderKL is the first thing in this
+# repo that reaches the part of diffusers that notices.
+#
+# The fix is accelerate, not diffusers: the DDIM and DDPM schedulers every arm samples with
+# also come from diffusers, so downgrading it would move the sampling numerics under runs
+# that are meant to be comparable. accelerate is only ever used through
+# prepare/backward/clip_grad_norm_/unwrap_model/device/is_main_process/end_training/trackers,
+# all of which are unchanged across the bump.
+#
+#   conda env create -f conda_environment_vae_pusht.yaml
+#   conda activate vae_pushT_l2s
+#
+# `robodiff` is left exactly as it is, for the ResNet-era checkpoints.
+name: vae_pushT_l2s
+channels:
+  - pytorch
+  - pytorch3d
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip=22.2.2
+  - pytorch3d=0.7.0
+  - numpy=1.23.3
+  - numba==0.56.4
+  - scipy==1.9.1
+  - py-opencv=4.6.0
+  - cffi=1.15.1
+  - ipykernel=6.16
+  - matplotlib=3.6.1
+  - zarr=2.12.0
+  - numcodecs=0.10.2
+  - h5py=3.7.0
+  - hydra-core=1.2.0
+  - einops=0.4.1
+  - tqdm=4.64.1
+  - dill=0.3.5.1
+  - scikit-video=1.1.11
+  - scikit-image=0.19.3
+  - gym=0.21.0
+  - pymunk=6.2.1
+  - wandb=0.13.3
+  - threadpoolctl=3.1.0
+  - shapely=1.8.4
+  - cython=0.29.32
+  - imageio=2.22.0
+  - imageio-ffmpeg=0.4.7
+  - termcolor=2.0.1
+  - tensorboard=2.10.1
+  - tensorboardx=2.5.1
+  - psutil=5.9.2
+  - click=8.0.4
+  - boto3=1.24.96
+  - datasets=2.6.1
+  - av=10.0.0
+  - cmake=3.24.3
+  # trick to avoid cpu affinity issue described in https://github.com/pytorch/pytorch/issues/99625
+  - llvm-openmp=14
+  # trick to force reinstall imagecodecs via pip
+  - imagecodecs==2022.8.8
+  - pip:
+    # Install with: pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+    - torch==2.4.0
+    - torchvision==0.19.0
+    - ray[default,tune]==2.2.0
+    # requires mujoco py dependencies libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf
+    - free-mujoco-py==2.1.6
+    - pygame==2.1.2
+    - pybullet-svl==3.1.6.4
+    - robomimic==0.2.0
+    - pytorchvideo==0.1.5
+    # ---- the three that differ from conda_environment.yaml, and they move together ----
+    # AutoencoderKL (SDVAEEncoder) plus the DDIM/DDPM schedulers.
+    - diffusers==0.36.0
+    # >=0.26 for `CustomDtype`, which diffusers 0.36 imports. Last version that still
+    # supports torch 2.4 without pulling a newer CUDA stack.
+    - accelerate==0.34.2
+    # GPT2Model, for `cond_encoder: gpt2` on the PushT search transformer (and for
+    # search_policy / online_search_policy, which import it at module scope). No longer
+    # capped below 4.30: that cap existed only because accelerate was pinned at 0.13.2.
+    - transformers==4.46.3
+    # pip package required for jpeg-xl
+    - imagecodecs==2022.9.26

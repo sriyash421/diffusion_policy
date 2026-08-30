@@ -6,7 +6,7 @@
 # unreported because it was not in the list. A run that exists on disk should appear here
 # whether or not this script knew about it in advance.
 #
-# `ctx-*` entries are skipped: after the 2026-08-05 rename (AUDIT.md 9.9) those are
+# `ctx-*` entries are skipped: after the 2026-08-05 rename (the 2026-08-05 run-directory rename) those are
 # back-symlinks to the arm-labelled directories, so counting them would double every run.
 set -uo pipefail
 ROOT=/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline

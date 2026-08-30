@@ -73,7 +73,10 @@ class OnlineSearchPolicy(ObsCorruptionMixin, SearchProcedureMixin, BaseImagePoli
         self.max_rollout_steps = max_rollout_steps
         self.use_async_envs = use_async_envs
         self._vec_env = None  # lazily built, only when n_trajs > 0
-        self.kwargs = kwargs
+        # `search_kwargs`, not `kwargs`: DiffusionUnetImagePolicy already owns `kwargs` for
+        # its scheduler.step() keyword arguments, and PushTUNetSearchPolicy inherits both.
+        # One unambiguous name means that class needs no aliases and no overrides.
+        self.search_kwargs = kwargs
 
         # legacy flags kept for config compatibility (default off)
         self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))

@@ -10,7 +10,10 @@
 # `n_candidates=1` is the whole of the k=1 arm. The Gaussian and UNet arms still re-pin.
 defaults:
   - _self_
-  - task: pusht_image_search
+  # The ONLY PushT search task, and it is image-only by construction -- agent_pos and
+  # feedback are not in its shape_meta and the policy asserts that no low_dim obs key
+  # is declared, so no override can put them back. See the file header for why.
+  - task: pusht_image_search_imgonly
 
 name: pusht_base
 output_dir: null
@@ -28,11 +31,106 @@ shape_meta: ${task.shape_meta}
 # The ablation configs override `search_context` / `corrupt_obs` at THIS level; the policy
 # block interpolates from here so the two can never disagree.
 # ---------------------------------------------------------------------------
-# WHICH VISION BACKBONE, as a wandb tag. Defaults to the ResNet every arm used before
-# 2026-08-28; train_pusht_diffusion_search overrides it to `vae`. It exists so runs from
-# either era are filterable in one wandb project, which matters because the encoder swap is
-# not visible anywhere else in a run's metadata.
-encoder_tag: resnet18
+# WHICH VISION BACKBONE. `vae` -- the frozen SD VAE encoder -- for every PushT arm since
+# 2026-08-28; `resnet18` names the era before it. Declared HERE rather than in the search
+# master because the UNet BC arm is on the same backbone: the ST-vs-BC comparison is meant
+# to vary the algorithm, not the observation.
+encoder_tag: vae
+
+# The encoder as a run-DIRECTORY component, and NEVER EMPTY. Without it a VAE run and a
+# pre-swap ResNet run at the same arm/k/verifier/demos/seed resolve to the same run_name,
+# hence the same hydra.run.dir, and `training.resume: True` has the new run continue the old
+# one's checkpoints under a different architecture (the 2026-08-05 run-directory rename). Every run on disk predates
+# this axis and owns the empty spelling, so it is the new default that has to carry a
+# suffix -- the opposite of the sw_suffix/son_suffix rule, deliberately. Interpolated from
+# encoder_tag so the two cannot disagree.
+enc_suffix: _enc-${encoder_tag}
+
+# ---------------------------------------------------------------------------
+# THE OBSERVATION ENCODER, defined ONCE for every PushT arm.
+#
+# Both masters interpolate this block into `policy.obs_encoder`. It is here, not copied into
+# each of them, because the ST-vs-BC comparison is only meaningful if the two see the SAME
+# observation: same backbone, same crop, same normalization. Two copies of these nine keys is
+# how they came to differ in three of them (ResNet18 vs SD VAE, 76 vs 72, group norm on vs
+# off) while the results tables read as if only the algorithm varied.
+#
+# `crop_shape` is separate because the POLICY also declares it -- the policy chooses the
+# offsets and hands them to the encoder, so the two must agree, and interpolating both from
+# one key is what makes that structural.
+crop_shape: [72, 72]
+
+obs_encoder:
+  _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+  shape_meta: ${shape_meta}
+  # THE STABLE DIFFUSION VAE ENCODER, FROZEN. 34.2M params emitting a flattened 4x9x9 = 324-d
+  # latent at the 72x72 crop, in place of the ResNet18's 512-d post-ReLU avgpool output.
+  #
+  # Why: slot_obs_noise corrupts the encoded observation with a DDPM forward marginal, which
+  # on ResNet activations is an operator borrowed out of context and on a VAE latent is the
+  # space diffusion models are trained to operate in. That argument holds only while the
+  # encoder still produces SD latents, which is why SDVAEEncoder freezes itself and overrides
+  # train() to stay in eval -- see the note there.
+  #
+  # Measured on PushT frames before adopting it: 29.6 dB reconstruction PSNR at 72x72
+  # (31.7 dB at the full 96x96), and the 0.18215 scale puts the latent at mean 0.48 /
+  # std 1.00 -- so the SD VAE does transfer to 96x96 synthetic images despite being trained
+  # on 512x512 natural ones. scripts/decode_obs_latents.py renders that round trip, and the
+  # corrupted latents beside it.
+  #
+  # To go back to the ResNet for an arm, override at THIS level -- `policy.obs_encoder` is
+  # an interpolation of this block, so hydra cannot reach inside it:
+  #   obs_encoder.rgb_model._target_=diffusion_policy.model.vision.model_getter.get_resnet \
+  #   +obs_encoder.rgb_model.name=resnet18 +obs_encoder.rgb_model.weights=IMAGENET1K_V1 \
+  #   '~obs_encoder.rgb_model.model_name' '~obs_encoder.rgb_model.scaling_factor' \
+  #   obs_encoder.use_group_norm=True crop_shape=[76,76] encoder_tag=resnet18
+  # encoder_tag drives enc_suffix, so that run lands in its own directory automatically.
+  rgb_model:
+    _target_: diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder
+    model_name: stabilityai/sd-vae-ft-mse
+    scaling_factor: 0.18215
+  resize_shape: null
+  # The CropRandomizer lives here (so the encoder's declared input shape stays 96x96 and its
+  # shape assertion keeps working), but the POLICY chooses the offsets and passes them in.
+  # Left to itself CropRandomizer samples one offset per IMAGE, which cannot express "the
+  # observation and the subgoals predicted from it must share a crop".
+  #
+  # 72, not the 76 the ResNet era used: the VAE downsamples by 8 and 76 is not divisible by
+  # 8. Its stride-2 stages floor 76 to the same 9x9 latent anyway, so 72 is the identical 324
+  # dims with well-defined arithmetic rather than a compromise. The random crop STAYS --
+  # removing it is what let an earlier run memorize the train set in ~3k steps.
+  crop_shape: ${crop_shape}
+  random_crop: True
+  # No-op against a VAE, which has GroupNorm natively and no BatchNorm2d for
+  # replace_submodules to find. Off so the config does not imply otherwise.
+  use_group_norm: False
+  share_rgb_model: False
+  # MUST be False: PushTImageDataset.get_normalizer already maps images to [-1,1] via
+  # get_image_range_normalizer, while torchvision's ImageNet Normalize expects [0,1].
+  # Stacking them gave the encoder roughly [-6.5, +2.25]. (train_online_search.yaml sets
+  # imagenet_norm: True on this same dataset and is miscalibrated for this reason.)
+  imagenet_norm: False
+  # OFF, and it should stay off. With image-only observations the encoder output IS the raw
+  # VAE latent -- already ~unit scale by construction, which is what the 0.18215 factor is
+  # for. The heterogeneous concat this was written for (unbounded ResNet activations beside
+  # LinearNormalizer-scaled low_dim keys) no longer exists, and normalizing here would take
+  # the conditioning off the SD manifold the corruption ladder is defined on.
+  feature_layernorm: False
+# ---------------------------------------------------------------------------
+
+# Carries the FLAT corrupt_obs arm into the run directory. A manual suffix rather than the
+# bare `_corrupt-${corrupt_obs}` this replaced: the bool printed `corrupt-False` on every
+# clean run, which reads as "corruption off" beside a son_suffix that means the opposite.
+# Empty by default, so a clean run's name says nothing about corruption at all. SET IT
+# whenever corrupt_obs is True -- two runs differing only in corrupt_obs would otherwise
+# share a directory and resume each other. Declared HERE, not in the search master, because
+# the Gaussian and subgoal masters interpolate it too.
+corrupt_suffix: ''               # e.g. '_corrupt'
+
+# One wandb tag naming the POLICY FAMILY, so each master can mark its runs without replacing
+# `logging.tags` wholesale. Replacing the list is how the UNet BC and single-step masters
+# silently dropped `enc-`, the obs-noise tags and `verifier-` from their runs.
+family_tag: search
 
 exp_name: pusht_search
 
@@ -54,9 +152,9 @@ n_demos: 30
 # side of the 2026-08-19 change are distinguishable on sight in the wandb name, the wandb
 # tags and the output directory:
 #
-#   t_goal   value = -(T-to-goal distance)                        <- pre-2026-08-19
+#   t_goal   value = -(T-to-goal distance)                        <- CURRENT (see below)
 #   armT     value = -(T-to-goal + arm-to-T)                      <- superseded, see below
-#   armTn    value = -(T-to-goal/13.6 + arm-to-T/52.1)            <- current
+#   armTn    value = -(T-to-goal/13.6 + arm-to-T/52.1)            <- DEPRECATED 2026-08-28
 #   armTd    same, but each term divided by the spread measured across the n candidates
 #            of THAT control step instead of the two constants.  <- EVAL-ONLY, never a
 #            verifier_tag: it is defined only over a candidate SET, so it has no
@@ -81,7 +179,24 @@ n_demos: 30
 # every candidate scored identically there and argmax ranked at random. Runs across the two
 # are NOT comparable, which is exactly why this is in run_name -- a new run must never resume
 # or merge into a pre-change directory.
-verifier_tag: armTn
+#
+# ---------------------------------------------------------------------------------------
+# DEFAULT REVERTED TO t_goal ON 2026-08-28. armTn is DEPRECATED as a default; it remains a
+# fully supported `verifier_value` and is NOT removed from pusht_verifier.VALUE_FNS -- ~14
+# run directories, the eval watcher list and scripts/build_slot_norm_doc.py all need it
+# loadable, and deleting it would make those checkpoints unevaluatable.
+#
+# WHAT THIS FLIP BREAKS IF YOU ARE NOT CAREFUL. `verifier_tag` is interpolated into
+# run_name, and run_name IS hydra.run.dir. Any launcher that relied on the DEFAULT to
+# produce a `ver-armTn_...` directory now resolves to `ver-t_goal_...` instead -- it will
+# not resume, it will silently start a fresh run in a new directory (the 2026-08-05 run-directory rename). Every
+# such launcher must pin `verifier_tag=armTn` explicitly. Audited at flip time: only
+# scripts/slurm/submit_slot_weight_round2.sh relied on the default, and it is now pinned.
+# scripts/slurm/submit_slot_weight_dtgoal.sh already pinned; scripts/run_st_big_30demo.sh
+# is immune because it overrides run_name outright; the remaining launchers produced
+# pre-cutover directories with no `ver-` component and were already stale either way.
+# ---------------------------------------------------------------------------------------
+verifier_tag: t_goal
 
 # Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
 # run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
@@ -168,7 +283,15 @@ training:
   # identical across restarts. 1/(1-0.995) = a 200-step averaging window throughout.
   # Override to 0.999 for a 1000-step window if this smooths too little.
   ema_decay: 0.995
-  freeze_encoder: False
+
+  # `freeze_encoder` was DROPPED FROM THIS FILE 2026-08-29 and is deliberately not replaced.
+  # It was honoured by TrainMLPImageWorkspace and TrainDiffusionUnetImageWorkspace and
+  # ignored by TrainSearchOuterInnerWorkspace, which overrides run() -- so on the DEFAULT ST
+  # trainer it was a silent no-op, which is the worst thing a knob can be. The obs backbone
+  # (model/vision/sd_vae_encoder.SDVAEEncoder) now freezes itself in __init__ and overrides
+  # train() to stay in eval, so the freeze holds whichever workspace runs it and there is
+  # nothing left for a flag to do. The two workspaces still read the key via `.get` for the
+  # non-PushT configs that set it.
 
   # ---- outer/inner loop geometry (TrainSearchOuterInnerWorkspace) ----
   # THE knob is max_gradient_steps above; these four define the loop shape and are
@@ -215,15 +338,32 @@ training:
   max_val_steps: null
   tqdm_interval_sec: 1.0
 
+# ---- wandb labels that are not the run's identity ----------------------------------
+# These name the obs-noise arm for the wandb UI. They cannot be derived from
+# policy.slot_obs_noise in yaml (hydra has no conditionals), so they are set by hand and
+# CHECKED against it at startup by _check_obs_noise_labels -- a run whose tags disagree with
+# its ladder raises rather than training. Both are 'off' here; the ladder launchers set them
+# alongside son_suffix.
+obs_noise_tag: clean             # {clean, obs_noised}
+son_tag: uniform                 # the ladder mode, e.g. 'linear_signal', 'random_base-linsig'
+
 logging:
   entity: l2sml
   project: pushT_diffusion_search
   resume: True
   mode: online
+  # A wandb GROUP, which is the closest thing wandb has to a folder: these runs stay in the
+  # one project so they remain chartable against the ResNet era, but collapse into their own
+  # section in the UI. Named for what the generation IS -- frozen SD-VAE obs backbone, no
+  # agent_pos/feedback in the observation.
+  group: VAE_no_pos
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_ver-${verifier_tag}
-  tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "enc-${encoder_tag}"]
+  # ONE list, for every arm. A master marks itself with `family_tag`; nothing overrides
+  # this key, so no arm can lose the verifier, encoder or obs-noise labels by accident.
+  tags: ["${name}", "${task_name}", "${exp_name}", "${family_tag}",
+         "verifier-${verifier_tag}", "enc-${encoder_tag}",
+         "${obs_noise_tag}", "son-${son_tag}"]
   id: null
-  group: null
 
 checkpoint:
   # NOTHING HERE NOMINATES A BEST CHECKPOINT. Every `checkpoints/step_*.ckpt` written at

@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 export DP_OUTPUT_ROOT="${DP_OUTPUT_ROOT:-/home/harine/diffusion_policy_outputs}"
 PY=/home/harine/miniconda3/envs/robodiff2/bin/python
 ROOT=$DP_OUTPUT_ROOT/pusht_search/pusht_image_search
-CKPT=$ROOT/offline/bc_demos-30_seed-42/checkpoints/step_0030000.ckpt
+CKPT=$ROOT/offline/value_k1_demos-30_seed-42/checkpoints/step_0030000.ckpt
 
 for attempt in 1 2; do
   echo "=== [$(date -Is)] bc step_0030000 final_pass (attempt $attempt) ==="

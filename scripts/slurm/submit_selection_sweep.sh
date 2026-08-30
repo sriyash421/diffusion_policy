@@ -66,7 +66,7 @@ MODES="${MODES:-argmax softmax}"
 # The motivating case is `final_pass` at n=16 on the K=16 arms:
 #   MODES=final_pass MIN_N=16 MAX_N=16 ONLY_K=16 bash scripts/slurm/submit_selection_sweep.sh
 # That is the one width the model is actually TRAINED at -- compute_loss conditions on
-# max_actions-1 = 15 context entries -- and AUDIT.md P2-7 flags it as the width never
+# max_actions-1 = 15 context entries -- and README_pusht.md "Known limitations" flags it as the width never
 # evaluated (the in-training rollout uses 8, the eval sweep sweeps 1..64). Running it under
 # final_pass asks that arm's whole question: does the model's own synthesis, conditioned on
 # all 15 scored candidates, beat the oracle argmax it replaces?

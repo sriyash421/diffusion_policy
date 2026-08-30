@@ -12,14 +12,23 @@ after executing the candidate action sequence from the obs state. Higher == bett
 the value is <= 0 always. WHICH scalar is chosen by ``value_fn``, one of ``VALUE_FNS``:
 
 * ``'armTn'`` -- ``-(d_T->goal/13.6 + d_arm->T/52.1)``, both terms normalized by their
-  within-step candidate spread. THE CURRENT VALUE; see ``value_arm_t_norm``.
+  within-step candidate spread; see ``value_arm_t_norm``. **DEPRECATED as of 2026-08-28**:
+  ``pusht_base.yaml`` no longer defaults to it and no new arm should choose it. It is NOT
+  retired the way ``armT`` is -- it stays fully supported as a ``verifier_tag`` and a
+  ``--verifier-value``, because ~14 run directories, the eval watcher list and
+  ``scripts/build_slot_norm_doc.py`` all need it loadable, and the arms already trained
+  under it must keep being evaluated on exactly what they were trained on. Pin it
+  explicitly (``verifier_tag=armTn``) wherever it is still wanted; inheriting the default
+  now gives ``t_goal``.
 * ``'armT'`` -- ``-(d_T->goal + d_arm->T)``, the raw unnormalized sum. RETIRED: the arm
   term outvotes the task term ~4:1 at every step, which measurably destroys best-of-n
   (see the T_GOAL_SPREAD comment). Unreachable from any config and from the eval CLI
   (``eval_search_pusht.py --verifier-value``); the function is kept ONLY so the existing
   ``bon_search_ver-armT/`` curves stay readable and reproducible. Do not run it again.
-* ``'t_goal'`` -- ``-d_T->goal`` alone. THE PRE-2026-08-19 VALUE, kept so checkpoints
-  trained against it are evaluated on exactly what they were trained on.
+* ``'t_goal'`` -- ``-d_T->goal`` alone. THE CURRENT DEFAULT again as of 2026-08-28, and
+  the pre-2026-08-19 value before that, so checkpoints from either era are evaluated on
+  exactly what they were trained on. ``DEFAULT_VALUE_FN`` has always been this; the config
+  default has now been brought back into line with it.
 * ``'d_t_goal'`` -- ``-d_T->goal/13.6``, the same term on armTn's normalized footing.
   RANKS IDENTICALLY TO ``t_goal`` (a positive constant divisor is monotone); only the
   magnitude differs, which is what the recorded scores and the training context read. See

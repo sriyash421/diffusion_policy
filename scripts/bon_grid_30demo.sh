@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # NAMING: the on-disk arm key `bc` is HISTORICAL and means the search transformer at
 # k=1 (max_actions 1), NOT the UNet. It is kept because the eval outputs under
-# bon_grid_30demo/bc/ and the run dir offline/bc_demos-30_seed-42 already exist under
+# bon_grid_30demo/bc/ and the run dir offline/value_k1_demos-30_seed-42 already exist under
 # it; renaming the key would orphan them. Everything a human reads says ST k=1.
 # The UNet baseline is the separate `unetbc` arm.
 # Full checkpoint x selection x n grid for the 30-demo pair.
@@ -16,7 +16,7 @@ PY=/home/harine/miniconda3/envs/robodiff2/bin/python
 ROOT=$DP_OUTPUT_ROOT/pusht_search/pusht_image_search
 declare -A ARMS=(
   [search]=$ROOT/outer_inner/value_k16_corrupt-False_demos-30_seed-42
-  [bc]=$ROOT/offline/bc_demos-30_seed-42
+  [bc]=$ROOT/offline/value_k1_demos-30_seed-42
 )
 for arm in search bc; do
   d=${ARMS[$arm]}

@@ -23,16 +23,52 @@ SUBMIT="${SUBMIT:-}"
 EVAL_ARGS="${EVAL_ARGS:---skip-val}"
 PY_BIN="${PY_BIN:-/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python}"
 
+# The `_l2tol1` and `_sw-lin4857` entries are the slot-weighting experiment: two knobs
+# varied one at a time off the `_ver-armTn_` k=16 arm directly above them, which is their
+# shared control (uniform slot weights, plain L2) on the same manifest, seed and protocol.
+# See success_rates_slot_weights_armTn.md.
+#
+# The three `_nopos_` entries at the bottom are the image-only ablation (scripts/
+# run_nopos_30demo.sh): the same three headline arms with `agent_pos` and `feedback` deleted
+# from shape_meta.obs, so the policy conditions on pixels alone. Their with-pos controls --
+# outer_inner/value_k16_corrupt-False_demos-30_seed-42, offline/value_k1_demos-30_seed-42 and
+# unet_bc/unetbc_demos-30_seed-42 -- are already fully scored under t_goal and are
+# DELIBERATELY NOT relisted here: re-running them would spend GPU reproducing numbers that
+# already exist. See success_rates_no_pos.md.
+# TMRL arms PARKED 2026-08-29: the SD-VAE encoder cannot import in robodiff
+# (diffusers 0.36 requires accelerate>=0.31, env has 0.13.2), so all three died at
+# startup with 0 steps. Re-add the three run dirs here to resume tracking them.
+# TMRL arms PARKED 2026-08-29: the SD-VAE encoder cannot import in robodiff
+# (diffusers 0.36 requires accelerate>=0.31, the env has 0.13.2), so all three died
+# at startup with 0 steps. Re-add the three run dirs to the list to resume tracking.
 RUNS="
 outer_inner/value_k16_corrupt-False_demos-30_seed-42
 outer_inner/value_k16_corrupt-False_demos-100_seed-42
 offline/gaussian_k16_corrupt-False_demos-30_seed-42
 offline/gaussian_k16_corrupt-False_demos-100_seed-42
-offline/bc_demos-30_seed-42
-offline/bc_demos-100_seed-42
+offline/value_k1_demos-30_seed-42
+offline/value_k1_demos-100_seed-42
 unet_bc/unetbc_demos-30_seed-42
-offline/value_k1_arch-6x8x1024_corrupt-False_demos-30_seed-42
-outer_inner/value_k16_arch-6x8x1024_corrupt-False_demos-30_seed-42
+offline/value_k1_ver-armTn_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_corrupt-False_demos-30_seed-42
+offline/value_k1_ver-armTn_l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-lin4857_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-lin100-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-lin100-l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-geo735-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-geo735-l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-curr-lin100-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-armTn_sw-curr-lin100-l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-lin100-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-lin100-l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-geo735-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-geo735-l2tol1_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-curr-lin100-l2_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-d_t_goal_sw-curr-lin100-l2tol1_corrupt-False_demos-30_seed-42
+offline/value_k1_ver-t_goal_nopos_corrupt-False_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_nopos_corrupt-False_demos-30_seed-42
+unet_bc/unetbc_ver-t_goal_nopos_demos-30_seed-42
 "
 
 # One squeue call, not one per run: on a busy queue the per-run form is both slow and

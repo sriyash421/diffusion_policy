@@ -160,7 +160,7 @@ def main():
             # False, not 1.0: 'off' is explicit now (a no-op float is rejected), and the
             # uniform path it selects is numerically what 1.0 always did.
             assert cfg.slot_weight_decay is False, f'{name} decay={cfg.slot_weight_decay}'
-            # Post-rename (AUDIT.md 9.9) the run dir is keyed on `arm`, not search_context.
+            # Post-rename (the 2026-08-05 run-directory rename) the run dir is keyed on `arm`, not search_context.
             # Assert it resolves to THIS arm's label: a config whose directory disagreed with
             # its mechanism would file a whole column of SUCCESS_RATES.md under the wrong arm,
             # and `training.resume` would either resume the wrong run or start a fresh one.

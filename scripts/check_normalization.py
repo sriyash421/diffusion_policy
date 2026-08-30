@@ -3,7 +3,7 @@
 Static reading says images are mapped to [-1,1] by the LinearNormalizer and that
 `imagenet_norm: False` stops the encoder doing it again. This asserts it on real data,
 because the failure mode is silent: with both normalizations on, the encoder saw roughly
-[-6.5, +2.25] and nothing raised -- the run just trained badly (AUDIT "ROUND 4").
+[-6.5, +2.25] and nothing raised -- the run just trained badly (the 2026-08-03 encoder/crop fix).
 
 Checks:
   1. raw dataset images are in [0,1]

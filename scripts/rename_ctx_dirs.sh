@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rename the run directories from the pre-`selection` `ctx-<search_context>` template to the
-# arm labels. See AUDIT.md 9.9 for why the names had to change: `selection` became a second
+# arm labels. See the 2026-08-05 run-directory rename for why the names had to change: `selection` became a second
 # axis, so `ctx-subgoal` no longer identifies an arm -- it is `subgoal-chosen4value` under
 # argmax and `subgoal-only` under final_pass, which are different experiments.
 #

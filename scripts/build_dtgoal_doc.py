@@ -32,7 +32,7 @@ CTRL = 'ST k=16 — uniform, L2'
 # (label, run dir, native-sweep verifier, what differs from the control)
 ARMS = [
     ('ST k=1 — uniform, L2',
-     BASE / 'offline' / 'bc_demos-30_seed-42', 't_goal', 'width 1: no search context'),
+     BASE / 'offline' / 'value_k1_demos-30_seed-42', 't_goal', 'width 1: no search context'),
     (CTRL, _K16 / 'value_k16_corrupt-False_demos-30_seed-42', 't_goal',
      'uniform slot weights, plain L2'),
     (f'ST k=16 — linear r={R2}, L2',

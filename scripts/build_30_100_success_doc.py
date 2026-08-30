@@ -37,9 +37,9 @@ ARMS = [
     ('ST-gaussian k=16 (4/4/256, 14.6M)', 'search transformer, Gaussian head', 100,
      BASE / 'offline' / 'gaussian_k16_corrupt-False_demos-100_seed-42'),
     ('ST-diffusion k=1 (4/4/256, 17.1M)', 'same class as k=16, width 1 (empty search context)', 30,
-     BASE / 'offline' / 'bc_demos-30_seed-42'),
+     BASE / 'offline' / 'value_k1_demos-30_seed-42'),
     ('ST-diffusion k=1 (4/4/256, 17.1M)', 'same class as k=16, width 1 (empty search context)', 100,
-     BASE / 'offline' / 'bc_demos-100_seed-42'),
+     BASE / 'offline' / 'value_k1_demos-100_seed-42'),
     # 30-demo additions. A different ARCHITECTURE (UNet) and a ~24x wider transformer
     # trunk at both search widths, all on the same manifest/seed/protocol as the six
     # above, so they drop straight into the same tables.
@@ -108,7 +108,7 @@ VERIFIER = 't_goal'
 # trunk, and the retired armT / eval-only armTd re-ranks) is still in ARMS above and comes
 # back with --all. This is a VIEW, not a deletion.
 FOCUS = {
-    ('bc_demos-30_seed-42', 'bon_search'),
+    ('value_k1_demos-30_seed-42', 'bon_search'),
     ('value_k16_corrupt-False_demos-30_seed-42', 'bon_search'),
     ('unetbc_demos-30_seed-42', 'bon_search'),
     ('value_k1_ver-armTn_corrupt-False_demos-30_seed-42', 'bon_search'),

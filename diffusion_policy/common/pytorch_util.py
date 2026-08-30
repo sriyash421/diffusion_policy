@@ -80,3 +80,20 @@ def optimizer_to(optimizer, device):
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(device=device)
     return optimizer
+
+
+def trainable_parameters(model: nn.Module, label: str = 'model'):
+    """The parameters an optimizer should actually be given, printed once.
+
+    Frozen parameters are excluded rather than passed and skipped. AdamW does skip them
+    (`p.grad is None`), so this is not a correctness fix -- it stops `weight_decay` from
+    being declared over parameters it can never reach, keeps them out of the optimizer's
+    state_dict, and makes the count visible in the run log so an accidental un-freeze is
+    something you can see rather than something you have to measure.
+    """
+    params = [p for p in model.parameters() if p.requires_grad]
+    n_train = sum(p.numel() for p in params)
+    n_total = sum(p.numel() for p in model.parameters())
+    print(f'{label}: optimizing {n_train:,} of {n_total:,} parameters '
+          f'({n_total - n_train:,} frozen)')
+    return params

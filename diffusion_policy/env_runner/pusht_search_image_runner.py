@@ -47,7 +47,7 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.pusht_image_dataset import (
-    get_split_masks, get_split_masks_3way, get_episode_init_states,
+    get_episode_init_states,
     load_split_manifest, masks_from_manifest)
 from diffusion_policy.env_runner.pusht_image_runner import PushTImageRunner
 
@@ -85,34 +85,25 @@ class PushTSearchImageRunner(PushTImageRunner):
 
         replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path, keys=['agent_pos', 'block_pos'])
-        if split_file is not None:
-            # Same manifest the dataset reads, so the rollout splits cannot drift from the
-            # training splits. Previously both re-derived from the seed independently, which
-            # only agreed by convention.
-            manifest = load_split_manifest(
-                split_file,
-                episode_ends=replay_buffer.episode_ends[:],
-                expected_counts={
-                    'test': n_test_episodes,
-                    'val': n_val_episodes if n_val_episodes else None,
-                    'train': n_train_episodes,
-                })
-            _, val_mask, test_mask = masks_from_manifest(
-                manifest, replay_buffer.n_episodes)
-        elif n_val_episodes > 0:
-            _, val_mask, test_mask = get_split_masks_3way(
-                n_episodes=replay_buffer.n_episodes,
-                n_test_episodes=n_test_episodes,
-                n_val_episodes=n_val_episodes,
-                seed=seed,
-                n_train_episodes=n_train_episodes)
-        else:
-            _, test_mask = get_split_masks(
-                n_episodes=replay_buffer.n_episodes,
-                n_test_episodes=n_test_episodes,
-                seed=seed,
-                n_train_episodes=n_train_episodes)
-            val_mask = np.zeros_like(test_mask)
+        # REQUIRED, matching PushTImageDataset. The derive-from-seed fallback that used to
+        # sit here was the second of two independent answers to "which episodes are val?",
+        # agreeing with the dataset only by convention -- exactly what the manifest exists to
+        # replace. Both now read the SAME file (the task config interpolates split_file from
+        # task.dataset), so a rollout split cannot drift from the training split.
+        if split_file is None:
+            raise ValueError(
+                'PushTSearchImageRunner requires split_file: it must roll out on the same '
+                'manifest the dataset trained on. Pass ${task.dataset.split_file}.')
+        manifest = load_split_manifest(
+            split_file,
+            episode_ends=replay_buffer.episode_ends[:],
+            expected_counts={
+                'test': n_test_episodes,
+                'val': n_val_episodes if n_val_episodes else None,
+                'train': n_train_episodes,
+            })
+        _, val_mask, test_mask = masks_from_manifest(
+            manifest, replay_buffer.n_episodes)
 
         splits = [('val/', val_mask), ('test/', test_mask)]
 

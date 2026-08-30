@@ -30,12 +30,12 @@ NS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 #
 # Directories are keyed by ARM, not by search_context: `selection` is a second axis, so
 # `subgoal` means `subgoal-chosen4value` under argmax and `subgoal-only` under final_pass.
-# Renamed 2026-08-05; see AUDIT.md 9.9. The old ctx-* paths survive as back-symlinks.
+# Renamed 2026-08-05; see the 2026-08-05 run-directory rename. The old ctx-* paths survive as back-symlinks.
 ARMS = (('value', 'value'),
         ('subgoal-chosen4value', 'subgoal'),
         ('subgoal-value', 'subgoal_value'))
 
-D100 = [('none (ST k=1)', '—', OFF / 'bc_demos-100_seed-42' / 'bon_search')]
+D100 = [('none (ST k=1)', '—', OFF / 'value_k1_demos-100_seed-42' / 'bon_search')]
 for arm, _ctx in ARMS:
     for corrupt in ('False', 'True'):
         D100.append((arm, 'corrupt' if corrupt == 'True' else 'clean',
@@ -78,7 +78,7 @@ for bon in sorted((OFF).glob('subgoal-only*_demos-100_seed-42')):
 #   r8      the same 29 episodes with EMA on, one crop offset shared across the whole
 #           search, val=30, and a 100k budget. Directory suffix `-r8`.
 LEGACY29 = ' `[no-EMA]` `[split-crop]`'
-D29 = [('none (ST k=1)' + LEGACY29, 'legacy', OFF / 'bc_demos-29_seed-42' / 'bon_search')]
+D29 = [('none (ST k=1)' + LEGACY29, 'legacy', OFF / 'value_k1_demos-29_seed-42' / 'bon_search')]
 for arm, _ctx in ARMS:
     for corrupt in ('False', 'True'):
         D29.append((arm + LEGACY29, 'legacy ' + ('corrupt' if corrupt == 'True' else 'clean'),
@@ -134,7 +134,7 @@ def oi_sources(n_demos):
 D100 += oi_sources(100)
 D29 += oi_sources(29)
 
-ARCHIVE = [('none (ST k=1)', '25 demos', OFF / 'bc_demos-25_seed-42' / 'bon_search')]
+ARCHIVE = [('none (ST k=1)', '25 demos', OFF / 'value_k1_demos-25_seed-42' / 'bon_search')]
 # DIRECTORY NAMES, not config names -- the 2026-07-30 outer/inner runs live under
 # ROOT/runs/<name>/ and are named after the configs that produced them. Those three config
 # files were deleted on 2026-08-13 when outer/inner became the default in
@@ -330,11 +330,11 @@ L += ['\n### What `corrupt` currently means — read before comparing corrupt ro
       'across the whole decision, as the crop offset already is. It is deliberately **not '
       'applied yet**: two of the six r8 arms are corrupt and still training, and changing '
       'the semantics mid-run would leave their curve mixing both. It lands once those runs '
-      'finish. P0-1 and P0-2 remain open. See `AUDIT.md` section 8.\n',
+      'finish. P0-1 and P0-2 remain open. See README_pusht.md "Known limitations".\n',
       '\nWhy corruption exists at all: with a clean observation on a fully observed task '
       '`p(a* | obs, context) = p(a* | obs)` exactly, so the Bayes-optimal model ignores the '
       'context and the clean arms cannot show a context effect even in principle '
-      '(`AUDIT.md` 9.1). Corruption is what is supposed to break that — P0-1/P0-2 mean it '
+      '(README_pusht.md "Known limitations"). Corruption is what is supposed to break that — P0-1/P0-2 mean it '
       'does not do so cleanly.\n']
 
 L += ['\n## 1. 100 demos\n',
@@ -489,7 +489,7 @@ L += ['\n### What differs between the 29- and 100-demo generations, besides the 
 # synthesises one extra action conditioned on all n scored candidates and executes it
 # unsimulated, instead of picking the oracle's best. Swept at n=16 only on the K=16 arms,
 # which is the width those models were actually trained at (compute_loss conditions on
-# max_actions-1 = 15 context entries) and, per AUDIT.md P2-7, the one width nothing else
+# max_actions-1 = 15 context entries) and, per README_pusht.md "Known limitations", the one width nothing else
 # evaluates. Listing it here rather than hardcoding two modes is what stops a swept mode
 # from landing on disk and appearing in no table -- which is exactly what happened to the
 # k*_cd0.9 arms in section 1 before that list was globbed.
@@ -528,7 +528,7 @@ def selection_table():
         if not rows:
             continue
         native = 'final_pass' if 'subgoal-only' in d.name else (
-            'none (ST k=1)' if d.name.startswith('bc_') else 'argmax')
+            'none (ST k=1)' if d.name.startswith('value_k1_') else 'argmax')
         name = d.name.replace('_demos-100_seed-42', '').replace('_seed-42', '')
         first = True
         for step in sorted({s for s, _ in rows}):
@@ -573,7 +573,7 @@ L += ["\n## 3. Selection rule: argmax vs softmax vs final_pass (TEST only)\n",
       "model's own synthesis beat the oracle argmax it replaces? It is swept at **n=16 "
       'only, on the K=16 arms**, because that is the width those models were trained at '
       '(`compute_loss` conditions on `max_actions - 1` = 15 context entries) and, per '
-      '`AUDIT.md` P2-7, the one width nothing else evaluates. Note it costs n+1 samples to '
+      'README_pusht.md "Known limitations", the one width nothing else evaluates. Note it costs n+1 samples to '
       "argmax's n, so compare at equal samples, not equal n.\n"]
 L += selection_table()
 
@@ -701,7 +701,7 @@ L += ['\n## 4. Where the raw results are\n',
       '',
       '```',
       '$DP_OUTPUT_ROOT/pusht_search/pusht_image_search/offline/',
-      '    bc_demos-{25,29,100}_seed-42/                  ST k=1 (max_actions 1; dir name is historical)',
+      '    value_k1_demos-{25,29,100}_seed-42/            ST k=1 (max_actions 1)',
       '    ctx-<mech>_corrupt-<bool>_demos-100_seed-42/   100-demo search arms  [section 1]',
       '    subgoal-only_corrupt-<bool>_demos-100_seed-42/ 100-demo, final_pass  [section 1]',
       '    ctx-<mech>_corrupt-<bool>_seed-42/             29-demo search arms   [section 2]',

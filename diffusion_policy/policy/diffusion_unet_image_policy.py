@@ -138,20 +138,56 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         assert not missing, f'obs missing shape_meta keys: {missing}'
         return {k: obs_dict[k] for k in self.obs_keys}
 
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _encode_images(self, this_nobs, batch_size):
+        """(B*To, ...) normalized obs -> (B*To, D) features.
+
+        A hook, not a helper: the two call sites below are identical and a subclass needs to
+        change what happens between them. PushTUNetSearchPolicy overrides it to hand the
+        encoder one crop offset per SAMPLE, so the observation window's frames share a crop
+        the way the search transformer's already do. The default is exactly the direct call
+        it replaces, so every other config using this policy is unchanged.
+        """
+        return self.obs_encoder(this_nobs)
+
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor],
+                       global_cond=None) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
+
+        ``global_cond`` is an already-encoded conditioning vector, ``(B, To*D)``. It exists
+        so best-of-n does not re-run the vision backbone once per candidate: every candidate
+        conditions on the SAME observation, and with a frozen encoder the result is
+        bit-identical, so n-1 of those forwards were pure waste. Only meaningful with
+        ``obs_as_global_cond``; ``None`` encodes as before.
+
+        Supplying it also skips the NORMALIZE, not just the encode. Under
+        ``obs_as_global_cond`` the sole consumer of ``nobs`` is the encode that
+        ``global_cond`` stands in for, so the normalizer used to run over the whole image
+        tensor once per candidate for a result that was then dropped on the floor. ``B``
+        comes off ``global_cond`` instead of off the obs.
         """
         assert 'past_action' not in obs_dict # not implemented yet
-        # normalize input
-        nobs = self.normalizer.normalize(self._select_obs(obs_dict))
-        value = next(iter(nobs.values()))
-        B, To = value.shape[:2]
         T = self.horizon
         Da = self.action_dim
         Do = self.obs_feature_dim
         To = self.n_obs_steps
+
+        # normalize input -- only when something below will actually read it
+        nobs = None
+        if global_cond is None:
+            nobs = self.normalizer.normalize(self._select_obs(obs_dict))
+            B = next(iter(nobs.values())).shape[0]
+        else:
+            # Asserted rather than ignored. The inpainting branch conditions on
+            # PER-TIMESTEP obs features spliced into cond_data, which a flat (B, To*D)
+            # vector cannot supply -- so it used to silently drop `global_cond` and
+            # re-encode, i.e. exactly the per-candidate waste the argument exists to
+            # remove, with nothing to say it had happened.
+            assert self.obs_as_global_cond, (
+                'global_cond is only meaningful under obs_as_global_cond; the inpainting '
+                'branch needs per-timestep obs features and cannot consume it.')
+            B = global_cond.shape[0]
 
         # build input
         device = self.device
@@ -159,20 +195,20 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         # handle different ways of passing observation
         local_cond = None
-        global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(B, -1)
+            if global_cond is None:
+                this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+                nobs_features = self._encode_images(this_nobs, B)
+                # reshape back to B, Do
+                global_cond = nobs_features.reshape(B, -1)
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         else:
             # condition through impainting
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self._encode_images(this_nobs, B)
             # reshape back to B, T, Do
             nobs_features = nobs_features.reshape(B, To, -1)
             cond_data = torch.zeros(size=(B, T, Da+Do), device=device, dtype=dtype)
@@ -224,13 +260,13 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self._encode_images(this_nobs, batch_size)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            nobs_features = self._encode_images(this_nobs, batch_size)
             # reshape back to B, T, Do
             nobs_features = nobs_features.reshape(batch_size, horizon, -1)
             cond_data = torch.cat([nactions, nobs_features], dim=-1)

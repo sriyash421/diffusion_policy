@@ -44,7 +44,12 @@ context_decay: 0.9
 
 # K and the decay are both part of the run identity: they change the objective, and
 # `training.resume` locates latest.ckpt by this path, so two settings must never share a dir.
-run_name: ${arm}_k${n_candidates}_cd${context_decay}_ver-${verifier_tag}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+# Aligned with the search master 2026-08-29: `_corrupt-${corrupt_obs}` -> `${corrupt_suffix}`
+# (the bool printed `corrupt-False` on every clean run) and `${enc_suffix}` added, without
+# which a VAE run and a pre-swap ResNet run resolve to one directory and resume each other.
+# Existing directories under the old spelling are unaffected -- they live in the with-pos
+# task tree, which this generation does not write to.
+run_name: ${arm}_k${n_candidates}_cd${context_decay}_ver-${verifier_tag}${corrupt_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
 
 logging:
   tags: ["${name}", "${task_name}", "${exp_name}", "verifier-${verifier_tag}", "subgoal_env", "final_pass", "context_decay"]

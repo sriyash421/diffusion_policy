@@ -24,8 +24,14 @@ class SDVAEEncoder(nn.Module):
     """(B, 3, H, W) in [-1,1] -> (B, 4 * H/8 * W/8), the flattened scaled latent mean.
 
     At the 72x72 crop that is a 4x9x9 latent, i.e. 324 dims, against the ResNet18's 512.
-    Trainable by default, exactly as the ResNet it replaces is -- so swapping the two varies
-    the architecture and nothing else.
+
+    FROZEN, UNCONDITIONALLY. Not a flag: the whole reason the obs corruption ladder
+    (slot_obs_noise) applies a DDPM forward marginal to this output is that the output is an
+    SD latent, and that stops being true the moment the optimizer moves the encoder off the
+    SD manifold. A frozen encoder also makes the latent decodable by a stock AutoencoderKL
+    decoder (scripts/decode_obs_latents.py) and holds `obs_feature_std` -- the per-dimension
+    scale the ladder measures its SNR against -- on a fixed distribution instead of a moving
+    one.
     """
 
     def __init__(
@@ -45,6 +51,23 @@ class SDVAEEncoder(nn.Module):
         # `scaling_factor` in the checkpoint config; measured on PushT frames it puts the
         # latent at mean 0.48 / std 1.00, so it is calibrated for this data too.
         self.scaling_factor = float(scaling_factor)
+        # Frozen here rather than in a workspace: `training.freeze_encoder` used to do this
+        # and was honoured by two of the three workspaces, so on the default ST trainer it
+        # silently did nothing. A property of the module cannot be missed by whichever
+        # workspace happens to run it.
+        self.requires_grad_(False)
+        self.eval()
+
+    def train(self, mode: bool = True):
+        """Always eval. Ignores `mode` so the parent policy's .train() cannot flip it back.
+
+        nn.Module.train() recurses into children, so without this override every
+        `policy.train()` in the training loop would put the VAE back into training mode. It
+        has no dropout or BatchNorm, so the mode itself changes no arithmetic -- the point is
+        that `.training` is the flag the freeze is read off, by this file and by any future
+        caller.
+        """
+        return super().train(False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # The posterior MEAN, never a sample. Under the per-slot corruption ladder

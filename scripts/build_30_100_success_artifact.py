@@ -31,8 +31,8 @@ FAMILIES = [
     ('ST-diffusion k=1 <span class="arch">4/4/256 · 17.1M</span>', 'The same policy class as k=16, trained at width 1 — the search '
               'context is always empty, so n>1 is best-of-n over i.i.d. samples at a '
               'matched compute budget.',
-     {30: BASE / 'offline' / 'bc_demos-30_seed-42',
-      100: BASE / 'offline' / 'bc_demos-100_seed-42'}),
+     {30: BASE / 'offline' / 'value_k1_demos-30_seed-42',
+      100: BASE / 'offline' / 'value_k1_demos-100_seed-42'}),
 ]
 
 # 30 demos only, so they do not belong in the grid above (whose second column IS the

@@ -418,7 +418,7 @@ class SearchProcedureMixin:
         """
         # None == uniform; width 1 has a single slot, so there is nothing to weight
         spec = self.slot_weight_spec
-        if spec['mode'] == 'uniform' or self.max_actions == 1:
+        if spec['mode'] == 'uniform' or self.max_actions in (None, 1):
             return None
         K = self.max_actions
         t = self._slot_weight_step if step is None else step
@@ -515,8 +515,14 @@ class SearchProcedureMixin:
 
     # ------------------------------------------------------ per-slot observation noise
 
-    _SLOT_OBS_NOISE_KEYS = frozenset({'mode', 'decay', 'timesteps'})
-    _SLOT_OBS_NOISE_MODES = ('uniform', 'linear_t', 'geometric', 'linear_signal', 'list')
+    _SLOT_OBS_NOISE_KEYS = frozenset(
+        {'mode', 'decay', 'timesteps', 'shape', 'base_range'})
+    _SLOT_OBS_NOISE_MODES = ('uniform', 'linear_t', 'geometric', 'linear_signal', 'list',
+                             'random_base')
+    # Which profiles `random_base` may borrow its spacing from. `list` is excluded: an
+    # explicit K-length profile already names absolute timesteps, so shifting it is a
+    # contradiction; use it directly if you want fixed levels.
+    _SLOT_OBS_SHAPES = ('linear_t', 'geometric', 'linear_signal')
 
     @classmethod
     def _resolve_slot_obs_noise(cls, slot_obs_noise=None):
@@ -546,7 +552,42 @@ class SearchProcedureMixin:
             raise ValueError(f'slot_obs_noise.mode must be one of '
                              f'{cls._SLOT_OBS_NOISE_MODES}, got {mode!r}')
 
-        spec = {'mode': mode, 'decay': None, 'timesteps': None}
+        spec = {'mode': mode, 'decay': None, 'timesteps': None,
+                'shape': None, 'base_range': None}
+        if mode == 'random_base':
+            # The SHAPE supplies the profile; the base -- the timestep slot 0 sits at -- is
+            # redrawn per sample, and the profile is rescaled into [0, base]. So slot 0's
+            # corruption is random and the schedule runs from it down to clean at slot K-1,
+            # instead of the model seeing the same K levels for its whole life.
+            shape = sn.get('shape') or 'linear_signal'
+            if shape not in cls._SLOT_OBS_SHAPES:
+                raise ValueError(f'slot_obs_noise.shape must be one of '
+                                 f'{cls._SLOT_OBS_SHAPES}, got {shape!r}')
+            spec['shape'] = shape
+            if shape == 'geometric':
+                if sn.get('decay') is None:
+                    raise ValueError('slot_obs_noise.mode: random_base with shape: '
+                                     'geometric needs a `decay` in (0, 1)')
+                d = float(sn['decay'])
+                assert 0.0 < d < 1.0, \
+                    f'slot_obs_noise.decay must be in (0, 1), got {d}'
+                spec['decay'] = d
+            elif sn.get('decay') is not None:
+                raise ValueError(f'slot_obs_noise.decay only means something under '
+                                 f'shape: geometric, not shape: {shape}')
+            # [lo, hi] the per-sample base is drawn from. hi == T-1 gives the full fixed
+            # ladder; lo == 0 gives an entirely clean observation.
+            br = sn.get('base_range')
+            if br is not None:
+                br = [int(x) for x in br]
+                if len(br) != 2 or br[0] > br[1] or br[0] < 0:
+                    raise ValueError('slot_obs_noise.base_range must be [lo, hi] with '
+                                     f'0 <= lo <= hi, got {br}')
+                spec['base_range'] = br
+            return spec
+        if sn.get('shape') is not None or sn.get('base_range') is not None:
+            raise ValueError(f'slot_obs_noise.shape / base_range only mean something under '
+                             f'mode: random_base, not mode: {mode}')
         if mode == 'geometric':
             if sn.get('decay') is None:
                 raise ValueError("slot_obs_noise.mode: geometric needs a `decay` in (0, 1)")
@@ -581,16 +622,34 @@ class SearchProcedureMixin:
                 'corrupt_obs and slot_obs_noise both corrupt obs_cond, so enabling both '
                 'noises it twice. Set exactly one: corrupt_obs for the flat single-level '
                 'arm, slot_obs_noise for the per-slot ladder.')
-        t = self._slot_obs_timesteps()
-        if t is None:
-            return
-        abar = self.obs_noise_scheduler.alphas_cumprod.to(t.device)
-        sig = abar[t].sqrt()
         name = type(self).__name__
         detail = spec['mode'] + (f" decay={spec['decay']}" if spec['decay'] is not None else '')
+        T = self.obs_noise_scheduler.config.num_train_timesteps
+        t = self._slot_obs_timesteps()
+        if t is None:
+            shape = self._slot_obs_shape()
+            if shape is None:
+                return
+            lo, hi = self.slot_obs_base_range()
+            detail += f" shape={spec['shape']} base_range=[{lo}, {hi}]"
+            # There is no single ladder to print: the extent moves per sample. Print the one
+            # at the MIDPOINT base, which is the average case, and say so.
+            t = self.rescale_slot_timesteps(shape, (lo + hi) // 2)
+            detail += ' (levels below are at the midpoint base)'
+        abar = self.obs_noise_scheduler.alphas_cumprod.to(t.device)
+        sig = abar[t].sqrt()
         print(f'{name}: slot_obs_noise {detail} -> per-slot (timestep, sqrt(alpha_bar))')
         print('  ' + ', '.join(f'{i}:({int(ti)}, {si:.3f})'
                                for i, (ti, si) in enumerate(zip(t.tolist(), sig.tolist()))))
+        # The convention every shape obeys: slot 0 is the MOST corrupted, because slot k
+        # conditions on the first k scored candidates and the slot with no context is the
+        # one that should be least sure of what it is looking at. `list` is the only mode
+        # that can violate it -- the formulas cannot -- and a reversed profile trains a
+        # ladder pointing the wrong way while every label still says otherwise.
+        if bool((t[1:] > t[:-1]).any()):
+            print(f'  WARNING: the timestep profile is not non-increasing, so slot 0 is not '
+                  f'the most corrupted slot. Every other shape puts the noisiest end at '
+                  f'slot 0 (no context); check the order of slot_obs_noise.timesteps.')
         # A ladder whose slots are not distinguishable is a silently degenerate arm --
         # geometric does this readily (see the plan's ladder comparison), so say so here
         # rather than let the run finish before anyone notices.
@@ -617,14 +676,57 @@ class SearchProcedureMixin:
         the same reason.
         """
         spec = self.slot_obs_noise_spec
-        # None == no ladder; width 1 has a single slot, so there is nothing to grade.
-        if spec['mode'] == 'uniform' or self.max_actions == 1:
+        # None == no FIXED ladder. random_base has no fixed timesteps by construction: its
+        # levels are drawn per sample, so it registers its SHAPE instead (_slot_obs_shape).
+        if (spec['mode'] in ('uniform', 'random_base')) or self.max_actions in (None, 1):
             return None
+        return self._slot_obs_profile(spec['mode'], spec, device=device)
+
+    def _slot_obs_shape(self, device=None) -> Optional[torch.Tensor]:
+        """The borrowed shape profile for ``mode: random_base``. Length K, in timesteps.
+
+        This is the ladder AT FULL EXTENT -- exactly what the same-named fixed mode would
+        produce, running from ``T-1`` at slot 0 down to 0 at slot K-1. The decision-time
+        ladder rescales it into ``[0, t_base]``::
+
+            t_k = round(shape_k * t_base / (T - 1))
+
+        so slot 0 sits at the drawn level, slot K-1 stays clean, and the ladder's EXTENT is
+        what varies. (A rigid translate cannot work here: the fixed shapes already span the
+        whole timestep range, so a block of that width has nowhere to slide.)
+
+        Computed once at construction and registered as a buffer, so the ladder a checkpoint
+        trained under cannot differ from the one that evaluates it.
+        """
+        spec = self.slot_obs_noise_spec
+        if spec['mode'] != 'random_base' or self.max_actions in (None, 1):
+            return None
+        return self._slot_obs_profile(spec['shape'], spec, device=device)
+
+    def slot_obs_base_range(self):
+        """``(lo, hi)`` the random base is drawn from, inclusive. random_base only.
+
+        Default ``(0, T-1)``: at ``hi`` the ladder is the full fixed one, at ``lo`` every
+        slot is clean. Raise ``lo`` to keep a floor of corruption on slot 0 -- at a very low
+        base the rescaled levels round together and most slots see the same near-clean
+        observation, which is legitimate but uninformative.
+        """
+        spec = self.slot_obs_noise_spec
+        T = self.obs_noise_scheduler.config.num_train_timesteps
+        if spec['base_range'] is None:
+            return 0, T - 1
+        lo, hi = spec['base_range']
+        return int(lo), int(min(hi, T - 1))
+
+    def _slot_obs_profile(self, mode, spec, device=None) -> torch.Tensor:
+        """The length-K timestep profile for one shape. Shared by the fixed ladders and by
+        `random_base`, which borrows a shape for its spacing -- so the three formulas exist
+        exactly once and a `random_base` arm cannot drift from its fixed-ladder counterpart.
+        """
         K = self.max_actions
         T = self.obs_noise_scheduler.config.num_train_timesteps
         denom = max(K - 1, 1)
         k = torch.arange(K, dtype=torch.float64)
-        mode = spec['mode']
         if mode == 'linear_t':
             t = torch.round((K - 1 - k) / denom * (T - 1))
         elif mode == 'geometric':
@@ -644,6 +746,20 @@ class SearchProcedureMixin:
         else:
             raise ValueError(f'unhandled slot_obs_noise mode {mode!r}')
         return t.to(dtype=torch.long, device=device).clamp_(0, T - 1)
+
+    def rescale_slot_timesteps(self, shape, base):
+        """Fit the full-extent ``shape`` profile into ``[0, base]``. Shared by the startup
+        print and by the corruption itself, so what is printed is what is applied.
+
+        ``base`` may be a scalar or a ``(B,)`` tensor; the result is ``(K,)`` or ``(B, K)``.
+        """
+        T = self.obs_noise_scheduler.config.num_train_timesteps
+        shape = shape.to(torch.float64)
+        if torch.is_tensor(base):
+            scaled = shape.unsqueeze(0) * (base.to(torch.float64).unsqueeze(1) / (T - 1))
+        else:
+            scaled = shape * (float(base) / (T - 1))
+        return scaled.round().to(dtype=torch.long).clamp_(0, T - 1)
 
     def _init_selection(self, **kwargs):
         """Set the knobs predict_action_best reads. Call from the host's __init__."""
@@ -731,6 +847,20 @@ class SearchProcedureMixin:
         corruption sample across every candidate of a decision."""
         yield
 
+    @property
+    def context_capacity(self) -> int:
+        """How many scored candidates this policy can be CONDITIONED on.
+
+        `max_actions - 1` for the search transformers -- the staircase memory mask tops out
+        at that, so a longer context would index past `cond_pos_emb`. **0** for a policy that
+        consumes no search context at all (`max_actions is None`, i.e. the UNet BC arm),
+        which is the honest answer: its `predict_action` drops `actions` and `values` on the
+        floor. The 1<<20 sentinel this replaces made `max_actions - 1` evaluate to a number
+        so large that every slice became the whole tensor, which then got discarded --
+        arriving at the same behaviour by accident.
+        """
+        return 0 if self.max_actions is None else self.max_actions - 1
+
     def _slot_kwargs(self, slot):
         """``{'slot': k}`` when the per-slot obs ladder is active, ``{}`` otherwise.
 
@@ -738,7 +868,9 @@ class SearchProcedureMixin:
         ``predict_action`` does not take the argument, so it is passed only where it means
         something.
         """
-        return {'slot': slot} if getattr(self, 'slot_obs_t', None) is not None else {}
+        on = (getattr(self, 'slot_obs_t', None) is not None
+              or getattr(self, 'slot_obs_shape', None) is not None)
+        return {'slot': slot} if on else {}
 
 
     def _build_verifier(self, **kwargs):
@@ -931,7 +1063,11 @@ class SearchProcedureMixin:
             # encode once for the whole search, however many candidates it runs
             if obs_features is None:
                 obs_features = self._encode_obs_features(obs_dict)
-            if n_actions <= self.max_actions:
+            # `max_actions is None` == this policy has no trained staircase to fall out of
+            # (consumes_search_context False), so the rolling window never applies however
+            # large n gets. The alternative was a 1<<20 sentinel on max_actions, which read
+            # as a search width everywhere it was printed.
+            if self.max_actions is None or n_actions <= self.max_actions:
                 head = self.search_candidates(
                     obs_dict, verifier, n_actions, return_scores=return_scores,
                     obs_features=obs_features, return_subgoals=return_subgoals,
@@ -1066,7 +1202,11 @@ class SearchProcedureMixin:
         Cost at width n is n samples under every rule; 'argmax'/'softmax' additionally run
         n verifier sims and 'final_pass' n-1.
         """
+        # max_actions is None on a policy that consumes no context; it is not a width, so
+        # there is no default n to fall back to there.
         n = n_actions if n_actions is not None else self.max_actions
+        assert n is not None, ('n_actions must be given for a policy with no search width '
+                              '(max_actions is None)')
         final_pass = self.selection == 'final_pass'
         # Under 'final_pass' the last of the n generations IS the returned action, so only
         # n-1 of them are searched.
@@ -1100,7 +1240,7 @@ class SearchProcedureMixin:
                 # keep may be 0 -- at n=1 (nothing generated yet) or at max_actions=1 (the
                 # ST k=1 arm, which has no context capacity at all). `actions[:, -0:]` is the
                 # WHOLE tensor, so the empty case must pass None rather than a slice.
-                keep = min(n_search, self.max_actions - 1)
+                keep = min(n_search, self.context_capacity)
                 action_pred = self.predict_action(
                     obs_dict,
                     actions=actions[:, -keep:] if keep else None,

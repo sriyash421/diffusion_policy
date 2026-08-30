@@ -41,7 +41,7 @@ if [ ${#STEPS[@]} -eq 0 ]; then
 fi
 
 submitted=0
-# Arm-label globs (post-rename, AUDIT.md 9.9). Deliberately NOT `ctx-*`: those paths now
+# Arm-label globs (post-rename, the 2026-08-05 run-directory rename). Deliberately NOT `ctx-*`: those paths now
 # exist only as back-symlinks, so globbing them would visit every run twice -- once by each
 # name -- and the second visit reads as a separate arm rather than as a duplicate.
 shopt -s nullglob

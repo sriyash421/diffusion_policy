@@ -26,7 +26,12 @@ corrupt_obs_eval: null
 selection: argmax                # {argmax, softmax, final_pass}
 arm: gaussian
 n_candidates: 16
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}_corrupt-${corrupt_obs}_demos-${n_demos}_seed-${training.seed}
+# Aligned with the search master 2026-08-29: `_corrupt-${corrupt_obs}` -> `${corrupt_suffix}`
+# (the bool printed `corrupt-False` on every clean run) and `${enc_suffix}` added, without
+# which a VAE run and a pre-swap ResNet run resolve to one directory and resume each other.
+# Existing directories under the old spelling are unaffected -- they live in the with-pos
+# task tree, which this generation does not write to.
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${corrupt_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
 
 policy:
   _target_: diffusion_policy.policy.pusht_gaussian_search_policy.PushTGaussianSearchPolicy

@@ -185,6 +185,11 @@ def get_split_states(cfg, split, run_dir=None):
         _, val_mask, test_mask = masks_from_manifest(
             manifest, replay_buffer.n_episodes)
     else:
+        # KEPT, unlike the dataset's and the runner's fallbacks, which were deleted on
+        # 2026-08-29. `ds` here is the config EMBEDDED IN THE CHECKPOINT, and checkpoints
+        # from before the manifest existed carry no split_file -- this branch is what keeps
+        # them evaluable on the episodes they were actually held out from. Nothing trained
+        # from now on can reach it: PushTImageDataset raises without a split_file.
         _, val_mask, test_mask = get_split_masks_3way(
             n_episodes=replay_buffer.n_episodes,
             n_test_episodes=ds.n_test_episodes,
@@ -389,9 +394,7 @@ def _verifier_value_of(policy):
     just to answer a metadata question. Falls back to the pre-cutover default for the same
     reason the verifier does -- a checkpoint saved before 2026-08-19 has no key at all.
     """
-    kwargs = getattr(policy, '_search_kwargs', None)
-    if kwargs is None:
-        kwargs = getattr(policy, 'kwargs', None) or {}
+    kwargs = getattr(policy, 'search_kwargs', None) or {}
     return kwargs.get('verifier_value', DEFAULT_VALUE_FN) or DEFAULT_VALUE_FN
 
 
@@ -428,15 +431,15 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # applies. Left alone, the checkpoint's own cfg decides -- and a cfg from before the
     # 2026-08-19 cutover has no key at all, so it correctly reproduces `t_goal`.
     if verifier_value is not None:
-        search_kwargs = getattr(policy, '_search_kwargs', None)   # UNet BC arm
-        target = search_kwargs if search_kwargs is not None else policy.kwargs
-        target['verifier_value'] = verifier_value
+        policy.search_kwargs['verifier_value'] = verifier_value
         # The transformer arms build the verifier in __init__, so theirs must be swapped in
         # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
         # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
         # property here, which would force that fork now.
-        built = (policy.__dict__.get('_verifier') if search_kwargs is not None
-                 else getattr(policy, 'verifier', None))
+        # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
+        # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
+        # would fork its 32-process sim pool just to check whether it exists.
+        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
             built.value_fn = verifier_value
     print(f'  verifier value: {_verifier_value_of(policy)}'
@@ -509,6 +512,9 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             'selection_index': (getattr(policy, 'selection_index', None)
                                 if selection == 'index' else None),
             'verifier_value': verifier_value_used,
+            # None == the checkpoint's own setting was used, which is what a curve written
+            # before this key existed means too.
+            'corrupt_obs_eval': corrupt_obs_eval,
             'n_generations': [int(n) + n_extra for n in done],
             # test split: REPORTED
             'success_rate': [test_sr[n] for n in done],
@@ -646,7 +652,10 @@ _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              # likewise for the verifier value: t_goal and armT rank candidates
              # differently, so their curves are different experiments. Curves written
              # before 2026-08-19 carry no key here and are all t_goal.
-             'verifier_value')
+             'verifier_value',
+             # a clean rollout and a corrupted one are different experiments on one
+             # checkpoint; see _bon_subdir
+             'corrupt_obs_eval')
 
 
 def merge_curves(old, new):
@@ -908,6 +917,14 @@ def read_curve_rows(out_root):
               help='smallest n in the sweep. With --max-n this runs ONE slice, so a big '
                    'sweep can be split across jobs (e.g. --min-n 512 --max-n 512); results '
                    'merge into the same success_curve.json / success_curves.jsonl.')
+@click.option('--n-list', 'n_list_arg', default=None,
+              help='explicit comma-separated n levels, e.g. "1,8,16", INSTEAD of every power '
+                   'of two in [--min-n, --max-n]. Use it to buy only the levels a question '
+                   'needs: {1,8,16} costs {1,2,4,8,16} under the default rule, and the cost '
+                   'of a level is linear in n. Values must still be powers of two -- the '
+                   'curve merges by n into the same success_curves.jsonl as every other '
+                   'sweep, and an off-grid level would sit in rows nothing else can compare '
+                   'against.')
 @click.option('--max-steps', default=300)
 @click.option('--poll-sec', default=60.0)
 @click.option('--seed', default=None, type=int,
@@ -978,11 +995,20 @@ def read_curve_rows(out_root):
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
-         store_scores, verifier_value, selection_index, corrupt_obs_eval):
-    # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
-    # curves stay comparable and success_curves.jsonl rows stay mergeable.
-    n_list = [n for n in (int(2 ** k) for k in range(31)) if min_n <= n <= max_n]
-    assert n_list, f'no powers of two in [{min_n}, {max_n}]'
+         store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg):
+    grid = {int(2 ** k) for k in range(31)}
+    if n_list_arg:
+        n_list = sorted({int(x) for x in n_list_arg.split(',') if x.strip()})
+        assert n_list, '--n-list is empty'
+        off = [n for n in n_list if n not in grid]
+        assert not off, (f'--n-list must be powers of two, got {off}. Curves merge by n '
+                         f'into one success_curves.jsonl, so an off-grid level would be '
+                         f'incomparable with every sweep already recorded.')
+    else:
+        # powers of two in [min_n, max_n]; identical to N_LIST at the defaults, so existing
+        # curves stay comparable and success_curves.jsonl rows stay mergeable.
+        n_list = [n for n in sorted(grid) if min_n <= n <= max_n]
+        assert n_list, f'no powers of two in [{min_n}, {max_n}]'
     if selection == 'index':
         assert selection_index, "--selection index needs --selection-index (1-based)"
         # Checked here rather than per-rollout: a level where the candidate does not

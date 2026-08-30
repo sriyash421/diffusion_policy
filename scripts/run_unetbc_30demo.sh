@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train the PushT UNet BC baseline at 30 demos, then eval every 10k checkpoint.
+# Train the PushT UNet BC baseline at 30 demos. TRAINING ONLY -- see EVAL below.
 # Queued behind the n=64 grid extension so nothing contends for the GPU.
 #
 # A DIFFERENT baseline from ST-diffusion-k1: that one is the search transformer at
@@ -10,11 +10,20 @@
 # Best-of-n here is I.I.D. SAMPLING: PushTUNetSearchPolicy draws n independent samples,
 # scores each with the PushT sim verifier, and executes the best. No learned selection is
 # involved, which is what makes it the baseline for the search arms' test-time budget.
+#
+# The config pins `trainer: unet_bc`, so this lands in
+# unet_bc/unetbc_demos-30_seed-42 -- NOT offline/, which is where the ST arms live. That
+# path is what scripts/slurm/submit_30_100_watchers.sh polls for this arm.
+#
+# EVAL IS NOT DONE HERE. The watcher owns it -- eval_watch_pusht_search.sbatch sweeps
+# n = 1 2 4 8 16 32 64 over the 50 test episodes with --skip-val, and numbers from any
+# other protocol are not comparable to it. After training:
+#   SUBMIT=1 bash scripts/slurm/submit_30_100_watchers.sh
+# (idempotent: it skips arms that already have a live watcher or are fully scored).
 set -u
 cd "$(dirname "$0")/.."
 export DP_OUTPUT_ROOT="${DP_OUTPUT_ROOT:-/home/harine/diffusion_policy_outputs}"
 PY=/home/harine/miniconda3/envs/robodiff2/bin/python
-ROOT=$DP_OUTPUT_ROOT/pusht_search/pusht_image_search
 N64_LOG=logs/bon_grid_30demo_n64.log
 mkdir -p logs
 
@@ -35,16 +44,8 @@ rc=$?
 echo "=== [$(date -Is)] unet bc train exited rc=$rc ==="
 [ $rc -ne 0 ] && exit $rc
 
-# Same deterministic protocol as the grid: fixed split manifest, seed 42, torch+numpy
-# re-seeded to the same base before every n (eval_search_pusht.py:311-320), 50 test
-# episodes / 30 val, n in {1,2,4,8,16}.
-D=$ROOT/offline/unetbc_demos-30_seed-42
-for ckpt in $(ls $D/checkpoints/step_*.ckpt | sort); do
-  step=$(basename "$ckpt" .ckpt)
-  echo "=== [$(date -Is)] unetbc $step argmax ==="
-  timeout 45m $PY -u eval_search_pusht.py -c "$ckpt" \
-    -o "$ROOT/bon_grid_30demo/unetbc" --min-n 1 --max-n 16 --n-envs 16 --seed 42 --store-scores 2>&1 \
-    | grep -E "success_rate=|Traceback|Error"
-  [ "${PIPESTATUS[0]}" = 124 ] && echo "=== [$(date -Is)] TIMEOUT: unetbc $step -- skipped ==="
-done
-echo "=== [$(date -Is)] unetbc done ==="
+# `unetbc done` was the sentinel scripts/run_st_big_30demo.sh grepped for to chain itself.
+# That launcher was removed with the big-ST arm on 2026-08-29; the sentinel is kept because
+# it is also this script's own completion marker
+# behind this stage -- keep the string.
+echo "=== [$(date -Is)] unetbc done -- now: SUBMIT=1 bash scripts/slurm/submit_30_100_watchers.sh ==="

@@ -44,7 +44,10 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.normalizer = LinearNormalizer()
-        self.kwargs = kwargs
+        # `search_kwargs`, not `kwargs`: DiffusionUnetImagePolicy already owns `kwargs` for
+        # its scheduler.step() keyword arguments, and PushTUNetSearchPolicy inherits both.
+        # One unambiguous name means that class needs no aliases and no overrides.
+        self.search_kwargs = kwargs
         self.verifier = self._build_verifier(**kwargs)
         self._init_selection(**kwargs)
         self._init_crop(shape_meta, kwargs.get('crop_shape'),
@@ -203,14 +206,17 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
         return self.obs_encoder(this_nobs, crop_offsets=offsets).reshape(B, T, -1)
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim)."""
-        nobs = self.normalizer.normalize(obs_dict)
+        """Normalize + encode the obs window -> (B, n_obs_steps, obs_feature_dim).
+
+        Sliced to To BEFORE normalizing; see the diffusion policy's copy for why the two
+        orders are bit-identical and why this one is cheaper.
+        """
         To = self.n_obs_steps
-        if isinstance(nobs, dict):
-            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
+        if isinstance(obs_dict, dict):
+            obs_dict = dict_apply(obs_dict, lambda x: x[:, :To, ...])
         else:
-            nobs = nobs[:, :To, ...]
-        return self._encode_obs(nobs)
+            obs_dict = obs_dict[:, :To, ...]
+        return self._encode_obs(self.normalizer.normalize(obs_dict))
 
     def predict_action(
             self,
@@ -221,8 +227,9 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
         ) -> Dict[str, torch.Tensor]:
         """One action chunk, optionally conditioned on prior candidates.
 
-        ``obs_features`` is accepted for interface parity with the diffusion policy (the
-        mixin passes it); this policy re-encodes per call, so it is ignored.
+        ``obs_features`` optionally supplies an already-encoded observation, exactly as on
+        the diffusion policy: every candidate of one search conditions on the SAME
+        observation, so the search loop encodes once and hands the result to each call.
 
         The trunk emits one distribution per sequence position, i.e. one per candidate
         slot; the NEXT candidate is the last position, so the slice happens here rather
@@ -256,7 +263,6 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
         self.normalizer.load_state_dict(normalizer.state_dict())
 
     def compute_loss(self, batch):
-        nobs = self.normalizer.normalize(batch['obs'])
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         To = self.n_obs_steps
@@ -264,15 +270,25 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
             f"Expected action horizon {self.horizon}, got {T}"
         assert Da == self.action_dim, \
             f"Expected action dim {self.action_dim}, got {Da}"
-        
-        obs_features = self.corrupt_obs_features(self._encode_obs_features(batch['obs']))
+
+        # Encoded ONCE and shared with the context search below, the way the diffusion
+        # policy's compute_loss already does it. The search used to encode the same
+        # observation a second time; the two results were bit-identical, because
+        # `_draw_crop_offsets` re-seeds from (seed, step) on every call and so hands both
+        # encodes the same offsets. Keeping the raw features -- pre-corruption,
+        # pre-projection -- is what makes them reusable: `predict_action` applies its own
+        # corruption per candidate, exactly as before, so the global RNG stream is
+        # unchanged.
+        raw_obs_features = self._encode_obs_features(batch['obs'])
+        obs_features = self.corrupt_obs_features(raw_obs_features)
         obs_features = self.obs_projection(obs_features.reshape(B, -1)) # B, hidden_dim
 
         with torch.inference_mode():
             actions, values = self.search_candidates(
                 batch['obs'],
                 verifier=self.verifier,
-                n_actions=self.max_actions-1
+                n_actions=self.max_actions-1,
+                obs_features=raw_obs_features,
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
         action_value_features = self._context_tokens(actions, values) # B, max_actions, hidden

@@ -56,7 +56,7 @@ def at_n(row, key, n):
 plan, advis, no_tail = [], [], []
 for name in sorted(os.listdir(ROOT)):
     run = os.path.join(ROOT, name)
-    # symlinks are the ctx-* back-aliases from the 2026-08-05 rename (AUDIT 9.9); visiting
+    # symlinks are the ctx-* back-aliases from the 2026-08-05 rename (the 2026-08-05 run-directory rename); visiting
     # them would plan every gap twice, once under each name.
     if os.path.islink(run) or not os.path.isdir(run):
         continue

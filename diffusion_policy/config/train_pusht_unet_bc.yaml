@@ -9,7 +9,10 @@ _target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainD
 obs_as_global_cond: True
 
 trainer: unet_bc
-run_name: unetbc_ver-${verifier_tag}_demos-${n_demos}_seed-${training.seed}
+# ${enc_suffix} is LOAD-BEARING: without it this resolves to the same directory as every
+# pre-2026-08-28 ResNet UNet BC run, and `training.resume: True` would continue one of them
+# under a different backbone.
+run_name: unetbc_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
 
 task:
   env_runner:
@@ -42,31 +45,27 @@ policy:
     set_alpha_to_one: True
     steps_offset: 0
     prediction_type: epsilon
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-    shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      # ImageNet-pretrained conv weights, matching online search and both search arms.
-      # Note use_group_norm below swaps every BatchNorm2d for a fresh GroupNorm, so the
-      # pretrained normalization statistics are discarded -- the conv filters transfer,
-      # the running stats do not.
-      weights: IMAGENET1K_V1
-    resize_shape: null
-    crop_shape: [76, 76]
-    random_crop: True
-    use_group_norm: True
-    share_rgb_model: False
-    # MUST stay False: PushTImageDataset.get_normalizer already maps images to [-1,1] via
-    # get_image_range_normalizer, while torchvision's ImageNet Normalize expects [0,1].
-    # Stacking them gives [-6.50, 2.64] instead of [-2.12, 2.64]. (train_online_search.yaml
-    # sets imagenet_norm: True on this same dataset and is miscalibrated for this reason.)
-    imagenet_norm: False
+  # ONE definition, in pusht_base, shared with train_pusht_diffusion_search. This arm is
+  # the standard diffusion-policy baseline and deliberately does NOT match the ST arm on the
+  # slot machinery, gradient clipping or eval cadence -- but it must match it on the
+  # OBSERVATION, or the comparison varies the input as well as the algorithm. Until
+  # 2026-08-29 it did not: ResNet18 at a 76x76 crop with group norm, against the ST arm's
+  # frozen SD VAE at 72x72.
+  obs_encoder: ${obs_encoder}
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 8   # matches both ST arms
+  # Image crop, owned by the POLICY rather than the encoder -- the same contract the search
+  # transformer uses. One offset per SAMPLE, shared by the observation window, so the two obs
+  # frames are registered against each other at train time exactly as they are at eval (where
+  # both are centre-cropped). Left to itself CropRandomizer draws one offset per IMAGE, which
+  # gave this arm two differently-cropped frames per sample at train and two identical ones at
+  # eval -- a train/eval mismatch, and more scene coverage per sample than the ST arms get.
+  # ${crop_shape} is the same key the encoder block reads, so the two cannot disagree.
+  crop_shape: ${crop_shape}
+  random_crop: True
+
   # scalar verifier value only -- this policy has no context input for the wider modes
   search_context: value
   selection: argmax
@@ -101,11 +100,16 @@ ema:
   update_after_step: 0
   inv_gamma: 1.0
   power: 0.75
-  # flat decay, matching the search arms' training.ema_decay: 0.995 (a ~200-step window).
-  # min==max clamps EMAModel's step-dependent warmup curve, which is otherwise a function
-  # of an un-checkpointed step counter and so differs across restarts.
-  min_value: 0.995
-  max_value: 0.995
+  # flat decay: min==max clamps EMAModel's step-dependent warmup curve, which is otherwise a
+  # function of an un-checkpointed step counter and so differs across restarts.
+  #
+  # INTERPOLATED from training.ema_decay rather than repeated as a literal. This workspace
+  # instantiates EMA from this block and never reads training.ema_decay, so while the two
+  # were written out separately a command-line `training.ema_decay=0.999` was effective on
+  # both ST arms and a SILENT NO-OP on this one -- the same value by coincidence, not by
+  # construction.
+  min_value: ${training.ema_decay}
+  max_value: ${training.ema_decay}
 
 training:
   # the UNet workspace validates and samples on an epoch cadence, not a step one
@@ -120,5 +124,7 @@ training:
   # nrmse_max_batches, ema_decay) are inert here -- this workspace reads none of them, and
   # EMA is configured by the `ema:` block above.
 
-logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "unet-bc", "demos-${n_demos}"]
+# `logging.tags` is NOT overridden here. Replacing pusht_base's list is what silently
+# dropped `verifier-`, `enc-` and the obs-noise labels from every UNet BC run; family_tag is
+# the one thing this arm needs to add, and n_demos is already in run_name.
+family_tag: unet-bc

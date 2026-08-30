@@ -87,7 +87,16 @@ def collate_fn(batch):
     obs_dict = {key: [item['obs'][key] for item in batch] for key in batch[0]['obs'].keys()}
     collated_obs = dict_apply(obs_dict, lambda x: _collate(x))
     collated_actions = _collate([item['action'] for item in batch])
-    collated_expert_mask = _collate([item['expert_mask'] for item in batch])
+    # OPTIONAL since 2026-08-29. sim2real reads a real per-step expert_mask out of its zarr;
+    # PushT never had one and emitted a constant np.ones purely to satisfy this line, which
+    # then rode in every batch unread (PushT uses default_collate, so it never even reached
+    # here). Absent means "every step is expert", which is what that constant meant.
+    if 'expert_mask' in batch[0]:
+        collated_expert_mask = _collate([item['expert_mask'] for item in batch])
+    else:
+        collated_expert_mask = torch.ones(
+            (len(batch), max(item['action'].shape[0] for item in batch), 1),
+            dtype=torch.float32)
 
     max_len = collated_actions.shape[1]
     seq_lens = [item['action'].shape[0] for item in batch]

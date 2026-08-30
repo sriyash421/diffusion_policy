@@ -17,7 +17,7 @@ name: train_pusht_diffusion_search
 #   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
 # so flipping it under a running job means any preempt resolves to .../outer_inner/<run>/,
 # finds no latest.ckpt, and SILENTLY RESTARTS FROM SCRATCH in a new directory. That is the
-# failure AUDIT.md 9.9 documents. The precondition (no live `tr_` jobs) held when this was
+# failure the 2026-08-05 run-directory rename documents. The precondition (no live `tr_` jobs) held when this was
 # applied -- training now runs locally and nothing was in flight.
 #
 # WHAT CHANGES. `offline` regenerates the search context from the CURRENT weights on every
@@ -186,6 +186,21 @@ slot_loss_norm:
 # has one observation, not K of them. Scaled by a running per-dimension feature std, so
 # sqrt(alpha_bar) means an SNR rather than an absolute magnitude.
 #
+# THE MAGNITUDE COMES FROM `obs_noise_scheduler` (see the policy block), not from these
+# shapes. On TMRL's VLA schedule the floor is sqrt(alpha_bar) = 0.0064, so slot 0 really is
+# mostly noise; the shapes below only decide how the range is DISTRIBUTED across the slots.
+# Measured per-slot sqrt(alpha_bar) at K=16 on that schedule:
+#
+#   linear_signal  0.01 0.07 0.14 0.21 0.27 0.34 0.40 0.47 0.54 0.60 0.67 0.73 0.80 0.87 0.93 1.00
+#                  even steps (1.0x spread) -- the only shape that grades evenly from the
+#                  marginal to the conditional, and the recommended default.
+#   linear_t       0.01 0.01 0.02 0.04 0.07 0.10 0.16 0.23 0.33 0.44 0.56 0.69 0.81 0.91 0.97 1.00
+#                  21.8x spread; slots 0-3 are all near-identical pure noise. Kept as an arm
+#                  BECAUSE that is the contrast linear_signal exists to fix.
+#   geometric 0.7  0.01 0.08 0.29 0.55 0.74 0.86 0.93 0.96 0.98 0.99 0.99 1.00 ... 1.00
+#                  1099x spread, 6/15 adjacent pairs indistinguishable -- degenerate here.
+#                  The startup print warns when slots collapse.
+#
 #   uniform        off. Bit-identical to the objective that predates this, and registers no
 #                  extra buffers, so every existing checkpoint still loads.
 #   linear_t       t_k = (K-1-k)/(K-1) * (T-1). Even in the timestep INDEX -- the same
@@ -202,6 +217,18 @@ slot_loss_norm:
 #                  its floor at slot 0 to ~1 at slot K-1. The only shape that gives all K
 #                  slots a distinct, evenly-spaced corruption level. Default choice.
 #   list           an explicit K-length timestep profile.
+#   random_base    NO fixed ladder. `shape` names which of the three profiles above supplies
+#                  the curve; a base timestep is drawn PER SAMPLE from `base_range` and the
+#                  curve is rescaled into [0, base]. So slot 0 sits at the drawn level, slot
+#                  K-1 stays clean, and what varies between samples is the ladder's EXTENT.
+#                  At base = T-1 it is exactly the fixed `shape`; at base = 0 every slot is
+#                  clean. (A rigid translate was the first design and does not work: the
+#                  fixed shapes already span the whole timestep range, so a block that wide
+#                  has nowhere to slide.) Per sample rather than per batch, matching how the
+#                  flat corrupt_obs has always drawn its timestep, so the corruption level is
+#                  uncorrelated across a training batch. Within one decision the base is
+#                  PINNED by _corrupt_scope, exactly as the noise sample is -- the agent has
+#                  one observation, seen at K graded levels.
 #
 # MUTUALLY EXCLUSIVE with corrupt_obs: both noise obs_cond, so enabling both would corrupt
 # it twice at two unrelated levels. The policy raises rather than letting one win.
@@ -217,9 +244,11 @@ slot_loss_norm:
 #    generation, hence the ladder's cleanest reachable slot.
 # Set son_suffix whenever this is non-uniform, for the run-dir reason sw_suffix exists.
 slot_obs_noise:
-  mode: uniform          # {uniform, linear_t, geometric, linear_signal, list}
-  # decay: 0.7           # geometric only, in (0, 1)
+  mode: uniform          # {uniform, linear_t, geometric, linear_signal, list, random_base}
+  # decay: 0.7           # geometric only (or random_base with shape: geometric), in (0, 1)
   # timesteps: []        # list only, exactly n_candidates entries
+  # shape: linear_signal # random_base only; {linear_t, geometric, linear_signal}
+  # base_range: [0, 99]  # random_base only; inclusive, default [0, num_train_timesteps-1]
 
 # Recency discount on the SEARCH CONTEXT, applied inside the transformer as an additive
 # attention bias. For a candidate generated against m context entries, the latest entry
@@ -233,7 +262,7 @@ context_decay: 1.0
 
 # The ablation label for (search_context, selection). Asserted in the workspace against
 # _ARM_LABELS so a config cannot file its results under the wrong arm; it is what the run
-# directory will be named once the pending rename lands (see AUDIT.md 9.9).
+# directory will be named once the pending rename lands (see the 2026-08-05 run-directory rename).
 arm: value                       # {value, subgoal-chosen4value, subgoal-value, subgoal-only}
 
 # Search width: how many candidates the loop generates (policy.max_actions interpolates from
@@ -242,7 +271,7 @@ arm: value                       # {value, subgoal-chosen4value, subgoal-value, 
 # model is ever trained at, so two K values must not share an output directory.
 n_candidates: 16
 
-# RENAME LANDED 2026-08-05 (AUDIT.md 9.9). Keyed on `arm`, not `search_context`, because
+# RENAME LANDED 2026-08-05 (the 2026-08-05 run-directory rename). Keyed on `arm`, not `search_context`, because
 # `selection` is a second axis: `subgoal` under argmax is `subgoal-chosen4value`, under
 # final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
 # The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
@@ -257,24 +286,23 @@ sw_suffix: ''                    # e.g. '_sw-lin4857', '_sw-geo9', '_l2tol1'
 # Carries the OBS-NOISE ladder into the run directory. Must name the mode AND its parameter:
 # corrupt-${corrupt_obs} is a bool and cannot tell three ladder shapes apart, so without this
 # they would share a directory and `training.resume: True` would have them resume each other.
-son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7'
-# Carries the FLAT corrupt_obs arm into the run directory. A manual suffix rather than the
-# bare `_corrupt-${corrupt_obs}` this replaced, for the same reason sw_suffix and son_suffix
-# are manual: the bool printed `corrupt-False` on every clean run, which reads as "corruption
-# off" next to a son_suffix that means the opposite. Empty by default, so a clean run's name
-# says nothing about corruption at all. SET IT whenever corrupt_obs is True -- two runs
-# differing only in corrupt_obs would otherwise share a directory and resume each other.
-corrupt_suffix: ''               # e.g. '_corrupt'
-# Which vision backbone this run used. `vae` is the default since the 2026-08-28 encoder
-# swap; set it (and enc_suffix) back to resnet18 for an arm that overrides rgb_model.
-encoder_tag: vae
-# Keeps a VAE run and a ResNet run out of the same directory -- they would otherwise differ
-# in nothing hydra.run.dir can see and would resume each other. Empty for the default
-# backbone, on the same principle as sw_suffix: the default spelling of a name does not
-# change when a new axis is added.
-enc_suffix: ''                   # e.g. '_enc-resnet18'
+son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7', '_son-rndlinsig'
+# son_suffix's siblings `son_tag` and `obs_noise_tag` live in pusht_base with the rest of the
+# wandb labels. Set ALL THREE together on a ladder run: the directory, the tag and the ladder
+# saying different things is worse than an unlabelled run, which is why
+# _check_obs_noise_labels refuses to start when they disagree.
+# `corrupt_suffix` lives in pusht_base, beside enc_suffix: the Gaussian and subgoal
+# masters interpolate it too.
+# `encoder_tag` and `enc_suffix` live in pusht_base: the UNet BC arm shares this backbone,
+# so the key belongs where both masters can see it.
 
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
+# Carries a non-default TRANSFORMER SIZE into the run directory. policy.n_layer / n_head /
+# n_emb are overridable from the command line and appear nowhere else in run_name, so two
+# architectures resolved to one directory and every capacity arm had to override run_name by
+# hand to avoid it. Empty at the default 4/4/256, on the sw_suffix principle.
+arch_suffix: ''                  # e.g. '_arch-6x8x1024'
+
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
@@ -285,61 +313,36 @@ _target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSea
 policy:
   _target_: diffusion_policy.policy.pusht_diffusion_search_policy.PushTDiffusionSearchPolicy
   shape_meta: ${shape_meta}
-  # PushT images (96x96) need a real vision backbone, not FlattenObsEncoder.
+  # ONE definition, in pusht_base, shared with train_pusht_unet_bc: the ST-vs-BC comparison
+  # is only meaningful if both see the same observation. See the block there.
+  obs_encoder: ${obs_encoder}
+
+  # THE OBSERVATION corruption schedule -- separate from `noise_scheduler` below, which
+  # denoises the ACTION. Two independent processes, as in TMRL.
   #
-  # These five keys are the upstream PushT-image BC recipe and must stay mutually
-  # consistent -- an earlier configuration had all three of {pretrained weights, group norm,
-  # imagenet_norm} on at once, which do not compose, and no augmentation at all. That run
-  # overfit by ~3k steps (val_loss min 0.089 -> 0.29 by 99k) and its success rate decayed to
-  # zero. See AUDIT.md "ROUND 4 -- ROOT CAUSE".
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-    shape_meta: ${shape_meta}
-    # THE STABLE DIFFUSION VAE ENCODER, not the ResNet18 this arm used until 2026-08-28.
-    # 34.2M params against the ResNet's 11.18M, producing a 4x9x9 = 324-d flattened latent
-    # at the 72x72 crop (vs 512-d). TRAINABLE, exactly as the ResNet was -- nothing in this
-    # repo ever froze that one -- so the swap varies the architecture and nothing else.
-    #
-    # Why: slot_obs_noise corrupts the encoded observation with a DDPM forward marginal,
-    # which on ResNet activations is an operator borrowed out of context and on a VAE latent
-    # is the space diffusion models are trained to operate in. That argument is exact at
-    # initialization and weakens as training moves the encoder off the SD manifold; the
-    # architecture and the pretrained init are what carry over.
-    #
-    # Measured on PushT frames before adopting it: 29.6 dB reconstruction PSNR at 72x72
-    # (31.7 dB at the full 96x96), and the 0.18215 scale puts the latent at mean 0.48 /
-    # std 1.00 -- so the SD VAE does transfer to 96x96 synthetic images despite being
-    # trained on 512x512 natural ones.
-    #
-    # To go back to the ResNet for an arm, override this block with
-    #   _target_: diffusion_policy.model.vision.model_getter.get_resnet
-    #   name: resnet18
-    #   weights: IMAGENET1K_V1
-    # and set encoder_tag=resnet18, use_group_norm=True, crop_shape=[76,76] in BOTH places.
-    rgb_model:
-      _target_: diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder
-      model_name: stabilityai/sd-vae-ft-mse
-      scaling_factor: 0.18215
-    resize_shape: null
-    # The CropRandomizer still lives here (so the encoder's declared input shape stays
-    # 96x96 and its shape assertion keeps working), but the POLICY chooses the offsets and
-    # passes them in -- see crop_shape / random_crop in the policy block below. Left to
-    # itself CropRandomizer samples one offset per IMAGE, which cannot express "the
-    # observation and the subgoals predicted from it must share a crop".
-    # 72, not the 76 this arm used with the ResNet: the VAE downsamples by 8 and 76 is not
-    # divisible by 8. Its stride-2 stages floor 76 to the same 9x9 latent anyway, so 72 is
-    # the identical 324 dims with well-defined arithmetic rather than a compromise. MUST
-    # match the policy block's crop_shape below.
-    crop_shape: [72, 72]
-    random_crop: True
-    # No-op against a VAE, which has GroupNorm natively and no BatchNorm2d for
-    # replace_submodules to find. Off so the config does not imply otherwise.
-    use_group_norm: False
-    share_rgb_model: False
-    # MUST be False: the LinearNormalizer already maps images to [-1,1]
-    # (normalize_util.get_image_range_normalizer), and ImageNet stats assume [0,1]. With
-    # both on, the encoder saw roughly [-6.5, +2.25].
-    imagenet_norm: False
+  # This is TMRL's VLA schedule verbatim (T=1000, beta 1e-4 -> 0.02 linear;
+  # tmrl_openpi/src/tmrl_openpi/models/cspi0.py:79-114 `context_noise_T` /
+  # `context_beta_start` / `context_beta_end`). It matters because sqrt(alpha_bar) at t=T-1 is
+  # the FLOOR on how corrupted any slot can be, and no ladder shape or cap can go below it:
+  #
+  #   T=100,  beta 0.001->0.02  (the class default)  floor 0.5895  -> 59% of the signal SURVIVES
+  #   T=1000, beta 1e-4 ->0.02  (this, TMRL VLA)     floor 0.0064  -> 0.6%, essentially noise
+  #
+  # The old default is what TMRL's own STATE branch uses (tmrl/models/flow.py, T=100, floor
+  # 0.603) and it can only ever blur slot 0. The VLA schedule is what realises the continuum
+  # the method rests on: slot 0 at the marginal p(a), slot K-1 at the conditional p(a|c).
+  # The 10x finer grid is a second benefit -- at T=100, 16 slots round onto each other at the
+  # clean end, which is what made small ladder ranges space unevenly.
+  #
+  # NOT applied to the maze/procgen arms that share this policy class: the class default
+  # stays the legacy literal, so only configs that pass this block change.
+  obs_noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: linear
+    prediction_type: epsilon
 
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
@@ -442,7 +445,9 @@ policy:
   # eval time (where both are center-cropped). The offset is a pure function of
   # (training.seed, global_step), so it is identical across restarts and machines and is no
   # longer drawn from the global RNG interleaved with the diffusion noise.
-  crop_shape: [72, 72]      # must match obs_encoder.crop_shape above; see the note there
+  # The SAME key the encoder reads, so the offsets the policy chooses and the crop the
+  # encoder applies cannot disagree. See the obs_encoder block in pusht_base.
+  crop_shape: ${crop_shape}
   random_crop: True
 
   # search width (candidates conditioned on the previous ones), same as the maze config.

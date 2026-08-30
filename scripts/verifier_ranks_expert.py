@@ -144,10 +144,9 @@ def main(checkpoint, arm, n_actions, episodes, per_episode, split, batch, device
          verifier_value, out):
     policy, cfg = load_policy(checkpoint, device)
     if verifier_value is not None:
-        sk = getattr(policy, '_search_kwargs', None)
-        (sk if sk is not None else policy.kwargs)['verifier_value'] = verifier_value
-        built = (policy.__dict__.get('_verifier') if sk is not None
-                 else getattr(policy, 'verifier', None))
+        policy.search_kwargs['verifier_value'] = verifier_value
+        # __dict__, not the attribute: the UNet arm's `verifier` is a lazy property.
+        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
             built.value_fn = verifier_value
     native = resolved_verifier_value(policy, cfg)

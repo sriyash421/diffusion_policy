@@ -594,6 +594,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             corrupt_obs: bool = False,
             crop_shape=None,
             random_crop: bool = True,
+            obs_noise_scheduler: DDPMScheduler = None,
             **kwargs,
         ):
         super().__init__()
@@ -616,7 +617,10 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         self.action_dim = action_dim
         self.obs_feature_dim = obs_feature_dim
         self.max_actions = max_actions
-        self.kwargs = kwargs
+        # `search_kwargs`, not `kwargs`: DiffusionUnetImagePolicy already owns `kwargs` for
+        # its scheduler.step() keyword arguments, and PushTUNetSearchPolicy inherits both.
+        # One unambiguous name means that class needs no aliases and no overrides.
+        self.search_kwargs = kwargs
         self.step_kwargs = kwargs.get('scheduler_step_kwargs', dict())
 
         # How the candidate that actually gets EXECUTED is picked. Orthogonal to
@@ -668,7 +672,23 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         self.num_inference_steps = num_inference_steps
 
         self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))
-        self.obs_noise_scheduler = DDPMScheduler(
+        # THE OBS CORRUPTION SCHEDULE. Separate from `noise_scheduler`, which denoises the
+        # ACTION -- two independent processes, as in TMRL.
+        #
+        # It is what decides how corrupted the ladder's noisiest slot can be, and that is not
+        # a free parameter of the shapes: sqrt(alpha_bar) at t = T-1 is the floor, and no
+        # shape, cap or timestep can go below it. The legacy default below (T=100, beta
+        # 0.001->0.02 linear) bottoms out at sqrt(alpha_bar) = 0.589, i.e. it still retains
+        # 59% of the signal at maximum corruption -- so slot 0 could only ever be blurred,
+        # never uninformative. It is kept as the DEFAULT so the maze and procgen arms that
+        # share this class are bit-identical; the PushT config overrides it.
+        #
+        # The PushT arms pass TMRL's VLA schedule instead (T=1000, beta 1e-4 -> 0.02 linear,
+        # tmrl_openpi/src/tmrl_openpi/models/cspi0.py:79-114), whose floor is
+        # sqrt(alpha_bar) = 0.0064 -- 0.6% signal, i.e. essentially the marginal. That is the
+        # continuum the method rests on, and the 10x finer grid also stops 16 slots from
+        # rounding onto each other at the clean end.
+        self.obs_noise_scheduler = obs_noise_scheduler or DDPMScheduler(
             num_train_timesteps=100,
             beta_start=0.001,
             beta_end=0.02,
@@ -680,26 +700,42 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         # The per-slot corruption ladder. AFTER _init_corruption (it refuses to coexist with
         # corrupt_obs) and AFTER obs_noise_scheduler (linear_signal inverts its alpha_bars).
         self._init_slot_obs_noise(kwargs.get('slot_obs_noise', None))
+        # Exactly one of these is non-None when the ladder is on: `slot_obs_t` for the fixed
+        # shapes, `slot_obs_shape` for random_base, whose absolute levels do not exist until a
+        # base is drawn and the shape is rescaled into [0, base]. The other stays a plain
+        # `None` attribute, and it must be assigned in the ELSE branch rather than up front:
+        # register_buffer refuses a name that already exists as an attribute.
+        #
+        # Buffers are registered ONLY when the ladder is on, so an arm that does not use it
+        # has a byte-identical state_dict and every checkpoint that predates this still loads
+        # under the default strict=True (see BaseWorkspace.load_payload).
         slot_obs_t = self._slot_obs_timesteps()
-        if slot_obs_t is None:
-            # Registered ONLY when the ladder is on, so an arm that does not use it has a
-            # byte-identical state_dict and every checkpoint that predates this still loads
-            # under the default strict=True (see BaseWorkspace.load_payload).
-            self.slot_obs_t = None
-        else:
+        slot_obs_shape = self._slot_obs_shape()
+        if slot_obs_t is not None:
             self.register_buffer('slot_obs_t', slot_obs_t)
+        else:
+            self.slot_obs_t = None
+        if slot_obs_shape is not None:
+            self.register_buffer('slot_obs_shape', slot_obs_shape)
+        else:
+            self.slot_obs_shape = None
+        if slot_obs_t is not None or slot_obs_shape is not None:
             # Per-dimension feature scale the corruption is measured against, so sqrt(abar)
-            # is an SNR rather than an absolute magnitude (AUDIT P0-2). A running estimate
+            # is an SNR rather than an absolute magnitude (the corruption-calibration finding). A running estimate
             # rather than a per-batch one: rollout batches are small and B=1 would give a
             # degenerate std, and the corruption must not depend on batch shape -- the same
             # property set_sample_seeds guarantees for the sampling noise.
             self.register_buffer('obs_feature_std', torch.ones(obs_feature_dim))
             self.register_buffer('obs_feature_std_inited',
                                  torch.zeros((), dtype=torch.bool))
-        # One corruption sample per DECISION, not per candidate (AUDIT P0-3): the agent has
-        # one observation, not max_actions of them. Plain attributes, like _sample_seeds --
-        # they hold no learnable state and a checkpoint should not pin them.
+        # One corruption sample per DECISION, not per candidate (the per-candidate-redraw finding): the agent has
+        # one observation, not max_actions of them. `_corrupt_t_base` is pinned the same way
+        # and for the same reason -- under random_base the whole decision must sit at ONE
+        # base level, or the slots stop being one observation seen at graded levels. Plain
+        # attributes, like _sample_seeds: they hold no learnable state and a checkpoint
+        # should not pin them.
         self._corrupt_eps = None
+        self._corrupt_t_base = None
         self._corrupt_depth = 0
 
         self._init_crop(shape_meta, crop_shape, random_crop)
@@ -771,14 +807,20 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         ResNet forward). Split out so the search loop can encode once and reuse across
         candidates -- they all condition on the same observation, so re-encoding per
         candidate ran the encoder max_actions times per step for identical inputs.
+
+        SLICED TO To BEFORE NORMALIZING, not after. LinearNormalizer is elementwise
+        (`_normalize` is `x * scale + offset` with per-key broadcast params), so the two
+        orders give bit-identical output -- but normalizing first paid for the whole
+        `horizon` window, of which the dataset yields 16 steps and this reads 2. It also
+        makes the method safe against a dataset that emits only the observed frames (see
+        PushTImageDataset.obs_image_steps): the discarded steps are never touched.
         """
-        nobs = self.normalizer.normalize(obs_dict)
         To = self.n_obs_steps
-        if isinstance(nobs, dict):
-            nobs = dict_apply(nobs, lambda x: x[:, :To, ...])
+        if isinstance(obs_dict, dict):
+            obs_dict = dict_apply(obs_dict, lambda x: x[:, :To, ...])
         else:
-            nobs = nobs[:, :To, ...]
-        return self._encode_obs(nobs)
+            obs_dict = obs_dict[:, :To, ...]
+        return self._encode_obs(self.normalizer.normalize(obs_dict))
 
     # ------------------------------------------------- per-slot observation corruption
 
@@ -797,6 +839,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             self._corrupt_depth -= 1
             if self._corrupt_depth == 0:
                 self._corrupt_eps = None
+                self._corrupt_t_base = None
 
     def _decision_noise(self, obs_features: torch.Tensor) -> torch.Tensor:
         """The corruption sample for this decision, drawn once and reused inside a scope."""
@@ -833,25 +876,54 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         the last slot: past ``max_actions`` the search runs a rolling window that pins every
         further generation at the widest context, so they belong at the ladder's clean end.
 
-        Off (``slot_obs_t is None``) this is the identity, so an arm without the ladder is
-        unaffected. The train/eval gate is ``corrupt_obs_eval``, exactly as for
+        Off (no ladder buffer registered) this is the identity, so an arm without the ladder
+        is unaffected. The train/eval gate is ``corrupt_obs_eval``, exactly as for
         ``corrupt_obs_features`` -- with the caveat that evaluating clean means the slot ->
         level mapping the model trained under does not hold at rollout.
         """
-        if self.slot_obs_t is None:
+        if self.slot_obs_t is None and self.slot_obs_shape is None:
             return obs_features
         if not self.training and not self.corrupt_obs_eval:
             return obs_features
 
         eps = self._decision_noise(obs_features) * self.obs_feature_std
+        t = self._decision_slot_timesteps(obs_features)          # (B, K)
         abars = self.obs_noise_scheduler.alphas_cumprod.to(obs_features.device)
         if slot is None:
-            ab = abars[self.slot_obs_t].to(obs_features.dtype).view(1, -1, 1, 1)
-            x = obs_features.unsqueeze(1)
+            ab = abars[t].to(obs_features.dtype).unsqueeze(-1).unsqueeze(-1)  # (B,K,1,1)
+            x = obs_features.unsqueeze(1)                                     # (B,1,To,D)
             return ab.sqrt() * x + (1.0 - ab).sqrt() * eps.unsqueeze(1)
-        idx = min(int(slot), self.slot_obs_t.numel() - 1)
-        ab = abars[self.slot_obs_t[idx]].to(obs_features.dtype)
+        idx = min(int(slot), t.shape[1] - 1)
+        ab = abars[t[:, idx]].to(obs_features.dtype).view(-1, 1, 1)           # (B,1,1)
         return ab.sqrt() * obs_features + (1.0 - ab).sqrt() * eps
+
+    def _decision_slot_timesteps(self, obs_features: torch.Tensor) -> torch.Tensor:
+        """The ``(B, K)`` timestep ladder in force for this decision.
+
+        Under the fixed shapes every row is the `slot_obs_t` buffer -- the ladder does not
+        depend on the sample. Under `random_base` row b is the `slot_obs_shape` profile
+        rescaled into `[0, t_base[b]]`: slot 0 sits at a level drawn per sample and the
+        schedule runs from there down to clean at slot K-1. Per sample, not per batch,
+        because that is how the flat `corrupt_obs_features` has always drawn its timestep,
+        and it keeps the level uncorrelated across a training batch.
+
+        `t_base` is pinned by `_corrupt_scope` for the span of a decision, exactly as the
+        noise sample is. Redrawing per candidate would put slot 0 and slot K-1 at unrelated
+        bases, and the ladder would stop being one observation seen at graded levels.
+        """
+        B = obs_features.shape[0]
+        if self.slot_obs_t is not None:
+            return self.slot_obs_t.to(obs_features.device).unsqueeze(0).expand(B, -1)
+        base = self._corrupt_t_base
+        # Same staleness test as _decision_noise: a scope re-entered at a different batch
+        # size or on another device must redraw rather than broadcast the wrong rows.
+        if base is None or base.shape[0] != B or base.device != obs_features.device:
+            lo, hi = self.slot_obs_base_range()
+            base = torch.randint(lo, hi + 1, (B,), device=obs_features.device)
+            if self._corrupt_depth > 0:
+                self._corrupt_t_base = base
+        return self.rescale_slot_timesteps(
+            self.slot_obs_shape.to(obs_features.device), base)
 
     def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         return self.corrupt_obs_features(self._encode_obs_features(obs_dict))
@@ -998,7 +1070,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             )
 
     def compute_loss(self, batch, actions=None, values=None, return_aux=False,
-                     slot_weighting=True):
+                     slot_weighting=True, obs_features=None):
         """Denoising loss for the expert action, conditioned on a best-of-n search context.
 
         ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the
@@ -1006,6 +1078,13 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         here from the current weights -- the offline path, which pays the full search cost
         on every gradient step. A trainer that amortizes the search across several updates
         passes the buffered context back in instead.
+
+        ``obs_features`` optionally supplies the encoded observation, ``(B, To, D)``, for the
+        same reason and from the same buffer: with a frozen backbone the encode is a pure
+        function of (image, crop offset), so re-running it on every inner update is waste.
+        Passing it also PINS THE CROP to whatever the buffer was filled with, which is what
+        makes a buffered subgoal image and the observation it was predicted from share one
+        crop.
 
         ``return_aux`` additionally returns the exact inputs the denoiser was called with,
         so a frozen snapshot of this policy can be re-run on identical inputs via
@@ -1031,7 +1110,15 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         # encode the obs ONCE: the same features back the grad-tracked training forward
         # and every candidate of the context search below (which only reads them, under
         # no_grad, so no graph is built for the search).
-        obs_features = self._encode_obs_features(batch['obs'])
+        #
+        # `obs_features` may instead be supplied by a trainer that encoded this pool of
+        # windows already (TrainSearchOuterInnerWorkspace). THAT IS ONLY SOUND BECAUSE THE
+        # OBS BACKBONE IS FROZEN: with a trainable encoder, reusing features computed on an
+        # earlier step would both feed the model stale activations and silently cut the
+        # encoder out of the gradient. The caller asserts the freeze; this is the note that
+        # says why it has to.
+        if obs_features is None:
+            obs_features = self._encode_obs_features(batch['obs'])
         # (B, To, D) flat, or (B, K, To, D) under the ladder -- one conditioning view per
         # candidate slot, same observation and same noise sample, graded level.
         if self.slot_obs_t is None:

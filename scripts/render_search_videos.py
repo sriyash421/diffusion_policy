@@ -747,11 +747,11 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
     # (to keep training from forking a 32-process sim pool) and will read the kwarg when it
     # does, so its `verifier` property is NOT touched here -- doing so would force the fork.
     if verifier_value is not None:
-        search_kwargs = getattr(policy, '_search_kwargs', None)      # UNet BC arm
-        target = search_kwargs if search_kwargs is not None else policy.kwargs
-        target['verifier_value'] = verifier_value
-        built = (policy.__dict__.get('_verifier') if search_kwargs is not None
-                 else getattr(policy, 'verifier', None))
+        policy.search_kwargs['verifier_value'] = verifier_value
+        # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
+        # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
+        # would fork its 32-process sim pool just to check whether it exists.
+        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
             built.value_fn = verifier_value
     if seed is None:
