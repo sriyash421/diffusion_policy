@@ -1049,7 +1049,8 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
                 obs_features=obs_features,
             )
 
-    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
+    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps,
+                        obs_features=None):
         """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
 
         Used to compare two snapshots of this policy at matched inputs. For a fixed
@@ -1062,15 +1063,26 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         closed-form ``log p(a|s)`` to take a ratio of).
 
         Obs corruption is deliberately NOT applied: ``corrupt_obs_features`` draws fresh
-        noise per call, so including it would book corruption noise as policy drift. The
-        obs ARE re-encoded here rather than taken from the caller, because the vision
-        backbone is part of what drifts and each snapshot must use its own.
+        noise per call, so including it would book corruption noise as policy drift. Pass
+        the PRE-corruption features for the same reason.
+
+        ``obs_features`` is the encode from the forward being analysed, handed in so BOTH
+        snapshots share it. That is exact because the obs backbone is frozen -- the two
+        snapshots hold the identical encoder, so re-encoding would produce the identical
+        tensor twice. (It used to re-encode, on the grounds that "the vision backbone is
+        part of what drifts and each snapshot must use its own". That stopped being true
+        when the encoder was frozen.) Sharing also makes the comparison matched to the
+        forward it is about: re-encoding happens under `eval()`, i.e. at the CENTRE crop,
+        while the loss ran on a random training crop. ``None`` still re-encodes, for callers
+        with no features to hand.
         """
         with torch.no_grad():
+            if obs_features is None:
+                obs_features = self._encode_obs_features(batch['obs'])
             return self.model(
                 noisy_trajectory,
                 timesteps,
-                obs_cond=self._encode_obs_features(batch['obs']),
+                obs_cond=obs_features,
                 actions=self._normalize_context_actions(actions),
                 values=values,
             )
@@ -1203,4 +1215,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             'timesteps': timesteps,
             'actions': actions,
             'values': values,
+            # PRE-corruption, and pre-slot-expansion: predict_epsilon omits the corruption
+            # on purpose (it redraws per call, which would book corruption noise as drift).
+            'obs_features': obs_features,
         }

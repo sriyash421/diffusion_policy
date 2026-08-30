@@ -22,11 +22,20 @@
 #   4. the normalizer was preserved, not recomputed
 #   5. splits.json checksum guard passes rather than aborting the run
 #   6. no eval block re-fires immediately (last_{rollout,val,sample}_step restored)
+#   7. NO epoch=*.ckpt is written. topk retention was removed 2026-08-19 -- it selected on
+#      val_loss (which nothing is chosen on) and its ranking dict was never serialized, so
+#      after a resume the map restarted empty and the retained set was neither top-k nor
+#      capped at k. This assertion is what keeps it from being reintroduced.
 set -uo pipefail
 
 SRC="${SRC:?set SRC=<run dir>}"
 DST="${DST:-/gscratch/robotics/harine/diffusion_policy_outputs/_resume_test/$(basename "$SRC")}"
 EXTRA_STEPS="${EXTRA_STEPS:-6}"
+# latest.ckpt is only rewritten when (global_step - last_checkpoint_step) >= checkpoint_every,
+# which in the real configs is 10000. Without shrinking it a short resume writes NO new
+# checkpoint, and every "did state survive?" assertion below silently compares the copied-in
+# file to itself and passes vacuously. Keep this strictly less than EXTRA_STEPS.
+CKPT_EVERY="${CKPT_EVERY:-$(( EXTRA_STEPS / 2 > 0 ? EXTRA_STEPS / 2 : 1 ))}"
 
 set +u
 source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
@@ -51,6 +60,7 @@ python train.py \
   --config-name="$CONFIG_NAME" \
   training.device=cuda:0 \
   training.max_gradient_steps=$((BEFORE_STEP + EXTRA_STEPS)) \
+  training.checkpoint_every=$CKPT_EVERY \
   logging.mode=disabled \
   hydra.run.dir="$DST" \
   "$@"
@@ -78,6 +88,12 @@ pk = {k: dill.loads(v) for k, v in after['pickles'].items()}
 pk0 = {k: dill.loads(v) for k, v in before['pickles'].items()}
 
 print('=== resume assertions')
+# 0. Did the resumed run actually write a NEW latest.ckpt? If not, every comparison below
+# is `before` against itself and would pass or fail for reasons that have nothing to do
+# with resume. checkpoint_every must be < EXTRA_STEPS for this to hold; the sbatch sets it.
+check(pk['global_step'] != pk0['global_step'],
+      '0. a new latest.ckpt was written (otherwise every check below is vacuous)',
+      f"{pk0['global_step']} -> {pk['global_step']}")
 check(pk['global_step'] > before_step,
       '1. global_step continued rather than restarting',
       f"{before_step} -> {pk['global_step']}")
@@ -116,6 +132,17 @@ check(not refired, '6. no eval block re-fired at the resume point',
 for k in ('last_rollout_step', 'last_val_step', 'last_sample_step', 'last_checkpoint_step'):
     check(pk[k] == pk0[k] or pk[k] > pk0[k],
           f'6b. {k} carried over', f"{pk0[k]} -> {pk[k]}")
+
+# 7. topk retention is gone and must stay gone. A resumed run was the WORST case for it:
+# TopKCheckpointManager.path_value_map is rebuilt empty, so the first k val-producing
+# epochs were saved unconditionally and the pre-resume files were never deletion
+# candidates. Any epoch=*.ckpt here means the manager came back.
+ckpts = dst / 'checkpoints'
+topk_files = sorted(p.name for p in ckpts.glob('epoch=*.ckpt'))
+check(not topk_files, '7a. no epoch=*.ckpt written (topk retention stays removed)',
+      f'found {topk_files}' if topk_files else 'none')
+check((ckpts / 'latest.ckpt').is_file(),
+      '7b. latest.ckpt written -- this is what training.resume reads')
 
 print(f"\n=== {'ALL PASS' if not fails else str(len(fails)) + ' FAILURE(S): ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)

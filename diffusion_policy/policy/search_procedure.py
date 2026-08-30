@@ -516,7 +516,7 @@ class SearchProcedureMixin:
     # ------------------------------------------------------ per-slot observation noise
 
     _SLOT_OBS_NOISE_KEYS = frozenset(
-        {'mode', 'decay', 'timesteps', 'shape', 'base_range'})
+        {'mode', 'decay', 'timesteps', 'shape', 'base_range', 'max_t'})
     _SLOT_OBS_NOISE_MODES = ('uniform', 'linear_t', 'geometric', 'linear_signal', 'list',
                              'random_base')
     # Which profiles `random_base` may borrow its spacing from. `list` is excluded: an
@@ -553,7 +553,7 @@ class SearchProcedureMixin:
                              f'{cls._SLOT_OBS_NOISE_MODES}, got {mode!r}')
 
         spec = {'mode': mode, 'decay': None, 'timesteps': None,
-                'shape': None, 'base_range': None}
+                'shape': None, 'base_range': None, 'max_t': None}
         if mode == 'random_base':
             # The SHAPE supplies the profile; the base -- the timestep slot 0 sits at -- is
             # redrawn per sample, and the profile is rescaled into [0, base]. So slot 0's
@@ -577,6 +577,9 @@ class SearchProcedureMixin:
                                  f'shape: geometric, not shape: {shape}')
             # [lo, hi] the per-sample base is drawn from. hi == T-1 gives the full fixed
             # ladder; lo == 0 gives an entirely clean observation.
+            if sn.get('max_t') is not None:
+                raise ValueError('slot_obs_noise.max_t is for the FIXED shapes; '
+                                 'random_base sets its ceiling with base_range.')
             br = sn.get('base_range')
             if br is not None:
                 br = [int(x) for x in br]
@@ -588,6 +591,16 @@ class SearchProcedureMixin:
         if sn.get('shape') is not None or sn.get('base_range') is not None:
             raise ValueError(f'slot_obs_noise.shape / base_range only mean something under '
                              f'mode: random_base, not mode: {mode}')
+        # The ceiling on slot 0, in TIMESTEPS of the configured obs scheduler. Default None
+        # == the full range. It is what makes "linear_t with slot 0 at 400" an arm of its own
+        # rather than a different shape.
+        if sn.get('max_t') is not None:
+            if mode == 'uniform':
+                raise ValueError('slot_obs_noise.max_t means nothing with mode: uniform')
+            mt = int(sn['max_t'])
+            if mt <= 0:
+                raise ValueError(f'slot_obs_noise.max_t must be > 0, got {mt}')
+            spec['max_t'] = mt
         if mode == 'geometric':
             if sn.get('decay') is None:
                 raise ValueError("slot_obs_noise.mode: geometric needs a `decay` in (0, 1)")
@@ -624,6 +637,8 @@ class SearchProcedureMixin:
                 'arm, slot_obs_noise for the per-slot ladder.')
         name = type(self).__name__
         detail = spec['mode'] + (f" decay={spec['decay']}" if spec['decay'] is not None else '')
+        if spec['max_t'] is not None:
+            detail += f" max_t={spec['max_t']}"
         T = self.obs_noise_scheduler.config.num_train_timesteps
         t = self._slot_obs_timesteps()
         if t is None:
@@ -680,7 +695,19 @@ class SearchProcedureMixin:
         # levels are drawn per sample, so it registers its SHAPE instead (_slot_obs_shape).
         if (spec['mode'] in ('uniform', 'random_base')) or self.max_actions in (None, 1):
             return None
-        return self._slot_obs_profile(spec['mode'], spec, device=device)
+        t = self._slot_obs_profile(spec['mode'], spec, device=device)
+        if spec['max_t'] is None:
+            return t
+        # Compress the full-extent shape into [0, max_t]. Reuses random_base's own rescale,
+        # so a `linear_t max_t=400` arm and a `random_base` draw that happens to land on 400
+        # produce the identical ladder -- the two cannot drift.
+        T = self.obs_noise_scheduler.config.num_train_timesteps
+        if spec['max_t'] >= T:
+            raise ValueError(
+                f"slot_obs_noise.max_t={spec['max_t']} is not below the obs scheduler's "
+                f'num_train_timesteps={T}. max_t is an absolute timestep of THIS schedule, '
+                f'so it has to be re-derived if the schedule changes.')
+        return self.rescale_slot_timesteps(t, spec['max_t']).to(device=device)
 
     def _slot_obs_shape(self, device=None) -> Optional[torch.Tensor]:
         """The borrowed shape profile for ``mode: random_base``. Length K, in timesteps.

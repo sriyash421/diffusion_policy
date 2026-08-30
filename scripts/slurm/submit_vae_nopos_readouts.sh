@@ -36,15 +36,25 @@ cd "$(dirname "$0")/../.."
 SUBMIT="${SUBMIT:-}"
 ROOT="${DP_OUTPUT_ROOT:-/gscratch/robotics/harine/diffusion_policy_outputs}"/pusht_search
 TASK="${TASK_DIR:-pusht_image_search_imgonly}"
-N_LIST="${N_LIST:-1,8,16}"
+# n differs BY RULE. argmax is the success-vs-width curve and wants the whole sweep;
+# final_pass costs the same per level and only three points are asked for. Cost is linear
+# in n per level, so a full argmax sweep is ~2x its own largest level.
+N_LIST_ARGMAX="${N_LIST_ARGMAX:-1,2,4,8,16,32,64}"
+N_LIST_FINAL="${N_LIST_FINAL:-1,8,16}"
 N_ENVS="${N_ENVS:-50}"
 
 # Run dirs, relative to $ROOT/$TASK. The three clean baselines first: a ladder number with
-# nothing to compare it against says nothing.
+# nothing to compare it against says nothing. Then the five ladders, matching the eight arms
+# scripts/run_vae_nopos_30demo.sh trains.
 RUNS="
 unet_bc/unetbc_ver-t_goal_enc-vae_demos-30_seed-42
 offline/value_k1_ver-t_goal_enc-vae_demos-30_seed-42
 outer_inner/value_k16_ver-t_goal_enc-vae_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_son-lint999_enc-vae_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_son-lint400_enc-vae_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_son-linsig_enc-vae_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_son-geo7_enc-vae_demos-30_seed-42
+outer_inner/value_k16_ver-t_goal_son-rndlinsig_enc-vae_demos-30_seed-42
 "
 
 # label:flags. The label goes in the job name only; the OUTPUT directory comes from
@@ -58,6 +68,10 @@ RULES=(
 )
 # A clean-trained arm has no ladder, so --corrupt-obs-eval is a no-op on it and the two
 # rows would be the same experiment recorded twice. Baselines get the clean rules only.
+#
+# `random_base` also takes the clean rules, for a different reason: its level is drawn per
+# sample, so "eval with the same noise as training" is not a defined condition -- there is no
+# single ladder to reproduce.
 CLEAN_RULES=(
   "argmax-clean:--selection argmax --no-corrupt-obs-eval"
   "final_pass-clean:--selection final_pass --no-corrupt-obs-eval"
@@ -72,10 +86,12 @@ for rel in $RUNS; do
     if [ ! -d "$dir/checkpoints" ]; then
         printf '%-52s %s\n' "$run" "no checkpoints yet, skipping"; continue
     fi
-    # Ladder arms carry _son- in the name; only those get the corrupted rows.
+    # FIXED ladder arms carry _son- and get the corrupted rows too. Baselines have no
+    # ladder; random_base has no reproducible one. Both take the clean rules only.
     case "$run" in
-        *_son-*) rules=("${RULES[@]}") ;;
-        *)       rules=("${CLEAN_RULES[@]}") ;;
+        *_son-rndlinsig*) rules=("${CLEAN_RULES[@]}") ;;
+        *_son-*)          rules=("${RULES[@]}") ;;
+        *)                rules=("${CLEAN_RULES[@]}") ;;
     esac
     for rule in "${rules[@]}"; do
         label="${rule%%:*}"; flags="${rule#*:}"
@@ -90,12 +106,25 @@ for rel in $RUNS; do
             printf '%-52s %-20s %s\n' "$run" "$label" "already evaluating, skipping"; continue
         fi
         if [ -z "$SUBMIT" ]; then
-            printf '%-52s %-20s WOULD SUBMIT -> %s\n' "$run" "$label" "$sub"; n=$((n+1)); continue
+            case "$sel" in
+                argmax) nl="$N_LIST_ARGMAX" ;;
+                *)      nl="$N_LIST_FINAL"  ;;
+            esac
+            printf '%-52s %-18s n=%-16s -> %s\n' "$run" "$label" "$nl" "$sub"
+            n=$((n+1)); continue
         fi
-        read -r A P < <(bash scripts/slurm/pick_gpu.sh) || { echo "no free GPU for $name" >&2; continue; }
-        jid=$(sbatch --parsable --account="$A" --partition="$P" --job-name="$name" \
+        # NO pick_gpu.sh here. eval_watch_pusht_search.sbatch declares
+        # `--partition=ckpt --account=robotics` itself, and eval belongs on the preemptible
+        # checkpoint partition so the guaranteed robotics/weirdlab GPUs stay free for
+        # training. Overriding it with pick_gpu (which is the TRAINING allocator) put eval
+        # on those very GPUs.
+        case "$sel" in
+            argmax) nl="$N_LIST_ARGMAX" ;;
+            *)      nl="$N_LIST_FINAL"  ;;
+        esac
+        jid=$(sbatch --parsable --job-name="$name" \
               scripts/slurm/eval_watch_pusht_search.sbatch "$dir" \
-              --n-list "$N_LIST" --n-envs "$N_ENVS" --skip-val --wandb $flags)
+              --n-list "$nl" --n-envs "$N_ENVS" --skip-val --wandb $flags)
         printf '%-52s %-20s submitted %s\n' "$run" "$label" "$jid"
         n=$((n+1))
     done

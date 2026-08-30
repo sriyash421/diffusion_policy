@@ -167,12 +167,17 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         was_training = policy.training
         policy.eval()
         try:
+            # BOTH snapshots get the SAME obs features -- the ones the analysed forward
+            # actually used. Exact because the encoder is frozen: the two snapshots hold the
+            # identical backbone, so re-encoding would just compute the same tensor twice,
+            # at the centre crop rather than the training crop the loss saw.
+            obs_features = aux.get('obs_features')
             eps_new = policy.predict_epsilon(
                 batch, aux['actions'], aux['values'],
-                aux['noisy_trajectory'], aux['timesteps'])
+                aux['noisy_trajectory'], aux['timesteps'], obs_features=obs_features)
             eps_old = collector.predict_epsilon(
                 batch, aux['actions'], aux['values'],
-                aux['noisy_trajectory'], aux['timesteps'])
+                aux['noisy_trajectory'], aux['timesteps'], obs_features=obs_features)
         finally:
             if was_training:
                 policy.train()
@@ -207,7 +212,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
 
     # ------------------------------------------------------------------ context buffer
 
-    def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size):
+    def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size,
+                             n_crops=1):
         """Generate the search context AND the encoded observation for every window, once.
 
         Returns ``(actions, values, obs_features, window)``. Fetched and generated in chunks
@@ -220,15 +226,26 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         the inner loop must re-read (and re-encode) the images anyway.
 
         THE ENCODED OBSERVATION IS KEPT TOO, when the backbone is frozen. Caching the raw
-        image windows would cost GBs; caching their features is ``outer_batch_size x
-        n_obs_steps x D`` floats -- 256 x 2 x 324 x 4 B = 663 kB -- and it removes the
-        ``inner_epochs`` re-encodes of every pool window, which on a frozen 34.2M-parameter
-        VAE is the dominant per-update cost once the search is amortized. It also PINS THE
-        CROP for the pool, which is the fix for the buffered-subgoal mis-registration: the
-        observation and the subgoals predicted from it now carry the same offset by
-        construction. Cost: a window is cropped the same way for all of its inner passes
-        instead of getting a fresh crop each time. See ``_can_cache_obs`` for why the freeze
-        is load-bearing.
+        image windows would cost GBs; caching their features is
+        ``n_crops x outer_batch_size x n_obs_steps x D`` floats -- 4 x 256 x 2 x 324 x 4 B =
+        2.65 MB.
+
+        ``n_crops`` IS WHAT KEEPS THE ARMS COMPARABLE, and is the whole reason this is not a
+        single cached pass. Each pool window is used once per ``inner_epoch``, so encoding it
+        once would pin ONE crop for all of its inner passes -- while the BC arm
+        (``unet_bc``) and ST k=1 (``offline``) draw a fresh crop every gradient step. That
+        would make "BC vs ST k=1 vs ST k=16" vary crop augmentation as well as algorithm, on
+        exactly the baseline comparison the experiment rests on. So the pool is encoded once
+        PER INNER EPOCH, each pass under its own crop, and epoch ``e`` reads row ``e``.
+
+        It is still cheaper than not caching, which is the happy part: at 256/32/4 the
+        uncached path pays 256 fill + 1024 inner = 1280 window-encodes, and this pays 1024
+        with none in the inner loop -- and the inner loop keeps skipping the dataset read
+        entirely. See ``_can_cache_obs`` for why the freeze is load-bearing.
+
+        The SEARCH still runs exactly once per chunk, on the first pass's crop. It is the
+        expensive half (``max_actions - 1`` samples plus a verifier rollout each) and
+        re-running it per crop would defeat the point of amortizing it.
 
         WIDTH 1: there is no context to buffer -- ``generate_search_context`` would ask for
         ``max_actions - 1 = 0`` candidates and return ``(None, None)``, which ``torch.cat``
@@ -241,7 +258,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         but the width itself.
         """
         cache = _can_cache_obs(policy)
-        feats = list()
+        n_crops = max(1, int(n_crops)) if cache else 1
+        # feats[e] is the whole pool encoded under crop pass e, assembled chunk by chunk.
+        feats = [list() for _ in range(n_crops)]
         window = {'action': list(), 'obs': {k: list() for k in _WINDOW_OBS_KEYS}}
         actions, values = list(), list()
         want_context = policy.max_actions != 1
@@ -258,29 +277,38 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                     idxs = pool[start:start + chunk_size]
                     batch = collate([dataset[int(i)] for i in idxs])
                     batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                    # Advance the crop step PER CHUNK. The offsets are a pure function of
-                    # (seed, step), so without this every chunk of the pool would draw the
-                    # identical 32 offsets and the pool would carry only chunk_size distinct
-                    # crops instead of outer_batch_size.
-                    if hasattr(policy, 'set_crop_step'):
-                        policy.set_crop_step(self.cfg.training.seed,
-                                             self.global_step + start)
-                    # One crop scope per chunk, so the obs encode and every subgoal generated
-                    # from it share an offset -- the same guarantee the offline trainer gets
-                    # for free by generating the context inside one forward pass.
-                    # no_grad: these features are buffered (detached, moved to CPU) and
-                    # the search below builds no graph either, so the only thing autograd
-                    # could do here is record a graph for the whole pool and throw it
-                    # away. Free on the frozen SD-VAE, real memory on a trainable backbone.
-                    with torch.no_grad(), policy._crop_scope():
-                        chunk_feats = policy._encode_obs_features(batch['obs'])
-                        if want_context:
-                            chunk_actions, chunk_values = policy.generate_search_context(
-                                batch['obs'], obs_features=chunk_feats)
-                            actions.append(chunk_actions)
-                            values.append(chunk_values)
+                    for e in range(n_crops):
+                        # Advance the crop step per CHUNK and per PASS. The offsets are a
+                        # pure function of (seed, step), so a shared step would give every
+                        # chunk the same 32 offsets, and a step that ignored `e` would give
+                        # all n_crops passes the identical crop -- defeating the point.
+                        # len(pool) spaces the passes so they cannot collide with `start`.
+                        if hasattr(policy, 'set_crop_step'):
+                            policy.set_crop_step(
+                                self.cfg.training.seed,
+                                self.global_step + start + e * len(pool))
+                        # One crop scope per pass, so the obs encode and every subgoal
+                        # generated from it share an offset -- the guarantee the offline
+                        # trainer gets for free by generating its context in one forward.
+                        # no_grad: these features are buffered (detached, moved to CPU) and
+                        # the search builds no graph either, so the only thing autograd
+                        # could do is record a graph for the whole pool and throw it away.
+                        with torch.no_grad(), policy._crop_scope():
+                            chunk_feats = policy._encode_obs_features(batch['obs'])
+                            # ONCE, on the first pass. The search is the expensive half and
+                            # is reused across every inner epoch by design; re-running it
+                            # per crop would undo the amortization this trainer exists for.
+                            if want_context and e == 0:
+                                chunk_actions, chunk_values = \
+                                    policy.generate_search_context(
+                                        batch['obs'], obs_features=chunk_feats)
+                                actions.append(chunk_actions)
+                                values.append(chunk_values)
+                        if cache:
+                            feats[e].append(chunk_feats.detach().cpu())
+                        if not cache:
+                            break
                     if cache:
-                        feats.append(chunk_feats.detach().cpu())
                         # The rest of what an inner step needs from the window, kept
                         # alongside the features so the inner loop can skip the dataset
                         # entirely. `action` is the loss target; agent_pos/feedback are the
@@ -296,7 +324,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         finally:
             if was_training:
                 policy.train()
-        obs_feats = torch.cat(feats, dim=0) if cache else None
+        # (n_crops, N, To, D) -- row e is the pool under crop pass e.
+        obs_feats = (torch.stack([torch.cat(f, dim=0) for f in feats], dim=0)
+                     if cache else None)
         buf_window = None
         if cache:
             buf_window = {
@@ -475,9 +505,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 pool_rng = np.random.default_rng([cfg.training.seed, self.epoch])
                 pool = pool_rng.choice(
                     len(dataset), size=outer_bs, replace=outer_bs > len(dataset))
+                # n_crops = inner_epochs: one cached crop per pass a window will get, so
+                # the k=16 arms see the same crop diversity as BC and ST k=1.
                 buf_actions, buf_values, buf_feats, buf_window = \
                     self._fill_context_buffer(
-                        policy, dataset, collate, pool, device, buffer_chunk)
+                        policy, dataset, collate, pool, device, buffer_chunk,
+                        n_crops=inner_epochs)
 
                 # ======== inner: reuse that buffer for inner_epochs passes ============
                 self.model.train()
@@ -501,11 +534,17 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         # training thread (~113 MB of memcpy), was pure overhead on every
                         # step that is not a drift step.
                         #
-                        # Drift steps DO need it: _drift_mse -> predict_epsilon re-encodes
-                        # batch['obs'] on both snapshots by design. So does the sampling
-                        # batch captured once below. Everything else takes the buffer.
-                        need_window = (buf_window is None or want_aux
+                        # Drift steps no longer need it either: predict_epsilon now takes
+                        # the features from `aux` instead of re-encoding, so nothing on a
+                        # drift step reads batch['obs']. Only the sampling batch captured
+                        # once below still does. When the features are NOT cached,
+                        # buf_window is None and this is True anyway, which is the case
+                        # where predict_epsilon does re-encode.
+                        need_window = (buf_window is None
                                        or train_sampling_batch is None)
+                        # Hoisted: the cached-feature lookup below needs it on EVERY step,
+                        # not only on the branch that reads the window buffer.
+                        sel_cpu = torch.as_tensor(sel, dtype=torch.long)
                         if need_window:
                             batch = collate([dataset[int(pool[p])] for p in sel])
                             batch = dict_apply(
@@ -513,7 +552,6 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             if train_sampling_batch is None:
                                 train_sampling_batch = batch
                         else:
-                            sel_cpu = torch.as_tensor(sel, dtype=torch.long)
                             batch = {
                                 'action': buf_window['action'][sel_cpu].to(
                                     device, non_blocking=True),
@@ -528,11 +566,10 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         # augmentation at all.
                         #
                         # Only meaningful when the obs is re-encoded here, i.e. when the
-                        # pool's features were NOT cached. With the cache the crop is
-                        # whatever the buffer fill drew, which is the point: the observation
-                        # and the subgoals predicted from it then share one offset, instead
-                        # of the buffer holding centre-cropped subgoals against a randomly
-                        # cropped obs.
+                        # pool's features were NOT cached. With the cache the crop is the
+                        # one the fill drew for THIS inner epoch -- a different one per
+                        # epoch, so the window still sees `inner_epochs` distinct crops --
+                        # and the observation and the subgoals predicted from it share it.
                         if buf_feats is None and hasattr(policy, 'set_crop_step'):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
                         # beside set_crop_step so the crop offset and the
@@ -543,8 +580,11 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             batch,
                             actions=None if buf_actions is None else buf_actions[sel_t],
                             values=None if buf_values is None else buf_values[sel_t],
+                            # Row `epoch_idx`: this window's crop for this pass. Indexing
+                            # the wrong row would silently train on another epoch's crop --
+                            # not an error, just a quietly different augmentation.
                             obs_features=(None if buf_feats is None
-                                          else buf_feats[sel_t.cpu()].to(device)),
+                                          else buf_feats[epoch_idx][sel_cpu].to(device)),
                             return_aux=want_aux)
                         raw_loss, aux = result if want_aux else (result, None)
 

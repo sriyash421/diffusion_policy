@@ -28,6 +28,14 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 SHAPES="${SHAPES:-linear_t geometric linear_signal}"
+# Slot-0 base per shape. 999 = full extent, which is the arm every shape is trained at;
+# linear_t additionally has the 400 variant (arm 2a), and linear_signal carries the sweep
+# that the random_base range is read off.
+DEFAULT_BASES="${DEFAULT_BASES:-999}"
+declare -A BASES_FOR_SHAPE=(
+  [linear_t]="999 400"
+  [linear_signal]="999 800 600 400"
+)
 # geometric only. 0.7 is the decay the configs and unit tests use as their example. On the
 # 1000-step schedule it is badly degenerate (1099x spread in retained signal, 6 of 15 adjacent
 # slot pairs indistinguishable) -- rendered anyway, because seeing that is the point of
@@ -43,48 +51,32 @@ for shape in $SHAPES; do
         *)         dir=media/obs_latent_$shape ;;
     esac
     mkdir -p "$dir"
-    out="$dir/obs_latents"
-    if [ -f "$out.png" ] && [ -f "$out.json" ]; then
-        printf '%-40s %s\n' "$out" "already rendered, skipping"; continue
-    fi
-    ov=(-o "slot_obs_noise.mode=$shape")
-    [ "$shape" = geometric ] && ov+=(-o "+slot_obs_noise.decay=$DECAY")
-    printf '%-40s %s\n' "$out" "mode=$shape"
-    python scripts/decode_obs_latents.py "${ov[@]}" \
-        --n-samples "$NS" --device "$DEV" --out "$dir" --name "obs_latents" 2>&1 \
-        | sed 's/^/    /' \
-        || printf '%-40s %s\n' "" "FAILED (see above)"
-done
-
-# ---------------------------------------------------------------- random_base base sweep
-# `random_base` draws slot 0's level per sample and rescales the shape into [0, base], so it
-# has no single ladder to show. Pinning `base_range: [N, N]` makes the draw deterministic at
-# N, which renders exactly the ladder that base produces -- one panel per candidate, so the
-# noise_cap can be read off the images.
-#
-# The timesteps are NOT computed here. Passing base_range and letting the policy derive the
-# ladder from its own scheduler is what stops this script from disagreeing with the run --
-# the failure the `mode: list` version of this driver had when the schedule moved to T=1000.
-BASES="${BASES:-999 800 600 400}"
-RB_SHAPE="${RB_SHAPE:-linear_signal}"
-if [ -n "${BASES// /}" ]; then
-    dir=media/obs_latent_random_base
-    mkdir -p "$dir"
-    for base in $BASES; do
+    # One panel per slot-0 base, TAGGED BY IT: obs_latents<BASE>.{png,json}. 999 is the
+    # shape at full extent; a lower base is the same shape compressed by `max_t`, which is
+    # how arm 2a's 400 variant is expressed. `random_base` gets no folder of its own -- it is
+    # not a shape, it is one of these shapes with the base drawn per sample, so its panels
+    # belong with the shape it borrows.
+    for base in ${BASES_FOR_SHAPE[$shape]:-$DEFAULT_BASES}; do
         out="$dir/obs_latents$base"
         if [ -f "$out.png" ] && [ -f "$out.json" ]; then
             printf '%-40s %s\n' "$out" "already rendered, skipping"; continue
         fi
-        printf '%-40s %s\n' "$out" "random_base shape=$RB_SHAPE base pinned at $base"
-        python scripts/decode_obs_latents.py \
-            -o slot_obs_noise.mode=random_base \
-            -o "+slot_obs_noise.shape=$RB_SHAPE" \
-            -o "+slot_obs_noise.base_range=[$base,$base]" \
-            --n-samples "$NS" --device "$DEV" \
-            --out "$dir" --name "obs_latents$base" 2>&1 \
+        ov=(-o "slot_obs_noise.mode=$shape")
+        [ "$shape" = geometric ] && ov+=(-o "+slot_obs_noise.decay=$DECAY")
+        # 999 is the full extent, i.e. no ceiling at all -- max_t would be a no-op and the
+        # policy rejects max_t >= T anyway.
+        [ "$base" != 999 ] && ov+=(-o "+slot_obs_noise.max_t=$base")
+        printf '%-40s %s\n' "$out" "mode=$shape slot0=$base"
+        python scripts/decode_obs_latents.py "${ov[@]}" \
+            --n-samples "$NS" --device "$DEV" --out "$dir" --name "obs_latents$base" 2>&1 \
             | sed 's/^/    /' \
             || printf '%-40s %s\n' "" "FAILED (see above)"
     done
-fi
+done
+
+# NO separate random_base sweep. Its panels are the linear_signal ones above: pinning the
+# base to N renders exactly the ladder `random_base` produces when it draws N, and `max_t=N`
+# on the borrowed shape gives the identical profile (unit_tests/test_slot_obs_noise.py
+# asserts that equality). One folder per shape, tagged by slot-0 base.
 
 echo "PANELS DONE"

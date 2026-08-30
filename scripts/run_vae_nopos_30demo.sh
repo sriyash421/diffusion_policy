@@ -37,10 +37,35 @@ PY="${DP_PY:-python}"
 # n_candidates=1 IS LOAD-BEARING on the k=1 arm: train_pusht_diffusion_search_single pins the
 # single-step TRAINER, not width 1, and inherits n_candidates: 16 from the search master.
 # Without it the k=1 arm trains at width 16 under a name that says k1.
+# THE EIGHT ARMS. Three baselines, then five ladders -- every ladder is ST k=16 with uniform
+# slot weights, so arm 3 is their control and the only thing that varies is the ladder.
+#
+# EVERY LADDER SETS THREE LABELS TOGETHER: son_suffix (the run DIRECTORY, since run_name IS
+# hydra.run.dir and two ladders sharing a name would resume each other), son_tag and
+# obs_noise_tag (the wandb tags). _check_obs_noise_labels refuses to start if any of them
+# disagrees with policy.slot_obs_noise, so a forgotten one is a startup error, not a silently
+# mislabelled run.
+#
+# The obs corruption schedule is TMRL's VLA one (T=1000, beta 1e-4->0.02) and lives in
+# train_pusht_diffusion_search.yaml, so `max_t` and `base_range` below are absolute timesteps
+# of THAT schedule -- they must be re-derived if it ever changes.
+LADDER_TAGS='son_suffix=%s son_tag=%s obs_noise_tag=obs_noised'
 ARMS=(
+  # --- baselines: no ladder ---
   "train_pusht_unet_bc|"
   "train_pusht_diffusion_search_single|n_candidates=1"
   "train_pusht_diffusion_search|n_candidates=16"
+  # --- 2a linear in t, slot 0 at the full 999 and compressed to 400 ---
+  "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=linear_t son_suffix=_son-lint999 son_tag=linear_t-999 obs_noise_tag=obs_noised"
+  "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=linear_t +slot_obs_noise.max_t=400 son_suffix=_son-lint400 son_tag=linear_t-400 obs_noise_tag=obs_noised"
+  # --- 2b linear in retained signal (sqrt(alpha_bar)) ---
+  "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=linear_signal son_suffix=_son-linsig son_tag=linear_signal obs_noise_tag=obs_noised"
+  # --- 2c geometric in t. Degenerate on T=1000 (6/15 adjacent pairs indistinguishable);
+  #     it is the shape-comparison control, not a contender. The startup print warns.
+  "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=geometric +slot_obs_noise.decay=0.7 son_suffix=_son-geo7 son_tag=geometric-0.7 obs_noise_tag=obs_noised"
+  # --- 2d slot 0 drawn per sample over the WHOLE range, including 0 (sometimes no noise
+  #     at all), with the linear-in-signal shape rescaled into [0, base] ---
+  "train_pusht_diffusion_search|n_candidates=16 slot_obs_noise.mode=random_base +slot_obs_noise.shape=linear_signal +slot_obs_noise.base_range=[0,999] son_suffix=_son-rndlinsig son_tag=random_base-linsig obs_noise_tag=obs_noised"
 )
 
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)

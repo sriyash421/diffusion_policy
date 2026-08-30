@@ -305,6 +305,50 @@ def test_linear_t_is_badly_uneven_on_the_long_schedule():
     assert float(step.max() / step.min()) > 10.0
 
 
+# ------------------------------------------------------------------------ max_t
+#
+# The ceiling on slot 0, in timesteps of the configured scheduler. It is what turns
+# "linear_t with slot 0 at 400" into an arm of its own rather than a different shape.
+
+def test_max_t_compresses_the_shape():
+    full = _stub_on(1000, 1e-4, 0.02, {'mode': 'linear_t'})._slot_obs_timesteps()
+    capped = _stub_on(1000, 1e-4, 0.02,
+                      {'mode': 'linear_t', 'max_t': 400})._slot_obs_timesteps()
+    assert int(full[0]) == 999, full[0]
+    assert int(capped[0]) == 400, 'slot 0 must land exactly on max_t'
+    assert int(capped[-1]) == 0, 'slot K-1 must stay clean'
+    assert bool((capped[1:] <= capped[:-1]).all()), 'still monotone'
+
+
+def test_max_t_matches_random_base_at_the_same_level():
+    """The two must not drift: both go through rescale_slot_timesteps."""
+    s = _stub_on(1000, 1e-4, 0.02, {'mode': 'linear_t', 'max_t': 400})
+    rb = _stub_on(1000, 1e-4, 0.02, {'mode': 'random_base', 'shape': 'linear_t'})
+    assert torch.equal(s._slot_obs_timesteps(),
+                       rb.rescale_slot_timesteps(rb._slot_obs_shape(), 400))
+
+
+def test_max_t_validation():
+    for cfg, frag in (
+        ({'mode': 'random_base', 'shape': 'linear_t', 'max_t': 400}, 'random_base sets'),
+        ({'mode': 'uniform', 'max_t': 400}, 'nothing with mode: uniform'),
+        ({'mode': 'linear_t', 'max_t': 0}, 'must be > 0'),
+    ):
+        try:
+            _stub_on(1000, 1e-4, 0.02, cfg)
+        except ValueError as e:
+            assert frag in str(e), f'{cfg}: wrong message {e}'
+        else:
+            raise AssertionError(f'{cfg} should have raised')
+    # a ceiling at or above the schedule length is a schedule mismatch, not a clamp
+    try:
+        _stub_on(100, 0.001, 0.02, {'mode': 'linear_t', 'max_t': 400})._slot_obs_timesteps()
+    except ValueError as e:
+        assert 'num_train_timesteps' in str(e), e
+    else:
+        raise AssertionError('max_t >= T should raise')
+
+
 def pytest_approx(x, tol=1e-4):
     class _A:
         def __eq__(self, other): return abs(other - x) < tol
