@@ -116,6 +116,15 @@ corrupt_suffix: ''               # e.g. '_corrupt'
 # silently dropped `enc-`, the obs-noise tags and `verifier-` from their runs.
 family_tag: search
 
+# One wandb tag naming the TRAINING GENERATION -- the backbone era these weights belong to.
+# A scalar for the same reason family_tag is one: a master (or a launcher) can mark its runs
+# without replacing logging.tags wholesale, which is how arms silently lose their labels.
+# 'rnE2E' == ResNet18 trained END TO END, the default restored on 2026-08-30. It is NOT
+# derived from encoder_tag: `enc-resnet18` says which backbone, this says how it was trained,
+# and the frozen-encoder arms share the former while differing in the latter. Set it
+# alongside encoder_tag whenever the backbone or the freeze changes.
+gen_tag: rnE2E
+
 exp_name: pusht_search
 
 # Training-set size in DEMONSTRATIONS. Selects the split manifest
@@ -346,7 +355,7 @@ logging:
   # this key, so no arm can lose the verifier, encoder or obs-noise labels by accident.
   tags: ["${name}", "${task_name}", "${exp_name}", "${family_tag}",
          "verifier-${verifier_tag}", "enc-${encoder_tag}",
-         "${obs_noise_tag}", "son-${son_tag}"]
+         "${obs_noise_tag}", "son-${son_tag}", "${gen_tag}"]
   id: null
 
 checkpoint:

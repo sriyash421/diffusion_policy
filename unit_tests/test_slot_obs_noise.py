@@ -349,6 +349,51 @@ def test_max_t_validation():
         raise AssertionError('max_t >= T should raise')
 
 
+# ------------------------------------------------- the dispatch every mode has to pass
+#
+# The ladder is reached through TWO buffers: the fixed shapes register `slot_obs_t`,
+# `random_base` registers `slot_obs_shape` and leaves `slot_obs_t` None by construction. A
+# dispatch that tests `slot_obs_t` alone therefore sends random_base down the FLAT path,
+# where corrupt_obs is False (the two are mutually exclusive) and the corruption is the
+# identity -- the arm trains entirely clean while the startup print announces its ladder.
+# That was live in _compute_loss. `slot_ladder_on` is the single predicate both sites read.
+
+
+def _ladder_on(cfg):
+    """`slot_ladder_on` evaluated on the real policy, without building one."""
+    from diffusion_policy.policy.diffusion_transformer_search_policy import (
+        DiffusionTransformerSearchPolicy)
+    stub = _Stub(cfg)
+    p = object.__new__(DiffusionTransformerSearchPolicy)
+    p.slot_obs_t = stub._slot_obs_timesteps()
+    p.slot_obs_shape = stub._slot_obs_shape()
+    return p.slot_ladder_on
+
+
+def test_every_non_uniform_mode_is_ladder_on():
+    """random_base included -- it is the one whose fixed-ladder buffer is always None."""
+    for cfg in (*SHAPES.values(), RANDOM_BASE,
+                {'mode': 'random_base', 'shape': 'linear_t'},
+                {'mode': 'random_base', 'shape': 'geometric', 'decay': 0.7},
+                {'mode': 'linear_signal', 'max_t': 40},
+                {'mode': 'list', 'timesteps': list(range(K - 1, -1, -1))}):
+        assert _ladder_on(cfg), f'{cfg} must take the slotwise path, not the flat one'
+
+
+def test_uniform_and_width_one_are_ladder_off():
+    """Off must stay off: no buffers, so the state_dict of an unladdered arm is unchanged."""
+    assert not _ladder_on({'mode': 'uniform'})
+    assert not _ladder_on(None)
+
+
+def test_random_base_registers_only_the_shape_buffer():
+    """The asymmetry the bug turned on, pinned so a refactor cannot quietly reverse it."""
+    s = _Stub(RANDOM_BASE)
+    assert s._slot_obs_timesteps() is None and s._slot_obs_shape() is not None
+    f = _Stub(SHAPES['linear_signal'])
+    assert f._slot_obs_timesteps() is not None and f._slot_obs_shape() is None
+
+
 def pytest_approx(x, tol=1e-4):
     class _A:
         def __eq__(self, other): return abs(other - x) < tol

@@ -39,8 +39,18 @@ TASK="${TASK_DIR:-pusht_image_search_imgonly}"
 # n differs BY RULE. argmax is the success-vs-width curve and wants the whole sweep;
 # final_pass costs the same per level and only three points are asked for. Cost is linear
 # in n per level, so a full argmax sweep is ~2x its own largest level.
-N_LIST_ARGMAX="${N_LIST_ARGMAX:-1,2,4,8,16,32,64}"
-N_LIST_FINAL="${N_LIST_FINAL:-1,8,16}"
+# n=1 ONLY. Cost is linear in n, so the full power-of-two sweep is 1+2+...+64 = 127 units
+# per checkpoint against 1 -- and n=1 is the number this experiment is being read on (whether
+# a single sample from the conditional succeeds, which is what separates frozen from trainable
+# encoders; higher n measures how well the verifier can rank draws, a different question).
+# Override to restore the full curve:  N_LIST_ARGMAX=1,2,4,8,16,32,64 N_LIST_FINAL=1,8,16
+#
+# final_pass at n=1 is the SAME measurement as argmax at n=1 -- one candidate, so "the
+# verifier's pick" and "the last one generated" are the same action, on the same seed stream
+# (_episode_seed keys on n). It is kept only so the two rule directories stay populated; it
+# costs 1 unit.
+N_LIST_ARGMAX="${N_LIST_ARGMAX:-1}"
+N_LIST_FINAL="${N_LIST_FINAL:-1}"
 N_ENVS="${N_ENVS:-50}"
 
 # Run dirs, relative to $ROOT/$TASK. The three clean baselines first: a ladder number with

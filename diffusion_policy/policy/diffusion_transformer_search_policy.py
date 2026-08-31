@@ -865,6 +865,15 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         else:
             self.obs_feature_std.mul_(0.99).add_(std, alpha=0.01)
 
+    @property
+    def slot_ladder_on(self) -> bool:
+        """Is a per-slot obs ladder registered? Both buffers, because only ONE of them ever
+        is: the fixed shapes register `slot_obs_t`, `random_base` registers `slot_obs_shape`
+        and has no fixed ladder by construction. Every dispatch reads this rather than a
+        buffer, so no call site can answer the question for only half the modes.
+        """
+        return self.slot_obs_t is not None or self.slot_obs_shape is not None
+
     def corrupt_obs_features_slotwise(self, obs_features, slot=None):
         """Apply the per-slot ladder to encoded obs features.
 
@@ -879,7 +888,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         ``corrupt_obs_features`` -- with the caveat that evaluating clean means the slot ->
         level mapping the model trained under does not hold at rollout.
         """
-        if self.slot_obs_t is None and self.slot_obs_shape is None:
+        if not self.slot_ladder_on:
             return obs_features
         if not self.training and not self.corrupt_obs_eval:
             return obs_features
@@ -1120,7 +1129,13 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             obs_features = self._encode_obs_features(batch['obs'])
         # (B, To, D) flat, or (B, K, To, D) under the ladder -- one conditioning view per
         # candidate slot, same observation and same noise sample, graded level.
-        if self.slot_obs_t is None:
+        # BOTH buffers, not just slot_obs_t: under `random_base` the fixed ladder is None
+        # by construction and the profile lives in slot_obs_shape, so testing slot_obs_t
+        # alone sent that mode down the flat path -- where corrupt_obs is False (the two are
+        # mutually exclusive) and the corruption is the identity. It trained entirely clean
+        # while the startup print announced the ladder. Same guard as
+        # corrupt_obs_features_slotwise.
+        if not self.slot_ladder_on:
             obs_cond = self.corrupt_obs_features(obs_features)
         else:
             obs_cond = self.corrupt_obs_features_slotwise(obs_features)
