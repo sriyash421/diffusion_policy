@@ -33,37 +33,42 @@ VER = 't_goal'
 BASE = ROOT / 'pusht_search' / 'pusht_image_search_imgonly'
 SUF = f'ver-{VER}'
 
-# (section, note, [(arm label, run dir)])
-GROUPS = [
-    ('ResNet18, trainable (reference)',
+# (encoder tag, label, note) -- the 2x2 of encoder x freeze, rendered once per budget.
+ENCODERS = [
+    ('resnet18', 'ResNet18, trainable',
      'ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. The '
-     'target: reproduces `success_rates_no_pos.md` and so tests the speedup revert.',
-     [('UNet BC', BASE / 'unet_bc' / f'unetbc_{SUF}_enc-resnet18_demos-30_seed-42'),
-      ('ST k=1', BASE / 'offline' / f'value_k1_{SUF}_enc-resnet18_demos-30_seed-42')]),
-    ('ResNet18, frozen',
-     'The same ResNet18, `training.freeze_encoder=True`, so 11.2M encoder parameters are '
-     'held out of the optimizer. Against trainable ResNet this asks whether freezing breaks '
-     'ANY encoder; against the frozen VAE it is capacity-matched (both leave the policy the '
-     'same trainable parameters), so that contrast reads on the FEATURES alone. Caveat: '
-     '`use_group_norm=True` replaced the pretrained BatchNorm with freshly built GroupNorm, '
-     'so this freezes never-trained normalization at identity init and discards ImageNet\'s '
-     'running statistics -- it is a controlled freeze-vs-trainable contrast, not "frozen '
-     'ImageNet features" in the literature sense.',
-     [('UNet BC', BASE / f'unet_bc/unetbc_{SUF}_enc-resnet18-frozen_demos-30_seed-42'),
-      ('ST k=1', BASE / f'offline/value_k1_{SUF}_enc-resnet18-frozen_demos-30_seed-42')]),
-    ('SD VAE, trainable',
-     'The same encoder, `trainable=True`, trained end to end. Against the frozen column '
-     'this isolates the FREEZE. A debug configuration only: a drifting encoder stops '
-     'producing SD latents, which is what the corruption ladder and the latent decoder '
-     'both rest on.',
-     [('UNet BC', BASE / 'unet_bc' / f'unetbc_{SUF}_enc-vae-ft_demos-30_seed-42'),
-      ('ST k=1', BASE / 'offline' / f'value_k1_{SUF}_enc-vae-ft_demos-30_seed-42')]),
-    ('SD VAE, frozen',
-     'Frozen `sd-vae-ft-mse`, 324-d at the 72x72 crop, 34,163,664 parameters held out of '
-     'the optimizer. Against ResNet18 this isolates the ENCODER.',
-     [('UNet BC', BASE / 'unet_bc' / f'unetbc_{SUF}_enc-vae_demos-30_seed-42'),
-      ('ST k=1', BASE / 'offline' / f'value_k1_{SUF}_enc-vae_demos-30_seed-42')]),
+     'reference: at 30 demos it reproduces `success_rates_no_pos.md`, which is what '
+     'validates the revert of the 2026-08-30 speedup pass.'),
+    ('resnet18-frozen', 'ResNet18, frozen',
+     '`training.freeze_encoder=True`, so 11.2M encoder parameters are held out of the '
+     'optimizer. Against trainable ResNet this asks whether freezing breaks ANY encoder. '
+     'Caveat: `use_group_norm` replaced the pretrained BatchNorm with freshly built '
+     "GroupNorm, so this freezes never-trained normalization at identity init and discards "
+     "ImageNet's running statistics -- a controlled freeze-vs-trainable contrast, not "
+     '"frozen ImageNet features" in the literature sense.'),
+    ('vae-ft', 'SD VAE, trainable',
+     '`sd-vae-ft-mse` with `trainable=True`, 324-d at the 72x72 crop, trained end to end. '
+     'Against trainable ResNet this isolates the ENCODER with neither one frozen.'),
+    ('vae', 'SD VAE, frozen',
+     'The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Against '
+     'trainable VAE this isolates the FREEZE; against frozen ResNet it is capacity-matched '
+     '(5.89M vs 5.94M trainable on ST k=1), so that contrast reads on the FEATURES alone.'),
 ]
+
+BUDGETS = [30, 126]
+
+
+def groups():
+    """One section per (budget, encoder), so the square reads down and across."""
+    for demos in BUDGETS:
+        for tag, label, note in ENCODERS:
+            yield (f'{demos} demos - {label}', note, [
+                ('UNet BC', BASE / 'unet_bc' /
+                 f'unetbc_{SUF}_enc-{tag}_demos-{demos}_seed-42'),
+                ('ST k=1', BASE / 'offline' /
+                 f'value_k1_{SUF}_enc-{tag}_demos-{demos}_seed-42'),
+            ])
+
 
 READOUTS = [('argmax', 'bon_search_sel-argmax_obs-clean'),
             ('final_pass', 'bon_search_sel-final_pass_obs-clean')]
@@ -81,7 +86,9 @@ def main():
          '100k gradient steps, checkpoint every 10k. **No observation corruption on any of '
          'these six** — `slot_obs_noise` is uniform, which leaves `slot_obs_t` None so the '
          'corruption is the identity, and `corrupt_obs` is false.', '',
-         'A 2x2 of {ResNet18, SD VAE} x {trainable, frozen}, each on two arms. ResNet18 '
+         'A 2x2 of {ResNet18, SD VAE} x {trainable, frozen}, each on two arms, at TWO '
+         'training budgets (30 and 126 demos -- 126 is every episode that is neither test '
+         'nor val). ResNet18 '
          'trainable tests the revert of the 2026-08-30 speedup pass against '
          '`success_rates_no_pos.md`. Reading the square: down a column asks whether freezing '
          'hurts that encoder; across the frozen row asks whether SD features are worse than '
@@ -90,7 +97,7 @@ def main():
          'other columns are blank by design. Blank also means "not yet evaluated". No cell '
          'is a nominated best.', '']
 
-    for section, note, arms in GROUPS:
+    for section, note, arms in groups():
         L += [f'## {section}', '', note, '']
         for label, run in arms:
             L += [f'### {label}', '']
