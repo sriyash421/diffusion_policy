@@ -37,19 +37,11 @@ policy:
   _target_: diffusion_policy.policy.pusht_gaussian_search_policy.PushTGaussianSearchPolicy
   shape_meta: ${shape_meta}
   # Identical encoder recipe to the diffusion arm, so the two are comparable.
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-    shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      weights: IMAGENET1K_V1
-    resize_shape: null
-    crop_shape: [76, 76]
-    random_crop: True
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: False
+  # The SHARED block from pusht_base, not a private copy. The copy this replaces held the
+  # identical settings but hardcoded crop_shape: [76,76] instead of following ${crop_shape},
+  # so an encoder change made here would have silently missed this arm -- exactly the drift
+  # the shared block exists to prevent.
+  obs_encoder: ${obs_encoder}
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
