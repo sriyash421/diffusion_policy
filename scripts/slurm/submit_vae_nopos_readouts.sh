@@ -74,11 +74,37 @@ unet_bc/unetbc_ver-t_goal_enc-vae_demos-126_seed-42
 offline/value_k1_ver-t_goal_enc-vae_demos-126_seed-42
 "
 
-# RUNS_SET=debug reads the encoder debug set; anything else reads the ladder matrix.
-if [ "${RUNS_SET:-ladder}" = "debug" ]; then
-  RUNS="$DEBUG_RUNS"
-else
-  RUNS="$LADDER_RUNS"
+# The PAPER-90 set: the original Diffusion Policy protocol (90 train / 4 val / 112
+# discarded). These MUST be evaluated on fresh env seeds, not on our held-out episodes --
+# the paper's 90 training episodes overlap our 50 test episodes by 23, so a held-out-episode
+# readout on these checkpoints would be scoring 23 episodes the model trained on. The
+# manifest carries no test split at all for that reason.
+PAPER90_RUNS="
+unet_bc/unetbc_ver-t_goal_enc-resnet18_demos-90_seed-42
+unet_bc/unetbc_ver-t_goal_enc-resnet18-frozen_demos-90_seed-42
+unet_bc/unetbc_ver-t_goal_enc-vae_demos-90_seed-42
+unet_bc/unetbc_ver-t_goal_enc-vae-ft_demos-90_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18_demos-90_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18-frozen_demos-90_seed-42
+offline/value_k1_ver-t_goal_enc-vae_demos-90_seed-42
+offline/value_k1_ver-t_goal_enc-vae-ft_demos-90_seed-42
+"
+
+case "${RUNS_SET:-ladder}" in
+  debug)   RUNS="$DEBUG_RUNS" ;;
+  paper90) RUNS="$PAPER90_RUNS" ;;
+  *)       RUNS="$LADDER_RUNS" ;;
+esac
+
+# TEST_START_SEED switches the episode source from held-out dataset episodes to fresh
+# environment seeds (the paper's protocol). REQUIRED for paper90; optional elsewhere, where
+# it gives every budget a common, contamination-free readout -- fresh seeds come from the
+# env, never from the dataset, so no split can leak into them.
+SEED_FLAGS=""; SEED_SUB=""
+if [ "${RUNS_SET:-ladder}" = "paper90" ] || [ -n "${TEST_START_SEED:-}" ]; then
+  _tss="${TEST_START_SEED:-100000}"
+  SEED_FLAGS="--test-start-seed ${_tss} --n-test-seeds ${N_TEST_SEEDS:-50}"
+  SEED_SUB="_seeds${_tss}"
 fi
 
 # label:flags. The label goes in the job name only; the OUTPUT directory comes from
@@ -124,8 +150,12 @@ for rel in $RUNS; do
         # never exists, so every finished sweep looks un-done and is resubmitted forever.
         # (submit_slot_norm_readouts.sh did exactly that with _corrupt-on/_corrupt-off.)
         sel="${label%%-*}"; obs="${label##*-}"
-        sub="bon_search_sel-${sel}_obs-${obs}"
-        name="ev_${label}_${run}"
+        # _bon_subdir puts the seed key FIRST, before _sel-. Mirror that exactly, or the
+        # fresh-seed sweeps stat a path that never exists and resubmit forever.
+        sub="bon_search${SEED_SUB}_sel-${sel}_obs-${obs}"
+        # The job name must differ too, otherwise the LIVE check below treats a running
+        # held-out-episode sweep as though it were this fresh-seed one and skips it.
+        name="ev_${label}${SEED_SUB}_${run}"
         if grep -qxF "$name" <<<"$LIVE"; then
             printf '%-52s %-20s %s\n' "$run" "$label" "already evaluating, skipping"; continue
         fi
@@ -148,7 +178,7 @@ for rel in $RUNS; do
         esac
         jid=$(sbatch --parsable --job-name="$name" \
               scripts/slurm/eval_watch_pusht_search.sbatch "$dir" \
-              --n-list "$nl" --n-envs "$N_ENVS" --skip-val --wandb $flags)
+              --n-list "$nl" --n-envs "$N_ENVS" --skip-val --wandb $flags $SEED_FLAGS)
         printf '%-52s %-20s submitted %s\n' "$run" "$label" "$jid"
         n=$((n+1))
     done
