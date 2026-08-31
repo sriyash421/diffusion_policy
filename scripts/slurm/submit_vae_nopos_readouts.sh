@@ -76,6 +76,10 @@ unet_bc/unetbc_ver-t_goal_enc-resnet18_demos-126_seed-42
 offline/value_k1_ver-t_goal_enc-resnet18_demos-126_seed-42
 unet_bc/unetbc_ver-t_goal_enc-vae-ft_demos-126_seed-42
 offline/value_k1_ver-t_goal_enc-vae-ft_demos-126_seed-42
+unet_bc/unetbc_ver-t_goal_enc-resnet18-frozen-bn_demos-30_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18-frozen-bn_demos-30_seed-42
+unet_bc/unetbc_ver-t_goal_enc-resnet18-frozen-bn_demos-126_seed-42
+offline/value_k1_ver-t_goal_enc-resnet18-frozen-bn_demos-126_seed-42
 "
 
 # The PAPER-90 set: the original Diffusion Policy protocol (90 train / 4 val / 112

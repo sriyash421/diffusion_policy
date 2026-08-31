@@ -46,6 +46,14 @@ ENCODERS = [
      "GroupNorm, so this freezes never-trained normalization at identity init and discards "
      "ImageNet's running statistics -- a controlled freeze-vs-trainable contrast, not "
      '"frozen ImageNet features" in the literature sense.'),
+    ('resnet18-frozen-bn', 'ResNet18, frozen (upstream recipe)',
+     'The same freeze but on upstream\'s own frozen-pretrained recipe: `use_group_norm: '
+     'False` so the pretrained BatchNorm and its ImageNet running statistics survive, and '
+     '`imagenet_norm: True`, exactly as `train_diffusion_unet_image_pretrained_workspace` '
+     '(the config behind the paper\'s Table 6). The `resnet18-frozen` rows above keep the '
+     'GroupNorm swap, which discards those statistics for a freshly built GroupNorm at '
+     'identity init and then freezes it -- so those rows are NOT a frozen-pretrained-ImageNet '
+     'baseline and these are.'),
     ('vae-ft', 'SD VAE, trainable',
      '`sd-vae-ft-mse` with `trainable=True`, 324-d at the 72x72 crop, trained end to end. '
      'Against trainable ResNet this isolates the ENCODER with neither one frozen.'),

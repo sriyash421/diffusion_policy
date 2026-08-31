@@ -24,7 +24,10 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 40,000 | 0.28 | 0.24 | 0.26 | 0.36 | 0.38 | 0.48 | 0.52 |
 | 50,000 | 0.10 | 0.22 | 0.28 | 0.34 | 0.36 | 0.42 | 0.52 |
 | 60,000 | 0.16 | 0.20 | 0.18 | 0.40 | 0.32 | 0.40 | 0.46 |
-| 70,000 | 0.16 | 0.24 | 0.26 | 0.32 | 0.26 | – | – |
+| 70,000 | 0.16 | 0.24 | 0.26 | 0.32 | 0.26 | 0.18 | 0.30 |
+| 80,000 | 0.14 | 0.18 | 0.26 | 0.24 | 0.36 | 0.30 | 0.36 |
+| 90,000 | 0.20 | 0.22 | 0.22 | 0.28 | 0.24 | 0.22 | 0.38 |
+| 100,000 | 0.24 | 0.14 | 0.18 | 0.28 | 0.26 | 0.28 | 0.32 |
 
 **final_pass** — test success rate
 
@@ -41,7 +44,7 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 90,000 | 0.20 | – | – | 0.14 | 0.14 | – | – |
 | 100,000 | 0.24 | – | – | 0.20 | 0.18 | – | – |
 
-<sub>checkpoints on disk: 10 · complete n-sweeps: 6 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 10 · partial: 0 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -57,7 +60,8 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 60,000 | 0.16 | 0.18 | 0.18 | 0.14 | 0.30 | 0.22 | 0.26 |
 | 70,000 | 0.06 | 0.12 | 0.28 | 0.28 | 0.30 | 0.20 | 0.24 |
 | 80,000 | 0.12 | 0.24 | 0.26 | 0.14 | 0.28 | 0.32 | 0.34 |
-| 90,000 | 0.10 | 0.10 | 0.14 | 0.24 | 0.22 | – | – |
+| 90,000 | 0.10 | 0.10 | 0.14 | 0.24 | 0.22 | 0.22 | 0.32 |
+| 100,000 | 0.04 | 0.10 | 0.14 | 0.24 | 0.32 | 0.36 | 0.26 |
 
 **final_pass** — test success rate
 
@@ -74,7 +78,7 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 90,000 | 0.10 | – | – | 0.14 | 0.28 | – | – |
 | 100,000 | 0.04 | – | – | 0.12 | 0.14 | – | – |
 
-<sub>checkpoints on disk: 10 · complete n-sweeps: 8 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 10 · partial: 0 · episodes: [50] · seed: [42]</sub>
 
 ## 30 demos - ResNet18, frozen
 
@@ -88,7 +92,12 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 10,000 | 0.00 | 0.00 | 0.00 | 0.12 | 0.22 | 0.48 | 0.74 |
 | 20,000 | 0.00 | 0.00 | 0.00 | 0.20 | 0.32 | 0.46 | 0.84 |
-| 30,000 | 0.00 | 0.00 | 0.04 | 0.16 | 0.28 | – | – |
+| 30,000 | 0.00 | 0.00 | 0.04 | 0.16 | 0.28 | 0.50 | 0.82 |
+| 40,000 | 0.00 | 0.00 | 0.04 | 0.12 | 0.40 | 0.54 | 0.74 |
+| 50,000 | 0.00 | 0.00 | 0.02 | 0.14 | 0.28 | 0.48 | 0.66 |
+| 60,000 | 0.00 | 0.04 | 0.12 | 0.26 | 0.52 | 0.52 | 0.78 |
+| 70,000 | 0.00 | 0.02 | 0.08 | 0.14 | 0.32 | 0.44 | 0.68 |
+| 80,000 | 0.00 | 0.06 | 0.12 | – | – | – | – |
 
 **final_pass** — test success rate
 
@@ -100,9 +109,12 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 40,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 50,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 60,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-| 70,000 | 0.00 | – | – | – | – | – | – |
+| 70,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 80,000 | 0.00 | – | – | 0.02 | 0.00 | – | – |
+| 90,000 | 0.00 | – | – | 0.02 | 0.00 | – | – |
+| 100,000 | 0.04 | – | – | 0.00 | 0.00 | – | – |
 
-<sub>checkpoints on disk: 7 · complete n-sweeps: 2 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 7 · partial: 1 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -113,7 +125,13 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 10,000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.16 | 0.24 | 0.22 |
 | 20,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.06 | 0.18 | 0.14 |
 | 30,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.02 | 0.24 | 0.24 |
-| 40,000 | 0.00 | 0.00 | – | – | – | – | – |
+| 40,000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.02 | 0.14 | 0.32 |
+| 50,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.08 | 0.26 | 0.36 |
+| 60,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.08 | 0.14 | 0.32 |
+| 70,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.02 | 0.24 | 0.24 |
+| 80,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.04 | 0.22 | 0.36 |
+| 90,000 | 0.00 | 0.00 | 0.00 | 0.04 | 0.06 | 0.16 | 0.34 |
+| 100,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.12 | – | – |
 
 **final_pass** — test success rate
 
@@ -130,7 +148,19 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 90,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 100,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 
-<sub>checkpoints on disk: 10 · complete n-sweeps: 3 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 9 · partial: 1 · episodes: [50] · seed: [42]</sub>
+
+## 30 demos - ResNet18, frozen (upstream recipe)
+
+The same freeze but on upstream's own frozen-pretrained recipe: `use_group_norm: False` so the pretrained BatchNorm and its ImageNet running statistics survive, and `imagenet_norm: True`, exactly as `train_diffusion_unet_image_pretrained_workspace` (the config behind the paper's Table 6). The `resnet18-frozen` rows above keep the GroupNorm swap, which discards those statistics for a freshly built GroupNorm at identity init and then freezes it -- so those rows are NOT a frozen-pretrained-ImageNet baseline and these are.
+
+### UNet BC
+
+_no checkpoints evaluated yet_
+
+### ST k=1
+
+_no checkpoints evaluated yet_
 
 ## 30 demos - SD VAE, trainable
 
@@ -146,7 +176,10 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 20,000 | 0.16 | 0.06 | 0.26 | 0.36 | 0.38 | 0.36 | 0.56 |
 | 30,000 | 0.14 | 0.14 | 0.30 | 0.46 | 0.32 | 0.44 | 0.42 |
 | 40,000 | 0.18 | 0.06 | 0.40 | 0.24 | 0.42 | 0.46 | 0.52 |
-| 50,000 | 0.16 | 0.20 | 0.20 | 0.36 | – | – | – |
+| 50,000 | 0.16 | 0.20 | 0.20 | 0.36 | 0.40 | 0.34 | 0.46 |
+| 60,000 | 0.18 | 0.24 | 0.32 | 0.34 | 0.26 | 0.34 | 0.36 |
+| 70,000 | 0.14 | 0.26 | 0.24 | 0.28 | 0.22 | 0.28 | 0.34 |
+| 80,000 | 0.20 | 0.26 | 0.30 | 0.28 | – | – | – |
 
 **final_pass** — test success rate
 
@@ -158,8 +191,12 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 40,000 | 0.18 | – | – | 0.14 | 0.12 | – | – |
 | 50,000 | 0.16 | – | – | 0.16 | 0.16 | – | – |
 | 60,000 | 0.18 | – | – | 0.28 | 0.14 | – | – |
+| 70,000 | 0.14 | – | – | 0.16 | 0.24 | – | – |
+| 80,000 | 0.20 | – | – | 0.22 | 0.14 | – | – |
+| 90,000 | 0.14 | – | – | 0.22 | 0.10 | – | – |
+| 100,000 | 0.16 | – | – | 0.16 | 0.26 | – | – |
 
-<sub>checkpoints on disk: 6 · complete n-sweeps: 4 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 7 · partial: 1 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -174,7 +211,9 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 50,000 | 0.10 | 0.10 | 0.18 | 0.20 | 0.30 | 0.26 | 0.34 |
 | 60,000 | 0.10 | 0.06 | 0.12 | 0.18 | 0.28 | 0.28 | 0.30 |
 | 70,000 | 0.08 | 0.14 | 0.14 | 0.12 | 0.14 | 0.10 | 0.20 |
-| 80,000 | 0.10 | 0.10 | 0.10 | 0.22 | – | – | – |
+| 80,000 | 0.10 | 0.10 | 0.10 | 0.22 | 0.18 | 0.28 | 0.22 |
+| 90,000 | 0.04 | 0.08 | 0.12 | 0.14 | 0.18 | 0.20 | 0.34 |
+| 100,000 | 0.08 | 0.08 | 0.06 | 0.22 | 0.20 | 0.20 | 0.22 |
 
 **final_pass** — test success rate
 
@@ -188,8 +227,10 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 | 60,000 | 0.10 | – | – | 0.10 | 0.16 | – | – |
 | 70,000 | 0.08 | – | – | 0.08 | 0.04 | – | – |
 | 80,000 | 0.10 | – | – | 0.04 | 0.10 | – | – |
+| 90,000 | 0.04 | – | – | 0.08 | 0.08 | – | – |
+| 100,000 | 0.08 | – | – | 0.06 | 0.06 | – | – |
 
-<sub>checkpoints on disk: 8 · complete n-sweeps: 7 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 10 · partial: 0 · episodes: [50] · seed: [42]</sub>
 
 ## 30 demos - SD VAE, frozen
 
@@ -205,7 +246,11 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 | 20,000 | 0.00 | 0.00 | 0.00 | 0.22 | 0.44 | 0.70 | 0.86 |
 | 30,000 | 0.00 | 0.02 | 0.06 | 0.22 | 0.40 | 0.62 | 0.78 |
 | 40,000 | 0.00 | 0.00 | 0.08 | 0.22 | 0.32 | 0.60 | 0.52 |
-| 50,000 | 0.00 | 0.02 | 0.08 | 0.14 | 0.36 | 0.30 | – |
+| 50,000 | 0.00 | 0.02 | 0.08 | 0.14 | 0.36 | 0.30 | 0.28 |
+| 60,000 | 0.02 | 0.06 | 0.06 | 0.08 | 0.16 | 0.20 | 0.22 |
+| 70,000 | 0.04 | 0.04 | 0.10 | 0.12 | 0.24 | 0.26 | 0.32 |
+| 80,000 | 0.04 | 0.06 | 0.16 | 0.16 | 0.18 | 0.24 | 0.18 |
+| 90,000 | 0.06 | 0.06 | – | – | – | – | – |
 
 **final_pass** — test success rate
 
@@ -222,7 +267,7 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 | 90,000 | 0.06 | – | – | 0.02 | 0.02 | – | – |
 | 100,000 | 0.02 | – | – | 0.04 | 0.02 | – | – |
 
-<sub>checkpoints on disk: 10 · complete n-sweeps: 4 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 8 · partial: 1 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -239,7 +284,7 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 | 70,000 | 0.00 | 0.02 | 0.04 | 0.04 | 0.00 | 0.02 | 0.22 |
 | 80,000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.02 | 0.08 | 0.08 |
 | 90,000 | 0.00 | 0.02 | 0.00 | 0.04 | 0.08 | 0.06 | 0.06 |
-| 100,000 | 0.00 | 0.00 | 0.02 | 0.00 | – | – | – |
+| 100,000 | 0.00 | 0.00 | 0.02 | 0.00 | 0.08 | 0.08 | 0.04 |
 
 **final_pass** — test success rate
 
@@ -256,7 +301,7 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 | 90,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 100,000 | 0.00 | – | – | 0.02 | 0.00 | – | – |
 
-<sub>checkpoints on disk: 10 · complete n-sweeps: 9 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 10 · partial: 0 · episodes: [50] · seed: [42]</sub>
 
 ## 126 demos - ResNet18, trainable
 
@@ -264,7 +309,31 @@ ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. T
 
 ### UNet BC
 
-_no checkpoints evaluated yet_
+**argmax** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.06 | 0.22 | 0.38 | 0.80 | 0.96 | 0.96 | 1.00 |
+| 20,000 | 0.18 | 0.52 | 0.64 | 0.76 | 0.90 | 0.96 | 0.98 |
+| 30,000 | 0.38 | 0.44 | 0.88 | 0.84 | 0.86 | 0.96 | 0.98 |
+| 40,000 | 0.50 | 0.58 | 0.72 | 0.86 | 0.86 | – | – |
+
+**final_pass** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.06 | – | – | 0.08 | 0.04 | – | – |
+| 20,000 | 0.18 | – | – | 0.32 | 0.18 | – | – |
+| 30,000 | 0.38 | – | – | 0.42 | 0.52 | – | – |
+| 40,000 | 0.50 | – | – | 0.46 | 0.44 | – | – |
+| 50,000 | 0.54 | – | – | 0.44 | 0.42 | – | – |
+| 60,000 | 0.54 | – | – | 0.58 | 0.50 | – | – |
+| 70,000 | 0.56 | – | – | 0.42 | 0.48 | – | – |
+| 80,000 | 0.52 | – | – | 0.56 | 0.46 | – | – |
+| 90,000 | 0.52 | – | – | 0.58 | 0.54 | – | – |
+| 100,000 | 0.50 | – | – | 0.54 | 0.64 | – | – |
+
+<sub>checkpoints on disk: 10 · complete n-sweeps: 3 · partial: 1 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -280,25 +349,11 @@ _no checkpoints evaluated yet_
 
 | step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | 0.00 | 0.02 | 0.06 | 0.38 | 0.48 | – |
-
-**final_pass** — test success rate
-
-| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-| 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-| 30,000 | 0.00 | – | – | – | – | – | – |
-
-<sub>checkpoints on disk: 3 · complete n-sweeps: 0 · partial: 1 · episodes: [50] · seed: [42]</sub>
-
-### ST k=1
-
-**argmax** — test success rate
-
-| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.12 | 0.26 | – |
+| 10,000 | 0.00 | 0.00 | 0.02 | 0.06 | 0.38 | 0.48 | 0.90 |
+| 20,000 | 0.00 | 0.00 | 0.04 | 0.10 | 0.30 | 0.66 | 0.80 |
+| 30,000 | 0.00 | 0.00 | 0.02 | 0.10 | 0.44 | 0.66 | 0.90 |
+| 40,000 | 0.00 | 0.00 | 0.02 | 0.14 | 0.42 | 0.70 | 0.86 |
+| 50,000 | 0.00 | 0.00 | 0.00 | 0.30 | 0.54 | – | – |
 
 **final_pass** — test success rate
 
@@ -307,9 +362,59 @@ _no checkpoints evaluated yet_
 | 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 30,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-| 40,000 | 0.00 | – | – | 0.00 | – | – | – |
+| 40,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 50,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 60,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 70,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 80,000 | 0.00 | – | – | 0.02 | 0.00 | – | – |
+| 90,000 | 0.00 | – | – | 0.02 | 0.00 | – | – |
+| 100,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 
-<sub>checkpoints on disk: 7 · complete n-sweeps: 0 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 4 · partial: 1 · episodes: [50] · seed: [42]</sub>
+
+### ST k=1
+
+**argmax** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.12 | 0.26 | 0.36 |
+| 20,000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.02 | 0.14 | 0.34 |
+| 30,000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.10 | 0.16 | 0.34 |
+| 40,000 | 0.00 | 0.00 | 0.02 | 0.00 | 0.06 | 0.22 | 0.28 |
+| 50,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.06 | 0.18 | 0.30 |
+| 60,000 | 0.00 | 0.00 | 0.00 | 0.04 | 0.08 | 0.20 | 0.38 |
+| 70,000 | 0.00 | 0.00 | 0.00 | 0.04 | 0.16 | 0.26 | 0.26 |
+| 80,000 | 0.00 | 0.00 | 0.00 | – | – | – | – |
+
+**final_pass** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 30,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 40,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 50,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 60,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 70,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 80,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 90,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 100,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+
+<sub>checkpoints on disk: 10 · complete n-sweeps: 7 · partial: 1 · episodes: [50] · seed: [42]</sub>
+
+## 126 demos - ResNet18, frozen (upstream recipe)
+
+The same freeze but on upstream's own frozen-pretrained recipe: `use_group_norm: False` so the pretrained BatchNorm and its ImageNet running statistics survive, and `imagenet_norm: True`, exactly as `train_diffusion_unet_image_pretrained_workspace` (the config behind the paper's Table 6). The `resnet18-frozen` rows above keep the GroupNorm swap, which discards those statistics for a freshly built GroupNorm at identity init and then freezes it -- so those rows are NOT a frozen-pretrained-ImageNet baseline and these are.
+
+### UNet BC
+
+_no checkpoints evaluated yet_
+
+### ST k=1
+
+_no checkpoints evaluated yet_
 
 ## 126 demos - SD VAE, trainable
 
@@ -317,7 +422,25 @@ _no checkpoints evaluated yet_
 
 ### UNet BC
 
-_no checkpoints evaluated yet_
+**argmax** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.04 | 0.18 | 0.64 | 0.80 | 0.76 | 0.90 | 0.90 |
+| 20,000 | 0.32 | 0.48 | 0.64 | 0.72 | 0.82 | 0.88 | 0.82 |
+| 30,000 | 0.44 | 0.56 | 0.70 | 0.68 | 0.80 | 0.92 | 0.86 |
+
+**final_pass** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.04 | – | – | 0.08 | 0.02 | – | – |
+| 20,000 | 0.32 | – | – | 0.24 | 0.12 | – | – |
+| 30,000 | 0.46 | – | – | 0.50 | 0.36 | – | – |
+| 40,000 | 0.42 | – | – | 0.48 | 0.44 | – | – |
+| 50,000 | 0.52 | – | – | 0.54 | 0.40 | – | – |
+
+<sub>checkpoints on disk: 5 · complete n-sweeps: 3 · partial: 0 · episodes: [50] · seed: [42]</sub>
 
 ### ST k=1
 
@@ -333,24 +456,9 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 
 | step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | 0.00 | 0.00 | 0.08 | 0.36 | 0.66 | – |
-
-**final_pass** — test success rate
-
-| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-| 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
-
-<sub>checkpoints on disk: 2 · complete n-sweeps: 0 · partial: 1 · episodes: [50] · seed: [42]</sub>
-
-### ST k=1
-
-**argmax** — test success rate
-
-| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.04 | 0.06 | – |
+| 10,000 | 0.00 | 0.00 | 0.00 | 0.08 | 0.36 | 0.66 | 0.80 |
+| 20,000 | 0.00 | 0.00 | 0.02 | 0.12 | 0.34 | 0.52 | 0.86 |
+| 30,000 | 0.00 | 0.00 | 0.02 | 0.26 | – | – | – |
 
 **final_pass** — test success rate
 
@@ -359,8 +467,46 @@ The same VAE self-frozen, 34,163,664 parameters held out of the optimizer. Again
 | 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
 | 30,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 40,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 50,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 60,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 70,000 | 0.02 | – | – | 0.02 | 0.02 | – | – |
+| 80,000 | 0.06 | – | – | 0.02 | 0.08 | – | – |
+| 90,000 | 0.06 | – | – | 0.02 | 0.04 | – | – |
+| 100,000 | 0.02 | – | – | 0.06 | 0.06 | – | – |
 
-<sub>checkpoints on disk: 3 · complete n-sweeps: 0 · partial: 1 · episodes: [50] · seed: [42]</sub>
+<sub>checkpoints on disk: 10 · complete n-sweeps: 2 · partial: 1 · episodes: [50] · seed: [42]</sub>
+
+### ST k=1
+
+**argmax** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.04 | 0.06 | 0.22 |
+| 20,000 | 0.00 | 0.00 | 0.00 | 0.02 | 0.06 | 0.16 | 0.18 |
+| 30,000 | 0.00 | 0.00 | 0.00 | 0.04 | 0.08 | 0.16 | 0.28 |
+| 40,000 | 0.00 | 0.00 | 0.00 | 0.06 | 0.08 | 0.26 | 0.46 |
+| 50,000 | 0.00 | 0.04 | 0.00 | 0.04 | 0.14 | 0.30 | 0.62 |
+| 60,000 | 0.00 | 0.02 | 0.04 | 0.04 | 0.30 | 0.30 | 0.42 |
+| 70,000 | 0.00 | 0.00 | 0.06 | 0.12 | 0.16 | 0.52 | – |
+
+**final_pass** — test success rate
+
+| step | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 20,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 30,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 40,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 50,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 60,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 70,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 80,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 90,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+| 100,000 | 0.00 | – | – | 0.00 | 0.00 | – | – |
+
+<sub>checkpoints on disk: 10 · complete n-sweeps: 6 · partial: 1 · episodes: [50] · seed: [42]</sub>
 
 ## Caveats
 

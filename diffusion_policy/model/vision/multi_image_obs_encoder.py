@@ -225,6 +225,19 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         if feature_layernorm:
             self.feature_norm = nn.LayerNorm(self.output_shape()[0])
 
+        # The projector is sized eagerly for the SAME reason, and the reason is sharper here:
+        # it used to be built inside _forward, i.e. AFTER any training.freeze_encoder had run
+        # requires_grad_(False) over this module. A module created then is trainable, absent
+        # from the optimizer's parameter list (built from the policy at construction), and on
+        # whatever device the first forward happened to use -- a failure that appears only
+        # under freezing. output_shape() already ran above, so the width is known.
+        if self.feature_dim is not None:
+            in_dim = self.output_shape()[0]
+            self.projector = nn.Sequential(
+                nn.Linear(in_dim, self.feature_dim * 2),
+                nn.ReLU(),
+                nn.Linear(self.feature_dim * 2, self.feature_dim))
+
     @contextlib.contextmanager
     def _forced_crop_offsets(self, offsets):
         """Temporarily pin every RGB key's CropRandomizer to caller-supplied offsets.
@@ -327,13 +340,11 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         if self.feature_norm is not None:
             result = self.feature_norm(result)
 
-        if self.feature_dim is not None:
-            if self.projector is None:
-                self.projector = nn.Sequential(
-                    nn.Linear(result.shape[-1], self.feature_dim * 2),
-                    nn.ReLU(),
-                    nn.Linear(self.feature_dim * 2, self.feature_dim)
-                )
+        # `is not None` rather than `feature_dim is not None`: __init__ sizes the projector by
+        # calling output_shape(), which runs this forward once while the attribute is still
+        # None. Building it here instead would put it outside the optimizer and outside any
+        # freeze that already ran -- see the note beside its construction.
+        if self.projector is not None:
             result = self.projector(result)
 
         return result
