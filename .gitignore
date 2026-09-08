@@ -151,3 +151,16 @@ hyak_results/
 
 # generated eval artifacts (JSON/PNG/NPZ per checkpoint) -- regenerable, 300M+
 analysis
+
+# machine-local shortcuts into /gscratch (checkpoints, mode/attention analysis output)
+ckpts
+modes
+attn
+# The `videos/` rule above does not match `videos` when it is a SYMLINK into /gscratch
+# (git tests the path itself, not its target), so the bare name is needed too.
+videos
+mode_analysis/outputs
+attention_analysis/outputs
+
+# Rendered mode/dispersion panels, 82M of PNG regenerable from mode_analysis/
+modes24/
