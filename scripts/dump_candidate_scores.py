@@ -49,8 +49,16 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
+    # LINE-BUFFERED, AND ONLY WHEN RUN AS A SCRIPT. These two lines used to sit at module
+    # level, which silently broke every OTHER script that imports anything from this one:
+    # the verifier's sim pool is an AsyncVectorEnv on the 'forkserver' context, a forkserver
+    # child rebuilds __main__ by re-importing it, and re-opening fd 1/2 inside that child
+    # tears down the pipes it talks to its parent over. The parent then dies at the first
+    # verifier call with a bare ConnectionResetError -- exit 120, no traceback on either
+    # side. That took scripts/verifier_ranks_expert.py (which imports
+    # resolved_verifier_value from here) out entirely.
+    sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import json
 import pathlib

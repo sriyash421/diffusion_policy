@@ -45,7 +45,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from diffusion_policy.common.replay_buffer import ReplayBuffer        # noqa: E402
 from diffusion_policy.env.pusht.feedback_util import (                # noqa: E402
-    compute_feedback_from_pose)
+    compute_feedback_from_pose, t_goal_distance)
 from eval_search_pusht import get_split_states, load_policy           # noqa: E402
 from scripts.dump_candidate_scores import resolved_verifier_value     # noqa: E402
 
@@ -101,18 +101,59 @@ def build_batch(rb, pts, To, H, device):
     return {'image': t(im), 'agent_pos': t(pos), 'feedback': t(fb)}, t(star)
 
 
+BLIND, PARTIAL, INFORMATIVE = 'blind', 'partial', 'informative'
+CLASSES = (BLIND, PARTIAL, INFORMATIVE)
+# The sim is float32 and a candidate that never touches the block reproduces the reference
+# bit-for-bit, so this only guards against a last-bit difference, not a real nudge of the T.
+MOVE_EPS_PX = 1e-4
+
+
+def classify(t_cand, ref, eps_px=MOVE_EPS_PX):
+    """Per-decision verifier informativeness. -> (class (S,), n_movers (S,), movers (S,n))
+
+    `ref` is the CURRENT T-to-goal distance: exactly the value a candidate scores when it
+    never contacts the block, and available straight from the observation with no extra
+    simulation. A candidate whose simulated d_t_goal still equals it did not move the T, so
+    under `t_goal` it is indistinguishable from every other such candidate.
+
+    blind (0 movers) means the verifier expressed NO preference -- argmax there is an
+    arbitrary tie-break toward index 0, and every a*-vs-candidate statistic on those
+    decisions is measuring the tie-break rather than the verifier.
+    """
+    movers = np.abs(t_cand - ref[:, None]) > eps_px          # (S, n)
+    k = movers.sum(axis=1)
+    n = t_cand.shape[1]
+    return np.where(k == 0, BLIND, np.where(k == n, INFORMATIVE, PARTIAL)), k, movers
+
+
 def _stats(star, cand, higher_is_better, ep_ids, n_boot=4000, seed=0):
     """a* against the n candidates, with a cluster bootstrap over episodes.
 
     `higher_is_better` flips the raw distance terms so "a* wins" always means "a* is the
     better action" whichever quantity is read.
+
+    TIES COUNT AS HALF, and this is a correction, not a refinement. The verifier value is a
+    function of where the T ends up, so every candidate that never contacts the block returns
+    the IDENTICAL value -- on a blind decision a* ties all n of them. The previous strict `>`
+    scored that as rank n, the WORST possible, with p_best False: the verifier expressed no
+    preference whatever and the arithmetic recorded it as a* losing to everything. Since
+    blind decisions are a large minority of all decisions (see verifier_informativeness.py),
+    that artefact moved the headline number rather than perturbing it.
+
+    Mid-rank sends a full tie to n/2, which is exactly the exchangeability null, and p_best
+    splits the credit 1/(ties+1) the way a uniform random tie-break would. Numbers from this
+    function are therefore NOT comparable to any recorded before the change.
     """
     s = star if higher_is_better else -star                 # (S,)
     c = cand if higher_is_better else -cand                 # (S, n)
     beats = (s[:, None] > c)                                # (S, n)
-    rank = (~beats).sum(axis=1)                             # 0 == better than every candidate
-    rows = np.stack([rank == 0, rank, s - c.max(axis=1), s - c.mean(axis=1),
-                     beats.mean(axis=1)], axis=1)           # (S, 5)
+    tied = (s[:, None] == c)                                # (S, n)
+    lost = (c > s[:, None])                                 # (S, n)
+    rank = lost.sum(axis=1) + 0.5 * tied.sum(axis=1)        # 0 == better than every candidate
+    # a* is best iff nothing beats it; with `t` ties a random tie-break picks it 1/(t+1).
+    p_best = (lost.sum(axis=1) == 0) / (tied.sum(axis=1) + 1.0)
+    rows = np.stack([p_best, rank, s - c.max(axis=1), s - c.mean(axis=1),
+                     beats.mean(axis=1) + 0.5 * tied.mean(axis=1)], axis=1)   # (S, 5)
     eps = np.unique(ep_ids)
     sums = np.stack([rows[ep_ids == e].sum(axis=0) for e in eps])
     cnts = np.array([(ep_ids == e).sum() for e in eps], dtype=float)
@@ -164,13 +205,15 @@ def main(checkpoint, arm, n_actions, episodes, per_episode, split, batch, device
           f'episodes, n={n_actions}, verifier={vv}'
           + ('  (OVERRIDDEN)' if verifier_value and verifier_value != native else ''))
 
-    v_star, v_cand, t_star, t_cand, ep_of = [], [], [], [], []
+    v_star, v_cand, t_star, t_cand, ep_of, ref_of = [], [], [], [], [], []
     torch.manual_seed(seed)
     np.random.seed(seed)
     try:
         for b0 in range(0, len(pts), batch):
             chunk = pts[b0:b0 + batch]
             obs, star = build_batch(rb, chunk, To, H, torch.device(device))
+            # the no-contact reference, from the observation itself -- no extra sim
+            ref_of.append(t_goal_distance(obs['feedback'][:, To - 1].cpu().numpy()))
             seeder = getattr(policy, 'set_sample_seeds', None)
             if seeder is not None:
                 seeder([seed * 1_000_003 + b0 + k for k in range(len(chunk))])
@@ -202,22 +245,73 @@ def main(checkpoint, arm, n_actions, episodes, per_episode, split, batch, device
     ts = np.concatenate(t_star)                     # (S, 2)
     tc = np.concatenate(t_cand)                     # (S, n, 2)
     eps = np.array(ep_of)
+    refs = np.concatenate(ref_of)                   # (S,)
+    cls, n_movers, _ = classify(tc[:, :, T_GOAL], refs)
+    # the EFFECTIVE search width: how many genuinely different options argmax chose between.
+    distinct = np.array([len(np.unique(row)) for row in vc], dtype=float)
+
     res = {'arm': arm, 'step': step, 'checkpoint': str(checkpoint), 'split': split,
            'n': n_actions, 'n_points': int(len(vs)), 'n_episodes': int(len(set(ep_of))),
            'verifier_value': vv, 'verifier_value_native': native, 'seed': seed,
+           'informativeness': {
+               'move_eps_px': MOVE_EPS_PX,
+               **{f'p_{c}': float((cls == c).mean()) for c in CLASSES},
+               'n_points': {c: int((cls == c).sum()) for c in CLASSES},
+               'mean_movers_frac': float((n_movers / n_actions).mean()),
+               'mean_distinct_frac': float((distinct / n_actions).mean()),
+               'mean_distinct': float(distinct.mean())},
            'value': _stats(vs, vc, True, eps)}
     for ax in (T_GOAL, ARM_T):
         res[TERM[ax]] = _stats(ts[:, ax], tc[:, :, ax], False, eps)
 
-    print(f'\n{"quantity":12s} {"mean rank/" + str(n_actions):>20s} '
-          f'{"cands a* beats":>20s} {"a* - MEAN cand":>22s} {"a* is best":>20s} '
-          f'{"a* - best cand":>22s}')
-    for k in ('value', TERM[T_GOAL], TERM[ARM_T]):
-        r = res[k]
-        f = (lambda d, p=3: f"{d['v']:.{p}f} [{d['ci'][0]:.{p}f},{d['ci'][1]:.{p}f}]")
-        print(f'{k:12s} {f(r["mean_rank"], 2):>20s} {f(r["frac_candidates_beaten"]):>20s} '
-              f'{f(r["gap_to_mean"], 2):>22s} {f(r["p_best"]):>20s} '
-              f'{f(r["gap_to_best"], 2):>22s}')
+    # STRATIFIED, and the informative stratum is the headline. Pooling the three hides the
+    # thing that matters: on a blind decision a* ties every candidate by construction, so its
+    # rank there is a property of the tie rule, not of the verifier.
+    res['strata'] = {}
+    for c in CLASSES:
+        m = cls == c
+        if m.sum() < 2 or len(np.unique(eps[m])) < 2:
+            res['strata'][c] = {'n_points': int(m.sum()), 'note': 'too few points to bootstrap'}
+            continue
+        d = {'n_points': int(m.sum()), 'n_episodes': int(len(np.unique(eps[m]))),
+             'value': _stats(vs[m], vc[m], True, eps[m])}
+        for ax in (T_GOAL, ARM_T):
+            d[TERM[ax]] = _stats(ts[m, ax], tc[m][:, :, ax], False, eps[m])
+        res['strata'][c] = d
+
+    inf = res['informativeness']
+    print(f'\nVERIFIER INFORMATIVENESS  (a candidate "moves" the T if its d_t_goal differs '
+          f'from the\ncurrent {MOVE_EPS_PX}px reference -- the value of never touching the block)')
+    print(f'  blind (0 of {n_actions} move, all scores tied) {inf["p_blind"]:6.1%}'
+          f'   {inf["n_points"][BLIND]:5d} pts')
+    print(f'  partial                                {inf["p_partial"]:6.1%}'
+          f'   {inf["n_points"][PARTIAL]:5d} pts')
+    print(f'  informative (all {n_actions} move)              {inf["p_informative"]:6.1%}'
+          f'   {inf["n_points"][INFORMATIVE]:5d} pts')
+    print(f'  mean candidates moving the T  {inf["mean_movers_frac"]:.1%} of {n_actions}')
+    print(f'  effective search width        {inf["mean_distinct"]:.2f} distinct values '
+          f'of {n_actions} ({inf["mean_distinct_frac"]:.1%})')
+
+    def table(block, title):
+        print(f'\n{title}')
+        print(f'{"quantity":12s} {"mean rank/" + str(n_actions):>20s} '
+              f'{"cands a* beats":>20s} {"a* - MEAN cand":>22s} {"a* is best":>20s} '
+              f'{"a* - best cand":>22s}')
+        for k in ('value', TERM[T_GOAL], TERM[ARM_T]):
+            r = block[k]
+            f = (lambda d, p=3: f"{d['v']:.{p}f} [{d['ci'][0]:.{p}f},{d['ci'][1]:.{p}f}]")
+            print(f'{k:12s} {f(r["mean_rank"], 2):>20s} {f(r["frac_candidates_beaten"]):>20s} '
+                  f'{f(r["gap_to_mean"], 2):>22s} {f(r["p_best"]):>20s} '
+                  f'{f(r["gap_to_best"], 2):>22s}')
+
+    st = res['strata'].get(INFORMATIVE, {})
+    if 'value' in st:
+        table(st, f'INFORMATIVE DECISIONS ONLY -- the headline  '
+                  f'({st["n_points"]} pts, {st["n_episodes"]} episodes)')
+    else:
+        print(f'\nINFORMATIVE stratum: {st.get("note", "absent")} -- no headline table.')
+    table(res, f'ALL DECISIONS pooled ({len(vs)} pts) -- includes blind ones, where a* ties '
+               f'every\ncandidate and mid-rank scores it at chance by construction.')
     print(f'\nUnder the null that a* is exchangeable with the candidates: mean rank '
           f'{(n_actions) / 2:.1f}, fraction beaten 0.500, gap 0.00, p_best '
           f'{1 / (n_actions + 1):.3f}.')

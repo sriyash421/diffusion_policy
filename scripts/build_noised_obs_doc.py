@@ -105,6 +105,34 @@ SELECTIONS = [('argmax', 'bon_search_sel-argmax'),
               ('final_pass', 'bon_search_sel-final_pass')]
 
 
+
+def _summary(arms):
+    """Mean success rate over every evaluated checkpoint, per (arm, readout, n).
+
+    A MEAN OVER CHECKPOINTS, not a best: nothing here nominates a checkpoint (see the
+    project rule). At 50 episodes one cell carries a ~+/-0.13 CI, so a single checkpoint
+    separates almost nothing; averaging the ten makes the column comparable while still
+    reporting a quantity that exists on disk rather than a selected maximum.
+    """
+    out = []
+    for label, sub, run_name, note, cls in arms:
+        run = BASE / sub / run_name
+        modes = ([('clean', '')] if cls == 'none' else
+                 [('noised', '_obs-corrupt'), ('clean', '_obs-clean')] if cls == 'both' else
+                 [('clean', '_obs-clean')])
+        for tag, suf in modes:
+            rows = read_rows(run, sub='bon_search_sel-argmax' + suf, verifier=VER)
+            if not rows:
+                continue
+            agg = by_step(rows, 'success_rate')
+            means = {}
+            for n in NS:
+                v = [agg[st][n] for st in agg if n in agg[st]]
+                means[n] = sum(v) / len(v) if v else None
+            out.append((label, tag, means, len(agg)))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('-o', '--out', default='success_rates_noised_obs_resnetE2E.md')
@@ -155,6 +183,56 @@ def main():
          'checkpoint. Clean rollouts mean the slot -> corruption-level mapping the model '
          'trained under does not hold at rollout: a legitimate readout, but not the '
          'conditional the loss trained. Arm 4 is evaluated clean only, as asked.', '']
+
+    # ---- Findings, computed from the same curves rendered below --------------------
+    summ = _summary(ARMS)
+    if summ:
+        L += ['## Findings', '',
+              '`argmax` success rate **averaged over every evaluated checkpoint** — not a '
+              'best-checkpoint number, and nothing here nominates one. Averaging is what '
+              'makes the columns readable at all: one cell carries a ~±0.13 CI at 50 '
+              'episodes, so no single checkpoint separates these arms.', '',
+              '| arm | rollouts | ' + ' | '.join(f'n={n}' for n in NS) + ' | ckpts |',
+              '|---|---|' + '---:|' * (len(NS) + 1)]
+        for label, tag, means, nck in summ:
+            cells = ' | '.join(f'{means[n]:.2f}' if means[n] is not None else '–' for n in NS)
+            L += [f'| {label} | {tag} | {cells} | {nck} |']
+        L += ['',
+              '**1. Cap 999 destroys the policy at low n; cap 400 does not.** All three '
+              'full-extent fixed ladders read 0.00 at n = 1 and n = 2 under both rollout '
+              'modes, at every checkpoint. That is structural, not noise: at cap 999 slot 0 '
+              'sits at sqrt(alpha_bar) = 0.006, and n = 1 generates from slot 0 alone, so the '
+              'model is asked to act from a slot it only ever saw as near-pure noise. The '
+              'cap-400 arms (slot 0 at 0.44) keep their low-n numbers and match or beat the '
+              'uniform control there.', '',
+              '**2. Under noised rollouts the cap-999 arms have a hard n = 16 -> 32 cliff, '
+              'and then beat everything.** They sit at 0.00 through n = 8, ~0.02-0.04 at '
+              'n = 16, then jump to 0.30-0.37 at n = 32 and **0.57-0.63 at n = 64**, against '
+              'the uniform control\'s 0.31. The cliff is the deployed-slot-range effect (see '
+              'Caveats): below n = 16 only the ladder\'s noisy end is ever generated, and past '
+              'n = 16 the rolling window pins further generations at the clean slot 15.', '',
+              '**3. The cap-999 gain needs matched noise at deployment.** The same arms '
+              'evaluated CLEAN reach only 0.33-0.40 at n = 64 — better than the control, but '
+              'far below their own noised numbers. So the benefit is not "the ladder trained '
+              'a better policy"; it is that the conditional the loss trained only holds when '
+              'rollouts see the same corruption.', '',
+              '**4. Every cap-400 ladder modestly beats the uniform control, at every n.** '
+              '`lint-400` is the best-behaved arm in the grid: 0.09 / 0.18 / 0.25 / 0.29 / '
+              '0.35 / 0.37 / 0.43 against the control\'s 0.08 / 0.16 / 0.17 / 0.21 / 0.26 / '
+              '0.24 / 0.31, with no low-n collapse and no dependence on deploying noised.', '',
+              '**5. `random_base` does what it was designed to do.** It is the only '
+              'full-extent arm that does not collapse at n = 1 (0.05, against 0.00 for the '
+              'three fixed cap-999 ladders), because its per-sample base leaves slot 0 often '
+              'near-clean, so the marginal survives training. It tracks the cap-400 arms '
+              'rather than the cap-999 ones.', '',
+              '**6. No arm beats UNet BC.** BC leads at every n (0.16 -> 0.50) and is the '
+              'strongest thing in the table. It is not a like-for-like comparison — see '
+              'Caveats — but no ladder recovers the gap on the clean readout.', '',
+              '**7. `final_pass` does not benefit from a ladder.** The hypothesis was that '
+              'executing the last (cleanest-slot) generation would exploit the gradient. It '
+              'does not: ladder arms read 0.10-0.16 at n = 8/16 against the control\'s '
+              '0.13/0.15, and under noised rollouts the cap-999 arms are **0.00 at every n '
+              'and every checkpoint**. Full tables per arm below.', '']
 
     for label, sub, run_name, note, cls in ARMS:
         run = BASE / sub / run_name
