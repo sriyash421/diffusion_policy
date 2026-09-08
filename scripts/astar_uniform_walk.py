@@ -299,7 +299,11 @@ def informativeness(t_cand, ref, v_cand, n, phase):
            'mean_distinct': float(distinct.mean()),
            'mean_distinct_frac': float((distinct / n).mean()),
            'by_phase': {}}
-    for name, m in (('approach', ~phase), ('engaged', phase)):
+    # NAMED FOR WHAT THE TEST ACTUALLY IS. `phase` comes from expert_moved(), which asks
+    # whether the DEMO's block pose changes over THIS chunk's executed window -- a per-decision
+    # property of the state. It is not a before/after-first-contact split, and the old
+    # `approach`/`engaged` labels asserted exactly that.
+    for name, m in (('block_still', ~phase), ('block_moving', phase)):
         if not m.any():
             continue
         out['by_phase'][name] = {
@@ -484,9 +488,10 @@ def report(res, n):
           f'  best-of-n buys nothing. n is a real compute axis only on the other '
           f'{1 - ip["p_blind"]:.0%}.')
     if ip['by_phase']:
-        print(f'\n  by phase (from the DEMO\'s own block motion, so identical across arms):')
+        print(f'\n  split by whether the DEMO\'s own chunk moves the block (a property of the\n'
+              f'  state, so the same decisions fall in each subset for every arm):')
         for k, d in ip['by_phase'].items():
-            print(f'    {k:<10s} {d["n_decisions"]:5d} decisions   blind {d["p_blind"]:6.1%}'
+            print(f'    {k:<13s} {d["n_decisions"]:5d} decisions   blind {d["p_blind"]:6.1%}'
                   f'   movers {d["mean_movers_frac"]:5.1%}')
 
     p = res['provenance']
