@@ -37,6 +37,17 @@ conda activate "$DP_CONDA_ENV"
 set -u
 cd /mmfs1/home/harine/diffusion_policy_standalone
 
+# wandb writes its RUN files to the CWD unless told otherwise, and the CWD is the repo --
+# which lives under a 10GB HOME quota. train_pusht_search.sbatch already redirects these;
+# the eval and analysis jobs did not, and quietly grew repo/wandb to 1.2GB across 426 runs.
+GSCRATCH_ROOT="${GSCRATCH_ROOT:-/gscratch/robotics/harine}"
+export WANDB_DIR="${WANDB_DIR:-$GSCRATCH_ROOT/wandb}"
+export WANDB_CACHE_DIR="${WANDB_CACHE_DIR:-$GSCRATCH_ROOT/wandb/cache}"
+export WANDB_ARTIFACT_DIR="${WANDB_ARTIFACT_DIR:-$GSCRATCH_ROOT/wandb/artifacts}"
+export WANDB_CONFIG_DIR="${WANDB_CONFIG_DIR:-$GSCRATCH_ROOT/wandb/config}"
+mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_ARTIFACT_DIR" "$WANDB_CONFIG_DIR"
+
+
 echo "evaluating $CKPT"
 # "$@" matters: without it extra flags (e.g. --max-n 1024) are silently dropped and
 # the job runs the DEFAULT sweep while looking like it honoured the request.
