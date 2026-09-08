@@ -302,7 +302,7 @@ son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7',
 # hand to avoid it. Empty at the default 4/4/256, on the sw_suffix principle.
 arch_suffix: ''                  # e.g. '_arch-6x8x1024'
 
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what

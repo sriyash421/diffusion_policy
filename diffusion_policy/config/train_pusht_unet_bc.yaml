@@ -12,7 +12,7 @@ trainer: unet_bc
 # ${enc_suffix} is LOAD-BEARING: without it this resolves to the same directory as every
 # pre-2026-08-28 ResNet UNet BC run, and `training.resume: True` would continue one of them
 # under a different backbone.
-run_name: unetbc_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}_seed-${training.seed}
+run_name: unetbc_ver-${verifier_tag}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
 
 task:
   env_runner:

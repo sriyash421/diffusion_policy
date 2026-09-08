@@ -141,6 +141,16 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        # An EMPTY val split is a legitimate configuration -- the geometric manifests
+        # (README_pusht.md 2.2) include two whose eval region has nothing left over after
+        # the test set is taken, and PushTImageDataset already skips the count check when
+        # n_val_episodes is 0. Iterating a zero-length dataloader is NOT survivable though:
+        # accelerate's DataLoaderShard.__iter__ either raises UnboundLocalError on
+        # `current_batch` or yields a single None, which reaches dict_apply as
+        # `AttributeError: 'NoneType' object has no attribute 'items'`. So the whole
+        # validation block is skipped rather than guarded from the inside. No effect on a
+        # non-empty val split.
+        has_val = len(val_dataset) > 0
 
         # The RESUMED normalizer wins, as in TrainMLPImageWorkspace. This used to refit from
         # the dataset unconditionally, after load_checkpoint had already restored the saved
@@ -428,7 +438,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     step_log.update(runner_log)
 
                 # run validation
-                if (self.epoch % cfg.training.val_every) == 0:
+                if has_val and (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
                         val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 

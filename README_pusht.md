@@ -270,6 +270,234 @@ recording which episodes a checkpoint had trained on. Raising `n_val_episodes` f
 budget from 29 episodes to 25. The derive-from-the-seed branch is gone entirely
 as of 2026-08-29: a `split_file` is now required.
 
+
+### 2.2 The geometric split manifests — train and eval differ by *where the T starts*
+
+The five manifests in §2.1 all partition at random (one seed-42 permutation), so train and
+test are draws from the same distribution. The five below partition by **the T's starting
+position**, so the eval set is a region the policy never trained on. Regenerate all five
+with one command:
+
+```bash
+python scripts/make_geometric_splits.py     # -> config/splits/pusht_blockquad_*, pusht_blockborder_*
+python scripts/plot_geometric_splits.py     # -> analysis/pusht_geometric_split_{quadrant,border}.png
+```
+
+Both families key on **`data/block_pos[episode_start][:2]`, the T's start — not the
+agent's.** The two disagree: agent and block start in the same quadrant in only 51 of the
+206 episodes, so "bottom-left" means something different depending on which you pick.
+
+| manifest | train | val | test | eval region |
+|---|--:|--:|--:|---|
+| `pusht_blockquad_bottomleft_train137.json` | 137 (16,483 fr) | 19 | 50 | T starts with `x < 256, y ≥ 256` |
+| `pusht_blockquad_topright_train173.json` | 173 (21,880 fr) | 0 | 33 | T starts with `x ≥ 256, y < 256` |
+| `pusht_blockborder_train30_core50.json` | 30 (4,349 fr) | 70 | 50 | interior core, `d > 178.3 px` |
+| `pusht_blockborder_train60_core50.json` | 60 (8,264 fr) | 40 | 50 | interior core, `d > 178.3 px` |
+| `pusht_blockborder_train100_core50.json` | 100 (13,548 fr) | 0 | 50 | interior core, `d > 178.3 px` |
+
+**Quadrant family.** Eval is one quadrant of the 512×512 arena (split at 256; **y increases
+downward**, so "bottom" is `y ≥ 256`), train is every episode outside it. The two datasets
+are deliberately *not* size-matched, because the demos are not uniform over the arena: 69
+episodes start bottom-left but only 33 top-right. Where the quadrant has episodes to spare,
+50 of them are `test` (what `eval_search_pusht` rolls out) and the remainder is `val`,
+chosen by a seed-42 permutation. Top-right holds only 33, so **it has no val set at all** —
+all 33 are test. That is a real asymmetry between the two datasets, not an oversight; the
+workspace's validation loop is guarded on `len(val_losses) > 0` and simply skips.
+
+**Border family.** With `d = min(x, y, 512−x, 512−y)` the T's distance to the nearest wall:
+
+- **train** = the `k` episodes with the *smallest* `d` — a band hugging the walls. `k = 30`
+  reaches `d ≤ 92.0 px`, `k = 60` reaches `118.9`, `k = 100` reaches `144.1`.
+- **test** = the 50 with the *largest* `d` (`d > 178.3 px`, the interior core), **identical
+  across all three budgets**, so the three runs are directly comparable on one number.
+- **val** = `band_100 \ band_k`, the ring the wider bands train on and this budget does not:
+  70 / 40 / 0 episodes. So the 30-demo dataset is validated on ground the 100-demo dataset
+  treats as *training* data, and the val sets nest the opposite way from the train sets.
+
+Three consequences worth knowing before you read any number off these:
+
+- **Train nests, val nests backwards, test is fixed.** `train_30 ⊂ train_60 ⊂ train_100`
+  and `val_100 ⊂ val_60 ⊂ val_30`, with one shared test set. A budget comparison therefore
+  varies the training band and nothing else.
+- **56 episodes are used by nothing.** They sit between the widest band (`d = 144.1`) and
+  the core (`d = 178.3`), belonging to neither the train region nor the shared eval region.
+  This is the price of holding the test set fixed at 50 while the bands grow.
+- **Selection is by rank, not by a width threshold.** The 60-demo cut falls between two
+  episodes 0.002 px apart, so a float cutoff would be a coin flip; ties in `d` break by
+  episode index. The `train_d_max_px` recorded in each manifest describes the band that
+  resulted — it is not the input.
+
+#### Verifying
+
+`scripts/dump_pusht_splits.py --verify` does not know these derivations. Re-running the
+generator is the check — it is deterministic, so the files should not move:
+
+```bash
+python scripts/make_geometric_splits.py && git diff --stat diffusion_policy/config/splits/
+# expect: no changes
+```
+
+The generator asserts its own invariants on every write (splits disjoint, test never below
+50 outside the quadrant family) and stamps the same `episode_ends_checksum` the §2.1
+manifests carry, so the zarr check in §2.1 applies unchanged.
+
+
+### 2.3 The geometric-split sweep — 3 arms × 5 datasets
+
+Trained 2026-09-03. Three arms on each of the five §2.2 manifests, evaluated on each
+manifest's own held-out test episodes, so every number is an **out-of-region** readout.
+
+| arm | config | override |
+| --- | --- | --- |
+| UNet BC | `train_pusht_unet_bc` | — |
+| ST k=1 | `train_pusht_diffusion_search_single` | `n_candidates=1` |
+| ST k=16, uniform slot weights | `train_pusht_diffusion_search` | `n_candidates=16` |
+
+Uniform slot weights and no obs-noise ladder are the config **defaults**, which is why no
+arm sets `slot_weights` or `slot_obs_noise`: `sw_suffix` and `son_suffix` are empty exactly
+when those are uniform, so the empty suffix in the run name *is* the uniform claim. The
+encoder is the default ResNet18 trained end to end (`enc-resnet18`, `gen_tag: rnE2E`), not
+the frozen SD-VAE of §3 — see `pusht_base.yaml:66` for the revert and its measurement.
+
+```bash
+bash scripts/run_geometric_splits.sh              # dry run: what would be submitted, where
+SUBMIT=1 bash scripts/run_geometric_splits.sh     # ...and sbatch (robotics/weirdlab GPUs)
+TIME_LIMIT=5-00:00:00 SUBMIT=1 bash scripts/run_geometric_splits.sh   # longer wall clock
+
+SUBMIT=1 bash scripts/slurm/submit_geometric_readouts.sh   # eval, on the ckpt partition
+python scripts/build_geometric_splits_doc.py               # -> SUCCESS_RATES_GEOMETRIC.md
+```
+
+**`split_suffix` is load-bearing.** These runs override `task.dataset.split_file`, and
+`n_demos` alone does not identify the dataset for the new manifests —
+`pusht_blockborder_train30_core50` and `pusht_seed42_train30` are both 30 training
+episodes. Without `split_suffix` the two resolve to one `hydra.run.dir` and
+`training.resume: True` continues one under the other's data. It defaults to empty, so no
+existing run name moves. The five overrides always travel together:
+
+```bash
+task.dataset.split_file=diffusion_policy/config/splits/pusht_blockquad_topright_train173.json \
+  n_demos=173 task.dataset.n_test_episodes=33 task.dataset.n_val_episodes=0 \
+  split_suffix=_split-trq
+```
+
+**Wall clock.** The launcher passes `--time=3-00:00:00`, overriding the 10 days
+`train_pusht_search.sbatch` asks for. SLURM will not schedule a 10-day job ahead of a
+maintenance reservation: on 2026-09-03 all 15 sat at `ReqNodeNotAvail, Reserved for
+maintenance` with `StartTime` pushed past the Sept 8 window, 5.5 days out. Measured, the
+arms finish well inside 3 days — BC UNet ~3h, ST k=1 ~1.5h, ST k=16 ~29h. A pending job's
+limit can be lowered in place without resubmitting:
+
+```bash
+scontrol update jobid=<JID> TimeLimit=3-00:00:00
+```
+
+`n_demos`, `n_test_episodes` and `n_val_episodes` are all validated against the manifest by
+`load_split_manifest`, so a mismatched count is a startup error rather than a silent
+mis-budget. `env_runner` needs nothing — it interpolates all of them from `task.dataset`.
+
+**Empty val splits.** Two of the five manifests (`topright`, `blockborder_train100`) have
+`val = 0` — their eval region has nothing left after the 50-episode test set is taken.
+Iterating a zero-length *accelerate-prepared* dataloader is not survivable: accelerate's
+`DataLoaderShard.__iter__` either raises `UnboundLocalError` on `current_batch` or yields a
+single `None`, which reaches `dict_apply` as `AttributeError: 'NoneType' object has no
+attribute 'items'`. Both training workspaces therefore compute `has_val = len(val_dataset) > 0`
+and skip the whole validation block, rather than guarding from the inside:
+
+- `train_diffusion_unet_image_workspace.py` — gates `if has_val and (self.epoch % val_every) == 0`
+- `train_mlp_image_workspace.py` — `do_val = do_val and has_val` (ST k=1, and ST k=16 by
+  inheritance through `TrainSearchOuterInnerWorkspace`)
+
+Neither changes anything for a non-empty val split. The other empty-val paths were checked
+and are already safe: `_make_nrmse_loader` builds a plain (unprepared) `DataLoader` that
+yields zero batches, and `PushTSearchImageRunner` creates no val environments from an empty
+mask. Runs with `val = 0` log no `val_loss`, so **do not select checkpoints on val for
+those two datasets** — there is nothing to select on.
+
+**Eval.** `n = 1,2,4,8,16,32,64` under both `argmax` and `final_pass`, on the same levels
+for all three arms because the comparison is across arms at matched n. Clean rules only:
+none of these arms trains under a ladder, so `--corrupt-obs-eval` is a no-op on them. The
+watchers run on the preemptible `ckpt` partition with a 12h wall clock, so
+`submit_geometric_readouts.sh` must be re-run as checkpoints land — it is idempotent
+(skips a `(run, rule)` whose watcher is queued, and eval merges into the same
+`success_curves.jsonl`). To automate:
+
+```bash
+setsid nohup env SUBMIT=1 bash scripts/slurm/autoupdate_geometric_readouts.sh >/dev/null 2>&1 &
+```
+
+
+### 2.4 The observation-noise arms — 12 ST k=16 runs on `blq` and `brd60`
+
+Trained 2026-09-04. All ST k=16 with uniform slot weights, default ResNet18 encoder, on two
+of the §2.2 manifests only. Three mechanisms, and **only the first two share one**:
+
+```bash
+SUBMIT=1 bash scripts/run_obsnoise_geometric.sh    # parts 1+2: 5 ladders x 2 datasets
+SUBMIT=1 bash scripts/run_goalmask_geometric.sh    # part 3:    1 mask   x 2 datasets
+python scripts/make_goal_mask.py --margins 0 3 5   # -> media/goal_mask/ renders
+python scripts/goal_mask_smoke.py                  # compute node: 2.8GB img array
+```
+
+| part | arms | mechanism | run-name key |
+| --- | --- | --- | --- |
+| 1 flat | t = 800, 400, 200 | every slot pinned at the same timestep | `_son-flat<t>` |
+| 2 ramp | 800→400, 400→200 | slot 0 at base, slot 15 at **half that timestep**, linear in t | `_son-ramp<a>to<b>` |
+| 3 goal mask | t = 800 | image-space noise inside a mask on the goal T | `_gm-t800-T3px` |
+
+**Parts 1 and 2 are config-only.** Both are `slot_obs_noise.mode=list` with an explicit
+16-entry profile; `_slot_obs_profile` enforces `len(timesteps) == n_candidates` at policy
+construction, so a wrong-length ramp is a startup error. The flat arms deliberately trip the
+degenerate-ladder warning (`15/15 adjacent slot pairs differ by < 0.005 in sqrt(alpha_bar)`)
+— flatness is the point, it is the control the graded arms are read against. Half the
+*timestep* is not half the corruption: `alpha_bar` is a cumulative product, so t 800→400
+moves `sqrt(alpha_bar)` 0.039 → 0.440.
+
+**The levels transfer from the SD-VAE calibration unchanged.** `_corrupt_obs_features`
+scales the noise by `obs_feature_std`, a running per-dimension EMA, so a timestep fixes an
+SNR rather than a magnitude — and that holds for any encoder. Measured on 32 real frames,
+mean-centred cosine at t = 800 / 400 / 200:
+
+| | t=800 | t=400 | t=200 |
+|---|--:|--:|--:|
+| ResNet18 | 0.041 | 0.448 | 0.792 |
+| SD-VAE | 0.003 | 0.426 | 0.810 |
+
+Raw (uncentred) cosine disagrees wildly — 0.97 vs 0.28 at t=800 — but that is an artefact:
+ResNet features are ReLU outputs, 0% negative with mean 0.77σ, and that DC component
+dominates the cosine while carrying no per-sample information. Frame discriminability agrees
+with the centred figure (0.72 vs 0.75 at t=400; both at chance by t=800). **At t=800 and 600
+the observation is already unidentifiable for both encoders**, so those levels measure total
+destruction rather than a graded condition.
+
+**Part 3 is a different mechanism and its numbers do not compare to parts 1/2.**
+`slot_obs_noise` corrupts `obs_features` — the encoded vector, which has no spatial
+structure — so "noise only where the goal is" cannot be expressed there. Part 3 noises the
+observation IMAGE before the encoder, inside a fixed mask:
+
+- The goal pose is a constant (`[256, 256, π/4]` for every episode), so the mask is built
+  once by `diffusion_policy/env/pusht/goal_mask.py` and only the noise is redrawn.
+- `margin_px` is in **IMAGE pixels** of the 96px observation, not the 512px arena. The goal
+  T spans only ~26 image px, so the two readings of a margin differ by 5.3×. Coverage:
+  2.1% of the frame at margin 0, **5.8% at 3**, 8.2% at 5.
+- Noise is drawn with **torch's** RNG, not numpy's: PyTorch re-seeds `torch` per dataloader
+  worker but not numpy, so a numpy draw would give every worker the same noise stream.
+- **TRAIN SPLIT ONLY.** `PushTImageDataset._split_copy` clears the flag, so val and test are
+  clean and the env runner never sees it. Every rollout number is measured on an
+  uncorrupted observation. `scripts/goal_mask_smoke.py` asserts this against the real zarr:
+  outside-mask pixels bit-identical, inside-mask corrupted, noise redrawn per read, val and
+  test identical to a no-corruption dataset.
+
+`gm_suffix` is load-bearing for the same reason `split_suffix` is — two levels sharing a run
+name would resolve to one `hydra.run.dir`.
+
+**Eval.** `scripts/slurm/submit_geometric_readouts.sh` covers all 27 runs and picks the rule
+set by run name: arms carrying `_son-` get **four** readouts (argmax / final_pass ×
+obs-clean / obs-corrupt), because `--corrupt-obs-eval` reproduces the slot→level mapping the
+loss trained under. Everything else — the baselines and the `_gm-` arms — has no registered
+ladder, so the corrupt flag is a no-op and would record the same experiment twice; those get
+the two clean rows only. 74 watchers at full coverage.
+
 ---
 
 ## 3. How to train and evaluate the current arms

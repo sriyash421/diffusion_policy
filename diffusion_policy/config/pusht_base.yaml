@@ -140,6 +140,36 @@ exp_name: pusht_search
 # and are reachable with `n_demos=100`, but nothing is trained at them by default.
 n_demos: 30
 
+# Carries the GEOMETRIC split manifests (README_pusht.md 2.2) into the run directory.
+# Empty by default, on the sw_suffix/son_suffix principle: a seed-42 run's name says
+# nothing about a split it does not use.
+#
+# LOAD-BEARING whenever task.dataset.split_file is overridden. n_demos alone does NOT
+# identify the dataset for those manifests -- pusht_blockborder_train30_core50 and
+# pusht_seed42_train30 are both 30 training episodes, so without this the two land in ONE
+# hydra.run.dir and `training.resume: True` continues one under the other's data. Set it
+# and the split_file together, never one alone.
+split_suffix: ''                 # e.g. '_split-blq', '_split-brd'
+
+# ------------------------------------------------- goal-only OBSERVATION corruption
+# Noise applied to the observation IMAGE inside a mask around the goal T, before the
+# encoder. Distinct from slot_obs_noise, which noises the ENCODED vector and therefore has
+# no spatial structure -- the two are different mechanisms and their numbers do not compare.
+#
+# The goal pose is a constant ([256, 256, pi/4] for every episode), so the mask is fixed.
+# `margin_px` is in IMAGE pixels of the 96px observation, NOT the 512px arena: the goal T
+# spans only ~26 image px, so reading a 512-space margin here inflates the masked area
+# ~5.3x. Coverage at margin 0 / 3 / 5 is 2.1% / 5.8% / 8.2% of the frame.
+#
+# TRAIN SPLIT ONLY -- PushTImageDataset._split_copy clears it, so val and test are clean and
+# the env runner never sees it.
+#
+# SET gm_suffix WHENEVER THIS IS NON-NULL: two levels sharing a run name would resolve to
+# one hydra.run.dir and `training.resume: True` would continue one under the other's data.
+goal_mask_noise: null            # e.g. {t: 800, margin_px: 3}
+gm_suffix: ''                    # e.g. '_gm-t800-T3px'
+goal_mask_tag: goal_only_mask    # wandb tag, applied only when goal_mask_noise is set
+
 # Which verifier value the run is trained/evaluated against. Both a policy knob AND the run
 # IDENTITY: it selects the scoring rule in the code and names the run, so runs from either
 # side of the 2026-08-19 change are distinguishable on sight in the wandb name, the wandb

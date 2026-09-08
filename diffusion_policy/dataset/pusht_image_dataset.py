@@ -5,6 +5,7 @@ import pathlib
 import torch
 import numpy as np
 import copy
+from omegaconf import OmegaConf
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import SequenceSampler
@@ -65,6 +66,37 @@ def get_split_masks_3way(n_episodes, n_test_episodes, n_val_episodes, seed,
     val_mask[val_idxs] = True
     test_mask[test_idxs] = True
     return train_mask, val_mask, test_mask
+
+
+def _resolve_goal_mask_noise(cfg):
+    """Validate the goal-only corruption block. None (off) or {t, margin_px, exclude_block}.
+
+    Validated rather than trusted: an unknown key here would be silently ignored, and
+    `margin_px` is in IMAGE pixels (96px observation), not the 512px arena -- a value
+    meant for one read as the other is a 5.3x error in masked area, not a typo that fails.
+
+    `exclude_block` (default False) drops the block's own pixels from the mask per frame, so
+    the corruption stays on the goal region instead of destroying the block once it arrives
+    there. Optional and defaulted so the original arm's config still resolves unchanged.
+    """
+    if cfg is None:
+        return None
+    if OmegaConf.is_config(cfg):
+        cfg = OmegaConf.to_container(cfg, resolve=True)
+    cfg = dict(cfg)
+    unknown = set(cfg) - {'t', 'margin_px', 'exclude_block'}
+    if unknown:
+        raise ValueError(f'goal_mask_noise got unknown key(s) {sorted(unknown)}; expected '
+                         f'only t, margin_px and exclude_block (margin is in IMAGE px).')
+    if 't' not in cfg or 'margin_px' not in cfg:
+        raise ValueError('goal_mask_noise needs both `t` and `margin_px`')
+    t = int(cfg['t'])
+    if not (0 <= t < 1000):
+        raise ValueError(f'goal_mask_noise.t must be in [0, 1000), got {t}')
+    m = float(cfg['margin_px'])
+    if m < 0:
+        raise ValueError(f'goal_mask_noise.margin_px must be >= 0, got {m}')
+    return {'t': t, 'margin_px': m, 'exclude_block': bool(cfg.get('exclude_block', False))}
 
 
 def episode_frame_mask(episode_ends, episode_mask):
@@ -288,7 +320,8 @@ class PushTImageDataset(BaseImageDataset):
             n_train_episodes=None,
             split='train',
             return_sequences=False,
-            split_file=None
+            split_file=None,
+            goal_mask_noise=None
             ):
 
         super().__init__()
@@ -354,6 +387,27 @@ class PushTImageDataset(BaseImageDataset):
             episode_mask=episode_mask,
             return_sequences=return_sequences)
         self.episode_mask = episode_mask
+        # PART-3 GOAL-ONLY CORRUPTION. Image-space, so it cannot reuse slot_obs_noise (which
+        # noises the ENCODED vector and has no spatial structure). The goal pose is a
+        # constant, so the mask is built once here; only the noise is redrawn per sample.
+        #
+        # TRAIN SPLIT ONLY: `_split_copy` clears the flag, so get_validation_dataset() and
+        # get_test_dataset() are clean, and the env runner never touches this class at all.
+        self.goal_mask_noise = _resolve_goal_mask_noise(goal_mask_noise)
+        self._goal_mask = None
+        self._goal_mask_np = None
+        self._goal_mask_on = self.goal_mask_noise is not None and split == 'train'
+        if self._goal_mask_on:
+            from diffusion_policy.env.pusht.goal_mask import goal_mask as _gm, sqrt_alpha_bar
+            self._goal_mask_np = _gm(self.goal_mask_noise['margin_px'])
+            self._goal_mask = torch.from_numpy(self._goal_mask_np)
+            xb = self.goal_mask_noise['exclude_block']
+            print(f'PushTImageDataset: goal-only obs corruption ON for split={split} -- '
+                  f"t={self.goal_mask_noise['t']} "
+                  f"(sqrt(alpha_bar)={sqrt_alpha_bar(self.goal_mask_noise['t']):.4f}), "
+                  f"margin={self.goal_mask_noise['margin_px']}px, "
+                  f'{self._goal_mask.float().mean().item()*100:.1f}% of the frame'
+                  + (', block pixels EXCLUDED per frame' if xb else ''))
         self.horizon = horizon
         self.pad_before = pad_before
         self.pad_after = pad_after
@@ -371,6 +425,9 @@ class PushTImageDataset(BaseImageDataset):
             return_sequences=self.return_sequences
             )
         split_set.episode_mask = episode_mask
+        # val/test are evaluated CLEAN -- the goal corruption is a training-time ablation.
+        # copy.copy is shallow, so without this the flag would be inherited.
+        split_set._goal_mask_on = False
         return split_set
 
     def get_validation_dataset(self):
@@ -486,6 +543,21 @@ class PushTImageDataset(BaseImageDataset):
         sample = self.sampler.sample_sequence(idx)
         data = self._sample_to_data(sample)
         torch_data = dict_apply(data, torch.from_numpy)
+        if self._goal_mask_on:
+            from diffusion_policy.env.pusht.goal_mask import apply_goal_mask_noise
+            img = torch_data['obs']['image']
+            mask = self._goal_mask
+            if self.goal_mask_noise['exclude_block']:
+                # Per FRAME, not per sample: the block moves between the To observed steps,
+                # so one mask for the window would corrupt the block at whichever step it
+                # was not computed for. (To, 1, H, W) broadcasts against (To, 3, H, W).
+                from diffusion_policy.env.pusht.goal_mask import goal_mask_excluding_block
+                poses = np.asarray(sample['block_pos'], dtype=np.float32)[:img.shape[0]]
+                mask = torch.from_numpy(np.stack(
+                    [goal_mask_excluding_block(self._goal_mask_np, p) for p in poses]
+                )).unsqueeze(1)
+            torch_data['obs']['image'] = apply_goal_mask_noise(
+                img, mask, self.goal_mask_noise['t'], torch.randn_like(img))
         return torch_data
 
 

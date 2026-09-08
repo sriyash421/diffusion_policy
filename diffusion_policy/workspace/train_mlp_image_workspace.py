@@ -485,6 +485,16 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+        # An EMPTY val split is a legitimate configuration -- the geometric manifests
+        # (README_pusht.md 2.2) include two whose eval region has nothing left over after
+        # the test set is taken, and PushTImageDataset already skips the count check when
+        # n_val_episodes is 0. Iterating a zero-length dataloader is NOT survivable though:
+        # accelerate's DataLoaderShard.__iter__ either raises UnboundLocalError on
+        # `current_batch` or yields a single None, which reaches dict_apply as
+        # `AttributeError: 'NoneType' object has no attribute 'items'`. So the whole
+        # validation block is skipped rather than guarded from the inside. No effect on a
+        # non-empty val split.
+        has_val = len(val_dataset) > 0
         # separate from val_dataloader: the loss loop wants every window in order, the
         # search metrics want a fixed spread-out subset (see _make_nrmse_loader)
         nrmse_val_loader = self._make_nrmse_loader(val_dataset, cfg, collate_fn, seed=0)
@@ -752,6 +762,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     do_val = (self.epoch % cfg.training.val_every) == 0
                 else:
                     do_val = (self.global_step - self.last_val_step) >= val_every_steps
+                do_val = do_val and has_val
                 sample_every_steps = cfg.training.get('sample_every_steps', None)
                 if sample_every_steps is None:
                     do_sample = (self.epoch % cfg.training.sample_every) == 0
