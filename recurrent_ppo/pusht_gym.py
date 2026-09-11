@@ -29,44 +29,9 @@ from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
-# arena is 512x512; obs positions and action targets both live in it
-WS = 512.0
-OBS_TYPES = ("keypoint", "image")
-ACTION_MODES = ("delta", "absolute")
-REWARD_MODES = ("dense", "sparse", "shaped")
-OCCLUSION_MODES = ("iid", "persistent")
-# fallback only, for when the demonstrations are not on disk; --delta-scale auto measures it
-DEFAULT_DELTA_SCALE = 32.0
-DEMO_ZARR = "data/pusht_cchi_v7_replay.zarr"
-# PushTEnv draws the agent from [50, 450] and the block from [100, 400]. The demonstrations in
-# data/pusht_cchi_v7_replay.zarr keep every agent start inside that agent range, but a quarter of
-# their BLOCK starts fall outside [100, 400] (measured span x 66-440, y 116-486). Training on the
-# narrower box means the policy never resets where a quarter of the demonstrated episodes begin,
-# so this widens to cover them, with a little margin.
-DEFAULT_AGENT_START_RANGE = (50.0, 450.0)
-DEFAULT_BLOCK_START_RANGE = (60.0, 490.0)
-# A block CENTRE inside the range above can still put the T's arms through a wall, which spawns
-# the block overlapping it and pushes keypoints outside the arena. Redraw when that happens:
-# ~74% of draws are accepted, so this costs about 1.4 resets, and it covers 201 of the 206
-# demonstrated starts (the other 5 genuinely poke out of the arena).
-SPAWN_TRIES = 20
-# The dense reward is a function of the BLOCK pose alone -- the agent's position never enters it --
-# so until the agent touches the block the return is fixed at reset and there is no gradient toward
-# making contact at all. Measured on the first 2M-step run: a random policy contacts the block on
-# 1.5% of steps, the trained one on 1.1%, and the reward never changed in 19 of 20 episodes.
-# Starting some episodes with the agent already beside the block puts contact within a few steps.
-AGENT_RADIUS = 15.0
-NEAR_TRIES = 40
-# THE AGENT IS A KINEMATIC BODY (pusht_env.py add_circle), so pymunk's walls do not stop it -- it
-# passes straight through them; they only constrain the block. The action target clip below is
-# therefore the ONLY thing bounding the agent, and it has to be the region the agent can usefully
-# occupy rather than the image bounds. Clipping to [0, WS] let the policy park at (0, 512),
-# outside the arena, physically unable to reach the block and unpenalised for it -- which is
-# exactly where both 2M-step runs converged, from every start.
-WALL_INNER = 7.0                       # segments at 5 and 506, radius 2
-AGENT_BOUNDS = (WALL_INNER + AGENT_RADIUS, WS - WALL_INNER - AGENT_RADIUS)   # (22, 489)
-# The goal pose is a constant for every PushT episode (PushTEnv._setup).
-GOAL_POSE = np.array([256.0, 256.0, np.pi / 4])
+from recurrent_ppo.config import (ACTION_MODES, AGENT_BOUNDS, AGENT_RADIUS, DEFAULTS as D,
+                                  DELTA_SCALE_FALLBACK, DEMO_ZARR, ENV_KEYS, GOAL_POSE, KEYPOINT_ONLY_KEYS, NEAR_TRIES,
+                                  OBS_TYPES, OCCLUSION_MODES, REWARD_MODES, SPAWN_TRIES, WS)
 
 
 class PushTGymEnv(gymnasium.Env):
@@ -76,23 +41,23 @@ class PushTGymEnv(gymnasium.Env):
 
     def __init__(
         self,
-        obs_type="keypoint",
-        max_episode_steps=300,
-        render_size=96,
-        keypoint_visible_rate=1.0,
-        action_mode="delta",
-        delta_scale=DEFAULT_DELTA_SCALE,
-        reward_mode="dense",
-        shaping_coef=1.0,
-        shaping_gamma=0.99,
-        occlusion="iid",
-        occlusion_persistence=20.0,
-        agent_start_range=DEFAULT_AGENT_START_RANGE,
-        block_start_range=DEFAULT_BLOCK_START_RANGE,
-        agent_near_block_prob=0.0,
-        agent_block_gap=(20.0, 80.0),
-        block_near_goal_prob=0.0,
-        block_goal_offset=(30.0, 0.25),
+        obs_type=D["obs"],
+        max_episode_steps=D["max_episode_steps"],
+        render_size=D["render_size"],
+        keypoint_visible_rate=D["keypoint_visible_rate"],
+        action_mode=D["action_mode"],
+        delta_scale=DELTA_SCALE_FALLBACK,
+        reward_mode=D["reward"],
+        shaping_coef=D["shaping_coef"],
+        shaping_gamma=D["gamma"],
+        occlusion=D["occlusion"],
+        occlusion_persistence=D["occlusion_persistence"],
+        agent_start_range=D["agent_start_range"],
+        block_start_range=D["block_start_range"],
+        agent_near_block_prob=D["agent_near_block_prob"],
+        agent_block_gap=D["agent_block_gap"],
+        block_near_goal_prob=D["block_near_goal_prob"],
+        block_goal_offset=D["block_goal_offset"],
         legacy=False,
         render_mode=None,
     ):
@@ -383,15 +348,15 @@ def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
     The percentile answers "what counts as a big step for a human here": at p99 the full action
     range spans essentially everything the demonstrations do (median 4px, p99 33px) without the
     rare 135px outlier stretching the scale so that ordinary moves live in the first 3% of it.
-    Falls back to DEFAULT_DELTA_SCALE, loudly, when the dataset is not on disk -- this is a
+    Falls back to DELTA_SCALE_FALLBACK, loudly, when the dataset is not on disk -- this is a
     convenience for picking a number, not a dependency of training.
     """
     try:
         return float(np.percentile(demo_action_steps(zarr_path), percentile))
     except Exception as exc:
         print(f"[WARN] Could not measure the demo action steps from {zarr_path} ({exc}); "
-              f"falling back to --delta-scale {DEFAULT_DELTA_SCALE}.")
-        return DEFAULT_DELTA_SCALE
+              f"falling back to --delta-scale {DELTA_SCALE_FALLBACK}.")
+        return DELTA_SCALE_FALLBACK
 
 
 def make_env(obs_type="keypoint", seed=0, rank=0, monitor_path=None, **env_kwargs):
@@ -427,28 +392,11 @@ def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, moni
 
 
 def env_kwargs_from(cfg, obs_type):
-    """The PushTGymEnv kwargs an arm takes, out of a flat config dict (CLI args or args.yaml).
-
-    keypoint_visible_rate belongs to PushTKeypointsEnv only, so the image arm must not be handed
-    it -- the one place that asymmetry is expressed, rather than at every call site.
-    """
-    kwargs = {
-        "max_episode_steps": cfg["max_episode_steps"],
-        "render_size": cfg["render_size"],
-        "action_mode": cfg["action_mode"],
-        "delta_scale": cfg["delta_scale"],
-        "agent_start_range": cfg["agent_start_range"],
-        "block_start_range": cfg["block_start_range"],
-        "reward_mode": cfg["reward"],
-        "shaping_coef": cfg["shaping_coef"],
-        "shaping_gamma": cfg["gamma"],
-        "agent_near_block_prob": cfg["agent_near_block_prob"],
-        "agent_block_gap": cfg["agent_block_gap"],
-        "block_near_goal_prob": cfg["block_near_goal_prob"],
-        "block_goal_offset": cfg["block_goal_offset"],
-    }
+    """The PushTGymEnv kwargs an arm takes, out of a flat config dict (CLI args or args.yaml)."""
+    kwargs = {k: cfg[k] for k in ENV_KEYS}
+    kwargs["reward_mode"] = cfg["reward"]
+    kwargs["shaping_coef"] = cfg.get("shaping_coef", D["shaping_coef"])
+    kwargs["shaping_gamma"] = cfg.get("gamma", D["gamma"])
     if obs_type == "keypoint":
-        kwargs["keypoint_visible_rate"] = cfg["keypoint_visible_rate"]
-        kwargs["occlusion"] = cfg["occlusion"]
-        kwargs["occlusion_persistence"] = cfg["occlusion_persistence"]
+        kwargs.update({k: cfg[k] for k in KEYPOINT_ONLY_KEYS})
     return kwargs

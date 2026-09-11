@@ -18,121 +18,123 @@ import argparse
 import os
 import sys
 
+from recurrent_ppo.config import DEFAULTS as D
+
 parser = argparse.ArgumentParser(description="Train a RecurrentPPO agent on PushT.")
 # environment
-parser.add_argument("--obs", type=str, default="keypoint", choices=["keypoint", "image"], help="Observation type.")
-parser.add_argument("--num-envs", type=int, default=16, help="Number of parallel environments.")
-parser.add_argument("--max-episode-steps", type=int, default=300, help="Episode truncation length.")
-parser.add_argument("--render-size", type=int, default=96, help="Render size; also the image obs resolution.")
-parser.add_argument("--keypoint-visible-rate", type=float, default=1.0,
+parser.add_argument("--obs", type=str, default=D["obs"], choices=["keypoint", "image"], help="Observation type.")
+parser.add_argument("--num-envs", type=int, default=D["num_envs"], help="Number of parallel environments.")
+parser.add_argument("--max-episode-steps", type=int, default=D["max_episode_steps"], help="Episode truncation length.")
+parser.add_argument("--render-size", type=int, default=D["render_size"], help="Render size; also the image obs resolution.")
+parser.add_argument("--keypoint-visible-rate", type=float, default=D["keypoint_visible_rate"],
                     help="Fraction of keypoints visible per step (keypoint obs). Occluded entries are zeroed "
                          "and flagged in the observation's mask half.")
-parser.add_argument("--occlusion", type=str, default="iid", choices=["iid", "persistent"],
+parser.add_argument("--occlusion", type=str, default=D["occlusion"], choices=["iid", "persistent"],
                     help="How occlusion is distributed in TIME at the same visibility rate. iid redraws every "
                          "step (mean hidden run 1/rate, ~2 steps); persistent hides a keypoint for a stretch, "
                          "which is the partial observability recurrence exists for.")
-parser.add_argument("--occlusion-persistence", type=float, default=20.0,
+parser.add_argument("--occlusion-persistence", type=float, default=D["occlusion_persistence"],
                     help="Mean hidden run in steps under --occlusion persistent.")
-parser.add_argument("--reward", type=str, default="dense", choices=["dense", "sparse", "shaped"],
+parser.add_argument("--reward", type=str, default=D["reward"], choices=["dense", "sparse", "shaped"],
                     help="dense: coverage/0.95 every step, episode always runs to the horizon. sparse: +1 on "
                          "the first solve, then terminate. Termination is tied to the mode -- terminating "
                          "under dense would forfeit a reward stream worth more than the whole approach. "
                          "shaped: dense plus potential-based shaping toward the block, which is what gives "
                          "the agent any gradient at all before it makes contact.")
-parser.add_argument("--shaping-coef", type=float, default=10.0,
+parser.add_argument("--shaping-coef", type=float, default=D["shaping_coef"],
                     help="Weight on the shaping term (--reward shaped). At 1.0 a full-arena approach is worth "
                          "~0.5 total, against an episode-return spread of +/-6.7 driven by the random initial "
                          "pose -- the signal would be buried in the noise it has to be told apart from. 10.0 "
                          "puts a full approach at ~5, comparable to that spread. Worth sweeping.")
-parser.add_argument("--action-mode", type=str, default="delta", choices=["delta", "absolute"],
+parser.add_argument("--action-mode", type=str, default=D["action_mode"], choices=["delta", "absolute"],
                     help="delta: the action is an offset from the agent's current position. absolute: it is a "
                          "target anywhere in the arena, which makes std=1 explore over half the table.")
-parser.add_argument("--delta-scale", type=str, default="auto",
+parser.add_argument("--delta-scale", type=str, default=D["delta_scale"],
                     help="Pixels moved per axis at |a|=1 in delta mode, or 'auto' to measure it from the "
                          "demonstrations. The resolved number is recorded in params/args.yaml.")
-parser.add_argument("--delta-percentile", type=float, default=99.0,
+parser.add_argument("--delta-percentile", type=float, default=D["delta_percentile"],
                     help="Percentile of the demo per-axis step that --delta-scale auto resolves to.")
-parser.add_argument("--demo-zarr", type=str, default="data/pusht_cchi_v7_replay.zarr",
+parser.add_argument("--demo-zarr", type=str, default=D["demo_zarr"],
                     help="Demonstrations --delta-scale auto measures.")
-parser.add_argument("--agent-start-range", type=float, nargs=2, default=[50.0, 450.0], metavar=("LO", "HI"),
+parser.add_argument("--agent-start-range", type=float, nargs=2, default=D["agent_start_range"], metavar=("LO", "HI"),
                     help="Uniform range each agent start coordinate is drawn from. PushTEnv's own default.")
-parser.add_argument("--block-start-range", type=float, nargs=2, default=[60.0, 490.0], metavar=("LO", "HI"),
+parser.add_argument("--block-start-range", type=float, nargs=2, default=D["block_start_range"], metavar=("LO", "HI"),
                     help="Uniform range each block start coordinate is drawn from. Wider than PushTEnv's "
                          "[100,400], which excludes a quarter of the demonstrated block starts.")
-parser.add_argument("--agent-near-block-prob", type=float, default=0.0,
+parser.add_argument("--agent-near-block-prob", type=float, default=D["agent_near_block_prob"],
                     help="Fraction of episodes that start with the agent a short gap from the block. The dense "
                          "reward depends on the BLOCK pose alone, so with a uniform start the return is fixed "
                          "at reset until contact happens by chance -- measured at 1.5%% of steps. Opt-in: this "
                          "is a curriculum choice, not a bug fix.")
-parser.add_argument("--agent-block-gap", type=float, nargs=2, default=[20.0, 80.0], metavar=("LO", "HI"),
+parser.add_argument("--agent-block-gap", type=float, nargs=2, default=D["agent_block_gap"], metavar=("LO", "HI"),
                     help="Clear distance from the block's surface for those starts, in px.")
-parser.add_argument("--block-near-goal-prob", type=float, default=0.0,
+parser.add_argument("--block-near-goal-prob", type=float, default=D["block_near_goal_prob"],
                     help="Fraction of episodes that start with the block part-way to the goal. A reverse "
                          "curriculum: with a uniform block start the first 2M-step run never once crossed the "
                          "success threshold, so the agent never saw what solving pays. Opt-in.")
-parser.add_argument("--block-goal-offset", type=float, nargs=2, default=[30.0, 0.25], metavar=("PX", "RAD"),
+parser.add_argument("--block-goal-offset", type=float, nargs=2, default=D["block_goal_offset"], metavar=("PX", "RAD"),
                     help="Max position and angle offset from the goal pose for those starts. The default "
                          "leaves mean coverage 0.50 (p90 0.74) -- clearly unsolved, but reachable.")
-parser.add_argument("--dummy-vec-env", action="store_true", default=False, help="Run envs in-process (debugging).")
-parser.add_argument("--seed", type=int, default=0, help="Seed used for the environment and the agent.")
+parser.add_argument("--dummy-vec-env", action="store_true", default=D["dummy_vec_env"], help="Run envs in-process (debugging).")
+parser.add_argument("--seed", type=int, default=D["seed"], help="Seed used for the environment and the agent.")
 # observation corruption
-parser.add_argument("--corrupt-obs", action="store_true", default=False, help="Noise the encoded obs (ST flat arm).")
-parser.add_argument("--corrupt-t-max", type=int, default=200,
+parser.add_argument("--corrupt-obs", action="store_true", default=D["corrupt_obs"], help="Noise the encoded obs (ST flat arm).")
+parser.add_argument("--corrupt-t-max", type=int, default=D["corrupt_t_max"],
                     help="Corruption timesteps are drawn from U[0, this). 200 was chosen from the VAE render "
                          "gate: t=100 is the edge at which the block's orientation stops being readable, so "
                          "the median draw sits on that edge. The old U[0,1000) put 90%% of draws past it.")
 # agent
-parser.add_argument("--total-timesteps", type=int, default=2_000_000, help="Total environment steps to train for.")
-parser.add_argument("--n-steps", type=int, default=128, help="Rollout length per environment.")
-parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
-parser.add_argument("--n-epochs", type=int, default=10, help="Optimisation epochs per rollout.")
-parser.add_argument("--learning-rate", type=float, default=3e-4, help="Adam learning rate.")
-parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
-parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda.")
-parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clipping range.")
-parser.add_argument("--ent-coef", type=float, default=0.0005,
+parser.add_argument("--total-timesteps", type=int, default=D["total_timesteps"], help="Total environment steps to train for.")
+parser.add_argument("--n-steps", type=int, default=D["n_steps"], help="Rollout length per environment.")
+parser.add_argument("--batch-size", type=int, default=D["batch_size"], help="Minibatch size.")
+parser.add_argument("--n-epochs", type=int, default=D["n_epochs"], help="Optimisation epochs per rollout.")
+parser.add_argument("--learning-rate", type=float, default=D["learning_rate"], help="Adam learning rate.")
+parser.add_argument("--gamma", type=float, default=D["gamma"], help="Discount factor.")
+parser.add_argument("--gae-lambda", type=float, default=D["gae_lambda"], help="GAE lambda.")
+parser.add_argument("--clip-range", type=float, default=D["clip_range"], help="PPO clipping range.")
+parser.add_argument("--ent-coef", type=float, default=D["ent_coef"],
                     help="Entropy bonus. Not SB3's 0.0: measured on the first 2M-step run, the action std "
                          "collapsed monotonically 0.365 -> 0.108 while the task was never solved, so nothing "
                          "resisted the entropy decay. 0.0005 is a light touch -- watch train/std early, since "
                          "it may not be enough to hold the entropy up on its own.")
-parser.add_argument("--vf-coef", type=float, default=0.5, help="Value loss coefficient.")
-parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Gradient clipping norm.")
-parser.add_argument("--log-std-init", type=float, default=-1.0,
+parser.add_argument("--vf-coef", type=float, default=D["vf_coef"], help="Value loss coefficient.")
+parser.add_argument("--max-grad-norm", type=float, default=D["max_grad_norm"], help="Gradient clipping norm.")
+parser.add_argument("--log-std-init", type=float, default=D["log_std_init"],
                     help="Initial log std of the action distribution. Under --action-mode delta, 0.0 means one "
                          "std is --delta-scale pixels. Default -1.0, measured: at 0.0 32%% of action "
                          "components clip against the box, at -1.0 0.7%%.")
-parser.add_argument("--net-arch", type=str, default="128,128", help="Hidden sizes after the LSTM, comma separated.")
-parser.add_argument("--lstm-hidden-size", type=int, default=128, help="LSTM hidden size.")
-parser.add_argument("--n-lstm-layers", type=int, default=1, help="Number of LSTM layers.")
-parser.add_argument("--shared-lstm", action="store_true", default=False, help="Share one LSTM between actor and critic.")
-parser.add_argument("--no-norm-reward", dest="norm_reward", action="store_false", default=True,
+parser.add_argument("--net-arch", type=str, default=D["net_arch"], help="Hidden sizes after the LSTM, comma separated.")
+parser.add_argument("--lstm-hidden-size", type=int, default=D["lstm_hidden_size"], help="LSTM hidden size.")
+parser.add_argument("--n-lstm-layers", type=int, default=D["n_lstm_layers"], help="Number of LSTM layers.")
+parser.add_argument("--shared-lstm", action="store_true", default=D["shared_lstm"], help="Share one LSTM between actor and critic.")
+parser.add_argument("--no-norm-reward", dest="norm_reward", action="store_false", default=D["norm_reward"],
                     help="Disable reward normalisation. On by default: dense returns reach ~274 undiscounted, "
                          "and vf_coef puts that raw scale straight into the loss.")
-parser.add_argument("--target-kl", type=float, default=None, help="Stop the update early past this KL (SB3 default: off).")
-parser.add_argument("--lr-schedule", type=str, default="constant", choices=["constant", "linear"],
+parser.add_argument("--target-kl", type=float, default=D["target_kl"], help="Stop the update early past this KL (SB3 default: off).")
+parser.add_argument("--lr-schedule", type=str, default=D["lr_schedule"], choices=["constant", "linear"],
                     help="Linear decays the learning rate to 0 over training. SB3's default is constant; "
                          "annealing is an arm to run, not a fix to apply.")
 # bookkeeping
-parser.add_argument("--wandb", action="store_true", default=False, help="Log to Weights & Biases.")
-parser.add_argument("--wandb-entity", type=str, default="l2sml", help="W&B entity.")
-parser.add_argument("--wandb-project", type=str, default="recurrent_ppo", help="W&B project.")
-parser.add_argument("--wandb-group", type=str, default=None, help="W&B group, the closest thing to a folder.")
-parser.add_argument("--wandb-tags", type=str, nargs="*", default=[],
+parser.add_argument("--wandb", action="store_true", default=D["wandb"], help="Log to Weights & Biases.")
+parser.add_argument("--wandb-entity", type=str, default=D["wandb_entity"], help="W&B entity.")
+parser.add_argument("--wandb-project", type=str, default=D["wandb_project"], help="W&B project.")
+parser.add_argument("--wandb-group", type=str, default=D["wandb_group"], help="W&B group, the closest thing to a folder.")
+parser.add_argument("--wandb-tags", type=str, nargs="*", default=D["wandb_tags"],
                     help="Extra W&B tags. The arm's own labels (obs type, reward, corruption, occlusion) are "
                          "DERIVED and always added, so a tag cannot disagree with the run it names.")
-parser.add_argument("--log-dir", type=str, default=None, help="Log directory. Default: logs/recurrent_ppo/<arm>/<time>.")
-parser.add_argument("--log-interval", type=int, default=10_000, help="Log data every n timesteps.")
-parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint every n timesteps.")
-parser.add_argument("--eval-freq", type=int, default=0, help="Evaluate every n timesteps (0 disables).")
-parser.add_argument("--video-freq", type=int, default=0,
+parser.add_argument("--log-dir", type=str, default=D["log_dir"], help="Log directory. Default: logs/recurrent_ppo/<arm>/<time>.")
+parser.add_argument("--log-interval", type=int, default=D["log_interval"], help="Log data every n timesteps.")
+parser.add_argument("--save-freq", type=int, default=D["save_freq"], help="Checkpoint every n timesteps.")
+parser.add_argument("--eval-freq", type=int, default=D["eval_freq"], help="Evaluate every n timesteps (0 disables).")
+parser.add_argument("--video-freq", type=int, default=D["video_freq"],
                     help="Record one rollout to W&B every n timesteps (0 disables). Needs --wandb. The scalar "
                          "rollout/* series already sync from tensorboard; this is the picture of what they "
                          "describe -- 'the policy stands still' is an inference from action_clip_frac until "
                          "you watch it.")
-parser.add_argument("--video-length", type=int, default=300, help="Max frames per recorded rollout.")
-parser.add_argument("--n-eval-episodes", type=int, default=20, help="Episodes per evaluation.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Continue training from a checkpoint, in its own run directory.")
-parser.add_argument("--device", type=str, default="auto", help="Torch device.")
+parser.add_argument("--video-length", type=int, default=D["video_length"], help="Max frames per recorded rollout.")
+parser.add_argument("--n-eval-episodes", type=int, default=D["n_eval_episodes"], help="Episodes per evaluation.")
+parser.add_argument("--checkpoint", type=str, default=D["checkpoint"], help="Continue training from a checkpoint, in its own run directory.")
+parser.add_argument("--device", type=str, default=D["device"], help="Torch device.")
 args_cli = parser.parse_args()
 
 """Rest everything follows."""
@@ -155,8 +157,7 @@ from recurrent_ppo.run_io import check_conflicts, dump_args, load_args, vecnorma
 
 # the training hyperparameters a checkpoint carries: RecurrentPPO.load rebuilds the agent from
 # them, so a CLI value given on a resume would be silently ignored rather than applied
-TRAINING_HPARAMS = ("n_steps", "batch_size", "n_epochs", "learning_rate", "gamma",
-                    "gae_lambda", "clip_range", "ent_coef", "vf_coef", "max_grad_norm")
+from recurrent_ppo.config import TRAINING_HPARAMS
 
 
 

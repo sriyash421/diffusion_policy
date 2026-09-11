@@ -63,21 +63,15 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import VecNormalize
 
 from recurrent_ppo.corrupt_policy import corrupting_extractor, set_corruption
-from recurrent_ppo.pusht_gym import DEFAULT_DELTA_SCALE, build_vec_env, env_kwargs_from
+from recurrent_ppo.config import LEGACY
+from recurrent_ppo.pusht_gym import build_vec_env, env_kwargs_from
 from recurrent_ppo.run_io import get_checkpoint_path, load_args, vecnormalize_path_for
 
-# how the env was shaped, and this script's flag for overriding each
-ENV_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate", "action_mode",
-            "delta_scale", "agent_start_range", "block_start_range", "reward", "shaping_coef", "occlusion",
-            "occlusion_persistence", "agent_near_block_prob", "agent_block_gap",
-            "block_near_goal_prob", "block_goal_offset")
-# what a run recorded before these keys existed
-FALLBACKS = {"obs": "keypoint", "max_episode_steps": 300, "render_size": 96,
-             "keypoint_visible_rate": 1.0, "action_mode": "absolute", "delta_scale": DEFAULT_DELTA_SCALE,
-             "agent_start_range": [50.0, 450.0], "block_start_range": [100.0, 400.0],
-             "reward": "dense", "shaping_coef": 1.0, "occlusion": "iid", "occlusion_persistence": 20.0,
-             "agent_near_block_prob": 0.0, "agent_block_gap": [20.0, 80.0],
-             "block_near_goal_prob": 0.0, "block_goal_offset": [30.0, 0.25]}
+# how the env was shaped. A key is overridable only if this script exposes a flag for it;
+# getattr's default keeps the two from having to be kept in step by hand.
+RESOLVE_KEYS = tuple(LEGACY)
+# what a run recorded before a key existed -- NOT today's defaults; see config.LEGACY
+FALLBACKS = LEGACY
 
 
 def resolve_config(run_dir):
@@ -87,8 +81,8 @@ def resolve_config(run_dir):
         print(f"[WARN] No params/args.yaml in {run_dir}; falling back to defaults, which may not "
               "be what this checkpoint trained on.")
     cfg = {}
-    for key in ENV_KEYS:
-        override = getattr(args_cli, key)
+    for key in RESOLVE_KEYS:
+        override = getattr(args_cli, key, None)
         recorded = saved.get(key, FALLBACKS[key])
         if override is not None and override != recorded:
             print(f"[INFO] Overriding {key}: run recorded {recorded!r}, using {override!r}")
