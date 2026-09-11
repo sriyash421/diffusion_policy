@@ -83,10 +83,11 @@ parser.add_argument("--learning-rate", type=float, default=3e-4, help="Adam lear
 parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
 parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda.")
 parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clipping range.")
-parser.add_argument("--ent-coef", type=float, default=0.01,
-                    help="Entropy bonus. Default 0.01, not SB3's 0.0: measured on the first 2M-step run, the "
-                         "action std collapsed monotonically 0.365 -> 0.108 while the task was never solved, "
-                         "so nothing resisted the entropy decay.")
+parser.add_argument("--ent-coef", type=float, default=0.0005,
+                    help="Entropy bonus. Not SB3's 0.0: measured on the first 2M-step run, the action std "
+                         "collapsed monotonically 0.365 -> 0.108 while the task was never solved, so nothing "
+                         "resisted the entropy decay. 0.0005 is a light touch -- watch train/std early, since "
+                         "it may not be enough to hold the entropy up on its own.")
 parser.add_argument("--vf-coef", type=float, default=0.5, help="Value loss coefficient.")
 parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Gradient clipping norm.")
 parser.add_argument("--log-std-init", type=float, default=-1.0,
@@ -116,6 +117,12 @@ parser.add_argument("--log-dir", type=str, default=None, help="Log directory. De
 parser.add_argument("--log-interval", type=int, default=10_000, help="Log data every n timesteps.")
 parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint every n timesteps.")
 parser.add_argument("--eval-freq", type=int, default=0, help="Evaluate every n timesteps (0 disables).")
+parser.add_argument("--video-freq", type=int, default=0,
+                    help="Record one rollout to W&B every n timesteps (0 disables). Needs --wandb. The scalar "
+                         "rollout/* series already sync from tensorboard; this is the picture of what they "
+                         "describe -- 'the policy stands still' is an inference from action_clip_frac until "
+                         "you watch it.")
+parser.add_argument("--video-length", type=int, default=300, help="Max frames per recorded rollout.")
 parser.add_argument("--n-eval-episodes", type=int, default=20, help="Episodes per evaluation.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Continue training from a checkpoint, in its own run directory.")
 parser.add_argument("--device", type=str, default="auto", help="Torch device.")
@@ -197,6 +204,62 @@ class QHead(BaseCallback):
         self.logger.record("train/q_loss", float(np.mean(losses)))
         self.logger.record("train/q_explained_variance",
                            float(explained_variance(th.cat(preds).cpu().numpy(), th.cat(targets).cpu().numpy())))
+
+
+class RolloutVideo(BaseCallback):
+    """Record one deterministic episode to W&B every `video_freq` steps.
+
+    Its own env, on the REAL start distribution with the curricula off and observations clean --
+    the same convention CleanEvalCallback uses, so the video shows the task as reported rather
+    than the easier one being trained on. Frames are taken BEFORE each step, and the env is a raw
+    PushTGymEnv rather than a VecEnv, so no auto-reset can splice the next episode in.
+    """
+
+    def __init__(self, env_kwargs, obs_type, freq, length, seed):
+        super().__init__()
+        self.env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0,
+                               render_mode="rgb_array")
+        if obs_type == "keypoint":
+            # the keypoint observation does not depend on render_size, so the video can be legible
+            self.env_kwargs["render_size"] = 512
+        self.obs_type, self.freq, self.length, self.seed = obs_type, freq, length, seed
+        self.env = None
+        self._next = freq
+
+    def _on_step(self):
+        if self.num_timesteps < self._next:
+            return True
+        self._next = self.num_timesteps + self.freq
+        self._record()
+        return True
+
+    def _record(self):
+        import imageio
+        import wandb
+
+        from recurrent_ppo.pusht_gym import PushTGymEnv
+
+        if self.env is None:
+            self.env = PushTGymEnv(obs_type=self.obs_type, **self.env_kwargs)
+            self.env.reset(seed=self.seed)
+        obs, _ = self.env.reset()
+        state, starts, frames, reward = None, np.ones(1, dtype=bool), [], 0.0
+        for _ in range(self.length):
+            frames.append(self.env.render())
+            batched = {k: v[None] for k, v in obs.items()} if isinstance(obs, dict) else obs[None]
+            action, state = self.model.policy.predict(batched, state=state, episode_start=starts,
+                                                      deterministic=True)
+            obs, r, terminated, truncated, info = self.env.step(action[0])
+            starts, reward = np.zeros(1, dtype=bool), reward + r
+            if terminated or truncated:
+                break
+        path = os.path.join(self.logger.dir or ".", f"rollout_{self.num_timesteps}.mp4")
+        # imageio, not wandb's own encoder: moviepy is not installed and this avoids the dependency
+        imageio.mimsave(path, frames, fps=10, macro_block_size=1)
+        wandb.log({"rollout/video": wandb.Video(path, caption=f"{self.num_timesteps} steps, "
+                                                              f"return {reward:.1f}, "
+                                                              f"success {bool(info['is_success'])}")})
+        os.remove(path)
 
 
 class CleanEvalCallback(EvalCallback):
@@ -387,6 +450,11 @@ def main():
         ActionDiagnostics(),
         QHead(),
     ]
+    if args_cli.video_freq > 0:
+        if run is None:
+            raise SystemExit("[ERROR] --video-freq needs --wandb: the video has nowhere else to go.")
+        callbacks.append(RolloutVideo(env_kwargs, args_cli.obs, args_cli.video_freq,
+                                      args_cli.video_length, args_cli.seed + 20_000))
     if args_cli.eval_freq > 0:
         # Evaluation always uses the REAL start distribution, even when training uses the
         # near-block curriculum: a curriculum is a way to learn the task, not a redefinition of
