@@ -11,7 +11,7 @@ import torch as th
 
 from recurrent_ppo.corrupt_policy import (CorruptingExtractor, features_extractor_kwargs,
                                           make_obs_noise_scheduler, policy_for)
-from recurrent_ppo.pusht_gym import WS, PushTGymEnv
+from recurrent_ppo.pusht_gym import AGENT_BOUNDS, WS, PushTGymEnv
 
 GOAL_STATE = np.array([256.0, 200.0, 256.0, 256.0, np.pi / 4])   # block sitting on the goal pose
 
@@ -92,10 +92,23 @@ def test_delta_action_is_an_offset_and_absolute_is_a_target():
     here = np.array(env.env.agent.position)
     assert np.allclose(env._convert_action(np.zeros(2)), here)           # a = 0 holds position
     assert np.allclose(env._convert_action(np.array([1.0, -1.0])) - here, [32.0, -32.0])
-    assert np.all(env._convert_action(np.array([50.0, 50.0])) <= WS)     # clipped into the arena
+
+    # both modes address the agent's USABLE region, not the image bounds. The agent is a kinematic
+    # body, so pymunk's walls do not stop it -- this clip is the only thing that does, and letting
+    # it reach [0, WS] let two runs park outside the arena where the block cannot be touched.
+    lo, hi = AGENT_BOUNDS
+    assert lo > 0 and hi < WS
+    # delta clips the ACTION to +/-1 first, so a huge action is a bounded offset from where the
+    # agent is -- never a jump to the edge. What must hold is that the target stays in the region.
+    env.env.reset_to_state = np.array([lo + 1.0, hi - 1.0, 300.0, 300.0, 0.0])
+    env.env.reset()
+    for extreme in ([-50.0, 50.0], [50.0, -50.0]):
+        target = env._convert_action(np.array(extreme))
+        assert np.all(target >= lo) and np.all(target <= hi)
 
     absolute = PushTGymEnv(obs_type="keypoint", action_mode="absolute")
-    assert np.allclose(absolute._convert_action(np.array([-1.0, 1.0])), [0.0, WS])
+    assert np.allclose(absolute._convert_action(np.array([-1.0, 1.0])), [lo, hi])
+    assert np.allclose(absolute._convert_action(np.zeros(2)), [(lo + hi) / 2] * 2)
 
 
 @pytest.mark.parametrize("mode,expected_run", [("iid", 2.0), ("persistent", 20.0)])

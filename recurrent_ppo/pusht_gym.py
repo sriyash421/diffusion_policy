@@ -57,6 +57,14 @@ SPAWN_TRIES = 20
 # Starting some episodes with the agent already beside the block puts contact within a few steps.
 AGENT_RADIUS = 15.0
 NEAR_TRIES = 40
+# THE AGENT IS A KINEMATIC BODY (pusht_env.py add_circle), so pymunk's walls do not stop it -- it
+# passes straight through them; they only constrain the block. The action target clip below is
+# therefore the ONLY thing bounding the agent, and it has to be the region the agent can usefully
+# occupy rather than the image bounds. Clipping to [0, WS] let the policy park at (0, 512),
+# outside the arena, physically unable to reach the block and unpenalised for it -- which is
+# exactly where both 2M-step runs converged, from every start.
+WALL_INNER = 7.0                       # segments at 5 and 506, radius 2
+AGENT_BOUNDS = (WALL_INNER + AGENT_RADIUS, WS - WALL_INNER - AGENT_RADIUS)   # (22, 489)
 # The goal pose is a constant for every PushT episode (PushTEnv._setup).
 GOAL_POSE = np.array([256.0, 256.0, np.pi / 4])
 
@@ -343,11 +351,13 @@ class PushTGymEnv(gymnasium.Env):
         human demonstrations move it a median of 8px per step: an absolute-position Gaussian at
         std 1 would explore with a standard deviation of 256px, half the table.
         """
+        lo, hi = AGENT_BOUNDS
         action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
         if self.action_mode == "delta":
             target = np.asarray(self.env.agent.position, dtype=np.float64) + action * self.delta_scale
-            return np.clip(target, 0.0, WS)
-        return (action + 1.0) * (WS / 2)
+            return np.clip(target, lo, hi)
+        # absolute spans the same usable region, so the two modes address the same set of points
+        return lo + (action + 1.0) * 0.5 * (hi - lo)
 
 
 def demo_action_steps(zarr_path=DEMO_ZARR):
