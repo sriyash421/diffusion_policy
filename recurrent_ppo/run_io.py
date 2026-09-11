@@ -19,6 +19,7 @@ IDENTITY_KEYS = (
     "corrupt_obs",
     "corrupt_t_max",
     "reward",
+    "shaping_coef",
     "occlusion",
     "occlusion_persistence",
     "agent_near_block_prob",

@@ -33,10 +33,17 @@ parser.add_argument("--occlusion", type=str, default="iid", choices=["iid", "per
                          "which is the partial observability recurrence exists for.")
 parser.add_argument("--occlusion-persistence", type=float, default=20.0,
                     help="Mean hidden run in steps under --occlusion persistent.")
-parser.add_argument("--reward", type=str, default="dense", choices=["dense", "sparse"],
+parser.add_argument("--reward", type=str, default="dense", choices=["dense", "sparse", "shaped"],
                     help="dense: coverage/0.95 every step, episode always runs to the horizon. sparse: +1 on "
                          "the first solve, then terminate. Termination is tied to the mode -- terminating "
-                         "under dense would forfeit a reward stream worth more than the whole approach.")
+                         "under dense would forfeit a reward stream worth more than the whole approach. "
+                         "shaped: dense plus potential-based shaping toward the block, which is what gives "
+                         "the agent any gradient at all before it makes contact.")
+parser.add_argument("--shaping-coef", type=float, default=10.0,
+                    help="Weight on the shaping term (--reward shaped). At 1.0 a full-arena approach is worth "
+                         "~0.5 total, against an episode-return spread of +/-6.7 driven by the random initial "
+                         "pose -- the signal would be buried in the noise it has to be told apart from. 10.0 "
+                         "puts a full approach at ~5, comparable to that spread. Worth sweeping.")
 parser.add_argument("--action-mode", type=str, default="delta", choices=["delta", "absolute"],
                     help="delta: the action is an offset from the agent's current position. absolute: it is a "
                          "target anywhere in the arena, which makes std=1 explore over half the table.")

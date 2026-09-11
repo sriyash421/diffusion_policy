@@ -33,7 +33,7 @@ from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 WS = 512.0
 OBS_TYPES = ("keypoint", "image")
 ACTION_MODES = ("delta", "absolute")
-REWARD_MODES = ("dense", "sparse")
+REWARD_MODES = ("dense", "sparse", "shaped")
 OCCLUSION_MODES = ("iid", "persistent")
 # fallback only, for when the demonstrations are not on disk; --delta-scale auto measures it
 DEFAULT_DELTA_SCALE = 32.0
@@ -75,6 +75,8 @@ class PushTGymEnv(gymnasium.Env):
         action_mode="delta",
         delta_scale=DEFAULT_DELTA_SCALE,
         reward_mode="dense",
+        shaping_coef=1.0,
+        shaping_gamma=0.99,
         occlusion="iid",
         occlusion_persistence=20.0,
         agent_start_range=DEFAULT_AGENT_START_RANGE,
@@ -91,6 +93,8 @@ class PushTGymEnv(gymnasium.Env):
         assert reward_mode in REWARD_MODES, f"unknown reward_mode {reward_mode!r}, expected {REWARD_MODES}"
         assert occlusion in OCCLUSION_MODES, f"unknown occlusion {occlusion!r}, expected {OCCLUSION_MODES}"
         self.reward_mode = reward_mode
+        self.shaping_coef = float(shaping_coef)
+        self.shaping_gamma = float(shaping_gamma)
         self.occlusion = occlusion
         self.obs_type = obs_type
         self.max_episode_steps = max_episode_steps
@@ -168,6 +172,7 @@ class PushTGymEnv(gymnasium.Env):
         self._elapsed_steps = 0
         self._max_reward = 0.0
         self._solved = False
+        self._prev_phi = self._potential()
         if self.obs_type == "keypoint":
             # start the chain AT its stationary distribution, so episode step 0 is not
             # systematically cleaner than the rest
@@ -243,6 +248,20 @@ class PushTGymEnv(gymnasium.Env):
                 return candidate
         return None
 
+    def _potential(self):
+        """Phi(s) = -(agent-to-block distance) / WS, the potential the shaping is built from.
+
+        Distance to the block's CENTRE, not its surface. Surface distance flatlines at zero the
+        moment the agent touches, so it stops rewarding the push it just earned; the centre keeps
+        pulling through contact. It is also 15x cheaper per step (+1% against +15% of an env step),
+        and under potential-based shaping the exact shape of Phi is free -- any potential leaves
+        the optimal policy unchanged, so this is chosen for the gradient it gives, not for
+        correctness.
+        """
+        agent = np.asarray(self.env.agent.position)
+        block = np.asarray(self.env.block.position)
+        return -float(np.linalg.norm(agent - block)) / WS
+
     def _block_inside_arena(self):
         verts = np.array([self.env.block.local_to_world(v)
                           for shape in self.env.block.shapes for v in shape.get_vertices()])
@@ -264,6 +283,16 @@ class PushTGymEnv(gymnasium.Env):
         # there is nothing left to earn, so terminating costs nothing.
         if self.reward_mode == "dense":
             reward, terminated = float(reward), False
+        elif self.reward_mode == "shaped":
+            # Potential-based shaping (Ng, Harada & Russell 1999): F = gamma*Phi(s') - Phi(s)
+            # PROVABLY leaves the optimal policy unchanged, which a raw distance bonus does not.
+            # It exists because PushT's own reward is a function of the block pose alone, so
+            # nothing the agent does before contact changes its return -- and the 2M-step runs
+            # duly learned to drive into a corner and stop.
+            phi = self._potential()
+            reward = float(reward) + self.shaping_coef * (self.shaping_gamma * phi - self._prev_phi)
+            self._prev_phi = phi
+            terminated = False
         else:
             reward, terminated = (1.0 if newly_solved else 0.0), self._solved
         truncated = (not terminated) and self._elapsed_steps >= self.max_episode_steps
@@ -401,6 +430,8 @@ def env_kwargs_from(cfg, obs_type):
         "agent_start_range": cfg["agent_start_range"],
         "block_start_range": cfg["block_start_range"],
         "reward_mode": cfg["reward"],
+        "shaping_coef": cfg["shaping_coef"],
+        "shaping_gamma": cfg["gamma"],
         "agent_near_block_prob": cfg["agent_near_block_prob"],
         "agent_block_gap": cfg["agent_block_gap"],
         "block_near_goal_prob": cfg["block_near_goal_prob"],

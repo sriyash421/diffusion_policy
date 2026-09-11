@@ -34,7 +34,7 @@ parser.add_argument("--render-size", type=int, default=None, help="Override the 
 parser.add_argument("--keypoint-visible-rate", type=float, default=None, help="Override the run's keypoint visibility.")
 parser.add_argument("--action-mode", type=str, default=None, choices=["delta", "absolute"], help="Override the run's action mode.")
 parser.add_argument("--delta-scale", type=float, default=None, help="Override the run's delta scale.")
-parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse"], help="Override the run's reward mode.")
+parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse", "shaped"], help="Override the run's reward mode.")
 parser.add_argument("--occlusion", type=str, default=None, choices=["iid", "persistent"], help="Override the run's occlusion mode.")
 parser.add_argument("--occlusion-persistence", type=float, default=None, help="Override the run's occlusion persistence.")
 parser.add_argument("--agent-near-block-prob", type=float, default=None, help="Override the run's near-block start fraction.")
@@ -68,14 +68,14 @@ from recurrent_ppo.run_io import get_checkpoint_path, load_args, vecnormalize_pa
 
 # how the env was shaped, and this script's flag for overriding each
 ENV_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate", "action_mode",
-            "delta_scale", "agent_start_range", "block_start_range", "reward", "occlusion",
+            "delta_scale", "agent_start_range", "block_start_range", "reward", "shaping_coef", "occlusion",
             "occlusion_persistence", "agent_near_block_prob", "agent_block_gap",
             "block_near_goal_prob", "block_goal_offset")
 # what a run recorded before these keys existed
 FALLBACKS = {"obs": "keypoint", "max_episode_steps": 300, "render_size": 96,
              "keypoint_visible_rate": 1.0, "action_mode": "absolute", "delta_scale": DEFAULT_DELTA_SCALE,
              "agent_start_range": [50.0, 450.0], "block_start_range": [100.0, 400.0],
-             "reward": "dense", "occlusion": "iid", "occlusion_persistence": 20.0,
+             "reward": "dense", "shaping_coef": 1.0, "occlusion": "iid", "occlusion_persistence": 20.0,
              "agent_near_block_prob": 0.0, "agent_block_gap": [20.0, 80.0],
              "block_near_goal_prob": 0.0, "block_goal_offset": [30.0, 0.25]}
 
