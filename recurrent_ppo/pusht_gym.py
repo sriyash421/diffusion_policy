@@ -23,6 +23,9 @@ import gymnasium
 import numpy as np
 from gymnasium import spaces
 
+from shapely.geometry import Point
+
+from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
@@ -47,6 +50,15 @@ DEFAULT_BLOCK_START_RANGE = (60.0, 490.0)
 # ~74% of draws are accepted, so this costs about 1.4 resets, and it covers 201 of the 206
 # demonstrated starts (the other 5 genuinely poke out of the arena).
 SPAWN_TRIES = 20
+# The dense reward is a function of the BLOCK pose alone -- the agent's position never enters it --
+# so until the agent touches the block the return is fixed at reset and there is no gradient toward
+# making contact at all. Measured on the first 2M-step run: a random policy contacts the block on
+# 1.5% of steps, the trained one on 1.1%, and the reward never changed in 19 of 20 episodes.
+# Starting some episodes with the agent already beside the block puts contact within a few steps.
+AGENT_RADIUS = 15.0
+NEAR_TRIES = 40
+# The goal pose is a constant for every PushT episode (PushTEnv._setup).
+GOAL_POSE = np.array([256.0, 256.0, np.pi / 4])
 
 
 class PushTGymEnv(gymnasium.Env):
@@ -67,6 +79,10 @@ class PushTGymEnv(gymnasium.Env):
         occlusion_persistence=20.0,
         agent_start_range=DEFAULT_AGENT_START_RANGE,
         block_start_range=DEFAULT_BLOCK_START_RANGE,
+        agent_near_block_prob=0.0,
+        agent_block_gap=(20.0, 80.0),
+        block_near_goal_prob=0.0,
+        block_goal_offset=(30.0, 0.25),
         legacy=False,
         render_mode=None,
     ):
@@ -82,6 +98,10 @@ class PushTGymEnv(gymnasium.Env):
         self.delta_scale = float(delta_scale)
         self.agent_start_range = tuple(float(x) for x in agent_start_range)
         self.block_start_range = tuple(float(x) for x in block_start_range)
+        self.agent_near_block_prob = float(agent_near_block_prob)
+        self.agent_block_gap = tuple(float(x) for x in agent_block_gap)
+        self.block_near_goal_prob = float(block_near_goal_prob)
+        self.block_goal_offset = tuple(float(x) for x in block_goal_offset)
         self.render_mode = render_mode
 
         if obs_type == "keypoint":
@@ -122,12 +142,26 @@ class PushTGymEnv(gymnasium.Env):
         # advances it, so without intervention every episode is the SAME episode. And its block
         # range is [100, 400], which excludes a quarter of the demonstrated block starts.
         for _ in range(SPAWN_TRIES):
-            self.env.reset_to_state = self._sample_state()
+            state = self._sample_state()
+            self.env.reset_to_state = state
             # seeded per episode: PushTKeypointsEnv draws its visibility mask from this RNG
             self.env.seed(int(self.np_random.integers(0, 2**31 - 1)))
             obs = self.env.reset()
-            if self._block_inside_arena():
+            if not self._block_inside_arena():
+                continue
+            # guarded so prob=0 consumes no draw, i.e. it is bit-identical to not having the
+            # curriculum at all rather than merely equivalent in distribution
+            if self.agent_near_block_prob <= 0.0 or self.np_random.random() >= self.agent_near_block_prob:
                 break
+            # the block's geometry is only known once it is placed, so the curriculum draw is a
+            # second reset rather than part of _sample_state
+            near = self._sample_agent_near_block()
+            if near is None:
+                continue
+            state[:2] = near
+            self.env.reset_to_state = state
+            obs = self.env.reset()
+            break
         else:
             print(f"[WARN] {SPAWN_TRIES} spawn draws all put the block through a wall; "
                   f"using the last one. Narrow --block-start-range.")
@@ -171,15 +205,43 @@ class PushTGymEnv(gymnasium.Env):
     def _sample_state(self):
         agent_lo, agent_hi = self.agent_start_range
         block_lo, block_hi = self.block_start_range
+        if self.block_near_goal_prob > 0.0 and self.np_random.random() < self.block_near_goal_prob:
+            # A reverse curriculum: start the block part-way solved so the agent can reach the
+            # goal, and see a reward for doing so, within an episode. With a uniform block start
+            # the first 2M-step run never once crossed the success threshold.
+            pos_offset, angle_offset = self.block_goal_offset
+            block = GOAL_POSE[:2] + self.np_random.uniform(-pos_offset, pos_offset, size=2)
+            angle = GOAL_POSE[2] + self.np_random.uniform(-angle_offset, angle_offset)
+        else:
+            block = self.np_random.uniform(block_lo, block_hi, size=2)
+            # PushTEnv draws randn()*2pi - pi here, which is a wrapped normal with sigma = 2pi:
+            # uniform to ~9 decimal places once taken mod 2pi. Drawn uniformly and said plainly.
+            angle = self.np_random.uniform(0.0, 2.0 * np.pi)
         return np.array([
             self.np_random.uniform(agent_lo, agent_hi),
             self.np_random.uniform(agent_lo, agent_hi),
-            self.np_random.uniform(block_lo, block_hi),
-            self.np_random.uniform(block_lo, block_hi),
-            # PushTEnv draws randn()*2pi - pi here, which is a wrapped normal with sigma = 2pi:
-            # uniform to ~9 decimal places once taken mod 2pi. Drawn uniformly and said plainly.
-            self.np_random.uniform(0.0, 2.0 * np.pi),
+            block[0], block[1], angle,
         ])
+
+    def _sample_agent_near_block(self):
+        """An agent start a short clear gap from the block's SURFACE, or None if no draw landed.
+
+        Distance to the surface, not to the centroid: the T is asymmetric, so a fixed radius would
+        put the agent inside one arm and a wide gap from the other. The lower bound clears the
+        agent's own radius, so it never spawns overlapping.
+        """
+        geom = pymunk_to_shapely(self.env.block, self.env.block.shapes)
+        centre = np.asarray(geom.centroid.coords[0])
+        lo_gap, hi_gap = self.agent_block_gap
+        agent_lo, agent_hi = self.agent_start_range
+        reach = float(np.hypot(*(np.asarray(geom.bounds[2:]) - centre))) + hi_gap
+        for _ in range(NEAR_TRIES):
+            candidate = centre + self.np_random.uniform(-reach, reach, size=2)
+            if not (agent_lo <= candidate[0] <= agent_hi and agent_lo <= candidate[1] <= agent_hi):
+                continue
+            if lo_gap <= geom.distance(Point(candidate)) <= hi_gap:
+                return candidate
+        return None
 
     def _block_inside_arena(self):
         verts = np.array([self.env.block.local_to_world(v)
@@ -339,6 +401,10 @@ def env_kwargs_from(cfg, obs_type):
         "agent_start_range": cfg["agent_start_range"],
         "block_start_range": cfg["block_start_range"],
         "reward_mode": cfg["reward"],
+        "agent_near_block_prob": cfg["agent_near_block_prob"],
+        "agent_block_gap": cfg["agent_block_gap"],
+        "block_near_goal_prob": cfg["block_near_goal_prob"],
+        "block_goal_offset": cfg["block_goal_offset"],
     }
     if obs_type == "keypoint":
         kwargs["keypoint_visible_rate"] = cfg["keypoint_visible_rate"]

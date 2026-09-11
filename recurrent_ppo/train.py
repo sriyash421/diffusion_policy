@@ -52,6 +52,20 @@ parser.add_argument("--agent-start-range", type=float, nargs=2, default=[50.0, 4
 parser.add_argument("--block-start-range", type=float, nargs=2, default=[60.0, 490.0], metavar=("LO", "HI"),
                     help="Uniform range each block start coordinate is drawn from. Wider than PushTEnv's "
                          "[100,400], which excludes a quarter of the demonstrated block starts.")
+parser.add_argument("--agent-near-block-prob", type=float, default=0.0,
+                    help="Fraction of episodes that start with the agent a short gap from the block. The dense "
+                         "reward depends on the BLOCK pose alone, so with a uniform start the return is fixed "
+                         "at reset until contact happens by chance -- measured at 1.5%% of steps. Opt-in: this "
+                         "is a curriculum choice, not a bug fix.")
+parser.add_argument("--agent-block-gap", type=float, nargs=2, default=[20.0, 80.0], metavar=("LO", "HI"),
+                    help="Clear distance from the block's surface for those starts, in px.")
+parser.add_argument("--block-near-goal-prob", type=float, default=0.0,
+                    help="Fraction of episodes that start with the block part-way to the goal. A reverse "
+                         "curriculum: with a uniform block start the first 2M-step run never once crossed the "
+                         "success threshold, so the agent never saw what solving pays. Opt-in.")
+parser.add_argument("--block-goal-offset", type=float, nargs=2, default=[30.0, 0.25], metavar=("PX", "RAD"),
+                    help="Max position and angle offset from the goal pose for those starts. The default "
+                         "leaves mean coverage 0.50 (p90 0.74) -- clearly unsolved, but reachable.")
 parser.add_argument("--dummy-vec-env", action="store_true", default=False, help="Run envs in-process (debugging).")
 parser.add_argument("--seed", type=int, default=0, help="Seed used for the environment and the agent.")
 # observation corruption
@@ -69,7 +83,10 @@ parser.add_argument("--learning-rate", type=float, default=3e-4, help="Adam lear
 parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
 parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda.")
 parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clipping range.")
-parser.add_argument("--ent-coef", type=float, default=0.0, help="Entropy bonus coefficient.")
+parser.add_argument("--ent-coef", type=float, default=0.01,
+                    help="Entropy bonus. Default 0.01, not SB3's 0.0: measured on the first 2M-step run, the "
+                         "action std collapsed monotonically 0.365 -> 0.108 while the task was never solved, "
+                         "so nothing resisted the entropy decay.")
 parser.add_argument("--vf-coef", type=float, default=0.5, help="Value loss coefficient.")
 parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Gradient clipping norm.")
 parser.add_argument("--log-std-init", type=float, default=-1.0,
@@ -88,6 +105,13 @@ parser.add_argument("--lr-schedule", type=str, default="constant", choices=["con
                     help="Linear decays the learning rate to 0 over training. SB3's default is constant; "
                          "annealing is an arm to run, not a fix to apply.")
 # bookkeeping
+parser.add_argument("--wandb", action="store_true", default=False, help="Log to Weights & Biases.")
+parser.add_argument("--wandb-entity", type=str, default="l2sml", help="W&B entity.")
+parser.add_argument("--wandb-project", type=str, default="recurrent_ppo", help="W&B project.")
+parser.add_argument("--wandb-group", type=str, default=None, help="W&B group, the closest thing to a folder.")
+parser.add_argument("--wandb-tags", type=str, nargs="*", default=[],
+                    help="Extra W&B tags. The arm's own labels (obs type, reward, corruption, occlusion) are "
+                         "DERIVED and always added, so a tag cannot disagree with the run it names.")
 parser.add_argument("--log-dir", type=str, default=None, help="Log directory. Default: logs/recurrent_ppo/<arm>/<time>.")
 parser.add_argument("--log-interval", type=int, default=10_000, help="Log data every n timesteps.")
 parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint every n timesteps.")
@@ -195,6 +219,29 @@ class CleanEvalCallback(EvalCallback):
             if was_on:
                 extractor.enabled = True
 
+def arm_tags(cfg):
+    """The labels that describe what this run IS, derived from the config rather than typed.
+
+    pusht_base.yaml keeps `obs_noise_tag: {clean, obs_noised}` by hand and has a startup check
+    (`_check_obs_noise_labels`) precisely because hand-set tags drifted from the arm they named.
+    Deriving them removes the failure instead of checking for it, and keeps the same vocabulary
+    so these runs read like the diffusion-policy ones in the same workspace.
+    """
+    tags = [
+        f"obs-{cfg['obs']}",
+        "obs_noised" if cfg["corrupt_obs"] else "clean",
+        f"reward-{cfg['reward']}",
+        f"action-{cfg['action_mode']}",
+    ]
+    if cfg["agent_near_block_prob"] > 0:
+        tags.append("init-near-block")
+    if cfg["block_near_goal_prob"] > 0:
+        tags.append("init-near-goal")
+    if cfg["obs"] == "keypoint" and cfg["keypoint_visible_rate"] < 1.0:
+        tags.append(f"occl-{cfg['occlusion']}")
+    return tags
+
+
 def main():
     """Train with a sb3-contrib recurrent agent."""
     cfg = vars(args_cli)
@@ -213,6 +260,7 @@ def main():
         # continue the run the checkpoint belongs to, rather than opening a new directory that
         # would claim to be a fresh experiment
         log_dir = os.path.dirname(os.path.abspath(args_cli.checkpoint))
+        arm = f"{args_cli.obs}{'_corrupt' if args_cli.corrupt_obs else '_clean'}"
         check_conflicts(load_args(log_dir), cfg)
         print(f"[INFO] Resuming run in: {log_dir}")
     else:
@@ -227,6 +275,26 @@ def main():
 
     with open(os.path.join(log_dir, "command.txt"), "a") as f:
         f.write(" ".join([sys.executable] + sys.argv) + "\n")
+
+    run = None
+    if args_cli.wandb:
+        import wandb
+
+        run = wandb.init(
+            entity=args_cli.wandb_entity,
+            project=args_cli.wandb_project,
+            group=args_cli.wandb_group,
+            name=f"{os.path.basename(log_dir)}_{arm}" if not resuming else os.path.basename(log_dir),
+            tags=sorted(set(args_cli.wandb_tags) | set(arm_tags(cfg))),
+            config=cfg,
+            # SB3 already writes these metrics to tensorboard; let wandb mirror that rather than
+            # instrumenting the training loop a second time
+            sync_tensorboard=True,
+            dir=log_dir,
+            resume="allow" if resuming else None,
+        )
+        print(f"[INFO] W&B: {run.url}")
+        print(f"[INFO] W&B tags: {sorted(set(args_cli.wandb_tags) | set(arm_tags(cfg)))}")
 
     env_kwargs = env_kwargs_from(cfg, args_cli.obs)
 
@@ -320,13 +388,17 @@ def main():
         QHead(),
     ]
     if args_cli.eval_freq > 0:
+        # Evaluation always uses the REAL start distribution, even when training uses the
+        # near-block curriculum: a curriculum is a way to learn the task, not a redefinition of
+        # it, and evaluating on it would make the number incomparable with a uniform-start run.
+        eval_env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0)
         eval_env = build_vec_env(
             obs_type=args_cli.obs,
             n_envs=1,
             # a disjoint seed block, so the evaluation episodes are not the training ones
             seed=args_cli.seed + 10_000,
             use_subproc=False,
-            **env_kwargs,
+            **eval_env_kwargs,
         )
         if isinstance(env, VecNormalize):
             # EvalCallback syncs the statistics across, which requires both sides to be wrapped
@@ -363,6 +435,8 @@ def main():
         env.save(os.path.join(log_dir, "model_vecnormalize.pkl"))
 
     env.close()
+    if run is not None:
+        run.finish()
 
 
 if __name__ == "__main__":
