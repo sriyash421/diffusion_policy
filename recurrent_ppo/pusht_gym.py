@@ -29,9 +29,12 @@ from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
+from diffusion_policy.env.pusht.feedback_util import (GOAL_KEYPOINTS, arm_to_t_distance,
+                                                     keypoints_at_pose, t_goal_distance)
 from recurrent_ppo.config import (ACTION_MODES, AGENT_BOUNDS, AGENT_RADIUS, DEFAULTS as D,
                                   DELTA_SCALE_FALLBACK, DEMO_ZARR, ENV_KEYS, GOAL_POSE, KEYPOINT_ONLY_KEYS, NEAR_TRIES,
-                                  OBS_TYPES, OCCLUSION_MODES, REWARD_MODES, SPAWN_TRIES, WS)
+                                  OBS_TYPES, OCCLUSION_MODES, REWARD_MODES, SHAPING_POTENTIALS,
+                                  SPAWN_TRIES, WS)
 
 
 class PushTGymEnv(gymnasium.Env):
@@ -49,6 +52,7 @@ class PushTGymEnv(gymnasium.Env):
         delta_scale=DELTA_SCALE_FALLBACK,
         reward_mode=D["reward"],
         shaping_coef=D["shaping_coef"],
+        shaping_potential=D["shaping_potential"],
         shaping_gamma=D["gamma"],
         occlusion=D["occlusion"],
         occlusion_persistence=D["occlusion_persistence"],
@@ -66,6 +70,9 @@ class PushTGymEnv(gymnasium.Env):
         assert reward_mode in REWARD_MODES, f"unknown reward_mode {reward_mode!r}, expected {REWARD_MODES}"
         assert occlusion in OCCLUSION_MODES, f"unknown occlusion {occlusion!r}, expected {OCCLUSION_MODES}"
         self.reward_mode = reward_mode
+        assert shaping_potential in SHAPING_POTENTIALS, \
+            f"unknown shaping_potential {shaping_potential!r}, expected {SHAPING_POTENTIALS}"
+        self.shaping_potential = shaping_potential
         self.shaping_coef = float(shaping_coef)
         self.shaping_gamma = float(shaping_gamma)
         self.occlusion = occlusion
@@ -222,18 +229,27 @@ class PushTGymEnv(gymnasium.Env):
         return None
 
     def _potential(self):
-        """Phi(s) = -(agent-to-block distance) / WS, the potential the shaping is built from.
+        """Phi(s), in units of WS. Reuses feedback_util so these terms mean exactly what the
+        repo's verifier means by them, rather than a second definition of the same quantity.
 
-        Distance to the block's CENTRE, not its surface. Surface distance flatlines at zero the
-        moment the agent touches, so it stops rewarding the push it just earned; the centre keeps
-        pulling through contact. It is also 15x cheaper per step (+1% against +15% of an env step),
-        and under potential-based shaping the exact shape of Phi is free -- any potential leaves
-        the optimal policy unchanged, so this is chosen for the gradient it gives, not for
-        correctness.
+        `feedback` is the goal-vs-achieved per-keypoint displacement, so t_goal captures the
+        block's POSITION AND ROTATION error and is 0 only at the goal pose. A centroid distance
+        would be blind to rotation, which is half of what PushT asks for.
+
+        arm-to-T is the only term that varies before the agent touches the block; t_goal alone is
+        flat until the block moves, which is why `arm_t` exists as the combination.
         """
-        agent = np.asarray(self.env.agent.position)
-        block = np.asarray(self.env.block.position)
-        return -float(np.linalg.norm(agent - block)) / WS
+        block = self.env.block
+        pose = np.array([block.position[0], block.position[1], block.angle], dtype=np.float32)
+        feedback = (GOAL_KEYPOINTS - keypoints_at_pose(pose)).reshape(-1)
+        if self.shaping_potential == "arm":
+            distance = arm_to_t_distance(np.asarray(self.env.agent.position), feedback)
+        elif self.shaping_potential == "t_goal":
+            distance = t_goal_distance(feedback)
+        else:
+            distance = t_goal_distance(feedback) + arm_to_t_distance(
+                np.asarray(self.env.agent.position), feedback)
+        return -float(distance) / WS
 
     def _block_inside_arena(self):
         verts = np.array([self.env.block.local_to_world(v)
@@ -396,6 +412,7 @@ def env_kwargs_from(cfg, obs_type):
     kwargs = {k: cfg[k] for k in ENV_KEYS}
     kwargs["reward_mode"] = cfg["reward"]
     kwargs["shaping_coef"] = cfg.get("shaping_coef", D["shaping_coef"])
+    kwargs["shaping_potential"] = cfg.get("shaping_potential", D["shaping_potential"])
     kwargs["shaping_gamma"] = cfg.get("gamma", D["gamma"])
     if obs_type == "keypoint":
         kwargs.update({k: cfg[k] for k in KEYPOINT_ONLY_KEYS})

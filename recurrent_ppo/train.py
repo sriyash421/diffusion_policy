@@ -41,6 +41,12 @@ parser.add_argument("--reward", type=str, default=D["reward"], choices=["dense",
                          "under dense would forfeit a reward stream worth more than the whole approach. "
                          "shaped: dense plus potential-based shaping toward the block, which is what gives "
                          "the agent any gradient at all before it makes contact.")
+parser.add_argument("--shaping-potential", type=str, default=D["shaping_potential"],
+                    choices=["t_goal", "arm_t", "arm"],
+                    help="What the shaping potential measures. t_goal: mean per-keypoint distance of the T "
+                         "from the goal pose, so it sees rotation as well as position and keeps paying after "
+                         "contact. arm: distance to the block, the only term that varies BEFORE contact. "
+                         "arm_t: both, which is the repo's own verifier value.")
 parser.add_argument("--shaping-coef", type=float, default=D["shaping_coef"],
                     help="Weight on the shaping term (--reward shaped). At 1.0 a full-arena approach is worth "
                          "~0.5 total, against an episode-return spread of +/-6.7 driven by the random initial "
