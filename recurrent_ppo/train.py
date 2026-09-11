@@ -149,10 +149,11 @@ parser.add_argument("--video-freq", type=int, default=D["video_freq"],
                          "describe -- 'the policy stands still' is an inference from action_clip_frac until "
                          "you watch it.")
 parser.add_argument("--video-length", type=int, default=D["video_length"], help="Max frames per EPISODE in a clip.")
-parser.add_argument("--video-episodes", type=int, default=D["video_episodes"],
-                    help="Episodes per clip. One episode is a poor sample of a policy whose eval reward has a "
-                         "+/-7 spread from the initial pose alone; five shows whether a behaviour is the "
-                         "policy or the draw.")
+parser.add_argument("--video-episodes", type=int, default=D["video_episodes"], help="Episodes per clip.")
+parser.add_argument("--video-stride", type=int, default=D["video_stride"],
+                    help="Keep one frame every N env steps. The clip plays at the control rate regardless, so "
+                         "a stride of 5 is a 5x-speed view of the same episode -- 60 frames for a 300-step "
+                         "episode rather than 300.")
 parser.add_argument("--n-eval-episodes", type=int, default=D["n_eval_episodes"], help="Episodes per evaluation.")
 parser.add_argument("--eval-curriculum", type=str, default=D["eval_curriculum"], choices=["match", "off"],
                     help="match: eval/ uses the SAME start distribution as training, so it measures what was "
@@ -283,7 +284,7 @@ class RolloutVideo(BaseCallback):
     PushTGymEnv rather than a VecEnv, so no auto-reset can splice the next episode in.
     """
 
-    def __init__(self, env_kwargs, obs_type, freq, length, seed, episodes=1):
+    def __init__(self, env_kwargs, obs_type, freq, length, seed, episodes=1, stride=1):
         super().__init__()
         self.env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0,
                                render_mode="rgb_array")
@@ -291,7 +292,7 @@ class RolloutVideo(BaseCallback):
             # the keypoint observation does not depend on render_size, so the video can be legible
             self.env_kwargs["render_size"] = 512
         self.obs_type, self.freq, self.length, self.seed = obs_type, freq, length, seed
-        self.episodes = episodes
+        self.episodes, self.stride = episodes, max(1, stride)
         self.env = None
         self._next = freq
 
@@ -317,8 +318,10 @@ class RolloutVideo(BaseCallback):
             # the LSTM state is reset PER EPISODE, exactly as it is in a vec env rollout -- one
             # clip spanning several episodes must not carry memory across their boundaries
             state, starts, reward = None, np.ones(1, dtype=bool), 0.0
-            for _ in range(self.length):
-                frames.append(self.env.render())
+            for step in range(self.length):
+                # BEFORE the step, and only every `stride`-th one
+                if step % self.stride == 0:
+                    frames.append(self.env.render())
                 batched = {k: v[None] for k, v in obs.items()} if isinstance(obs, dict) else obs[None]
                 action, state = self.model.policy.predict(batched, state=state, episode_start=starts,
                                                           deterministic=True)
@@ -331,8 +334,9 @@ class RolloutVideo(BaseCallback):
         path = os.path.join(self.logger.dir or ".", f"rollout_{self.num_timesteps}.mp4")
         # imageio, not wandb's own encoder: moviepy is not installed and this avoids the dependency
         imageio.mimsave(path, frames, fps=10, macro_block_size=1)
-        caption = (f"{self.num_timesteps} steps | {len(returns)} episodes | "
-                   f"returns {' '.join(f'{r:.0f}' for r in returns)} | "
+        caption = (f"{self.num_timesteps} steps | {len(returns)} episode(s) | "
+                   f"1 frame per {self.stride} steps ({self.stride}x speed) | "
+                   f"returns {' '.join(f'{r:.1f}' for r in returns)} | "
                    f"successes {sum(successes)}/{len(successes)}")
         wandb.log({"rollout/video": wandb.Video(path, caption=caption)})
         self.logger.record("rollout/video_return_mean", float(np.mean(returns)))
@@ -532,7 +536,8 @@ def main():
             raise SystemExit("[ERROR] --video-freq needs --wandb: the video has nowhere else to go.")
         callbacks.append(RolloutVideo(env_kwargs, args_cli.obs, args_cli.video_freq,
                                       args_cli.video_length, args_cli.seed + 20_000,
-                                      episodes=args_cli.video_episodes))
+                                      episodes=args_cli.video_episodes,
+                                      stride=args_cli.video_stride))
     if args_cli.eval_freq > 0:
         # Two evaluations, on the two start distributions, so neither question is answered by
         # the other's number: `match` is the one the policy trained on, `off` is the real task.
