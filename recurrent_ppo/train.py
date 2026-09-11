@@ -47,9 +47,11 @@ parser.add_argument("--progress-coef", type=float, default=D["progress_coef"],
 parser.add_argument("--success-bonus", type=float, default=D["success_bonus"],
                     help="Paid once, on the first step coverage exceeds 0.95. At the default it is worth about "
                          "as much as the entire approach, so finishing is not a rounding error on progress.")
-parser.add_argument("--block-zero-coverage", action="store_true", default=D["block_zero_coverage"],
-                    help="Reject block starts that already overlap the goal. 28.7%% of uniform draws do, and "
-                         "under a level reward that overlap is paid for every step of the episode.")
+parser.add_argument("--allow-goal-overlap", dest="block_zero_coverage", action="store_false",
+                    default=D["block_zero_coverage"],
+                    help="Allow block starts that already overlap the goal. Rejecting them is the DEFAULT: "
+                         "34.5%% of uniform draws overlap, and any level-valued reward pays for that overlap "
+                         "every step of the episode, which is how a do-nothing policy scored 92.7.")
 parser.add_argument("--shaping-potential", type=str, default=D["shaping_potential"],
                     choices=["t_goal", "arm_t", "arm"],
                     help="What the shaping potential measures. t_goal: mean per-keypoint distance of the T "

@@ -72,7 +72,7 @@ DEFAULTS = {
     "shaping_coef": 10.0,
     "progress_coef": 30.0,
     "success_bonus": 10.0,
-    "block_zero_coverage": False,
+    "block_zero_coverage": True,
     "shaping_potential": "t_goal",
     "action_mode": "delta",
     "delta_scale": "auto",
