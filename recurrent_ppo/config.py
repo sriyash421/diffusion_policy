@@ -15,9 +15,12 @@ Three kinds of thing live here, and the distinction is load-bearing:
 
   ARENA      facts about PushT, not choices. Measured off the env, not invented.
   DEFAULTS   the choices, i.e. what a flag is if you do not pass it.
-  LEGACY     what a run recorded before a key existed. NOT the same as DEFAULTS, and the
-             reason play.py needs its own table: a checkpoint from before `--action-mode`
-             was `absolute`, whatever today's default happens to be.
+
+A run that predates a key is NOT covered here. play.py falls back to today's default and says
+so, loudly and per key, because a silent guess is how an evaluation ends up measuring a
+different task from the one that was trained. What each past run actually used is recorded in
+recurrent_ppo_runs_sep11.md, which is generated from the run directories rather than kept by
+hand -- a hand-kept table of the same facts is exactly what drifted before.
 """
 
 import numpy as np
@@ -153,35 +156,3 @@ IDENTITY_KEYS = (
 # them, so a CLI value given on a resume is ignored rather than applied.
 TRAINING_HPARAMS = ("n_steps", "batch_size", "n_epochs", "learning_rate", "gamma",
                     "gae_lambda", "clip_range", "ent_coef", "vf_coef", "max_grad_norm")
-
-# ------------------------------------------------------------------ LEGACY: what old runs meant
-# NOT DEFAULTS. A run whose args.yaml predates a key was trained with the behaviour that existed
-# then, which is frequently not today's default -- `--action-mode` did not exist when absolute was
-# the only mode, and the block start range was PushTEnv's own [100, 400] before it was widened to
-# cover the demonstrations. play.py reads these so an old checkpoint is evaluated on the task it
-# actually trained on.
-LEGACY = {
-    "obs": "keypoint",
-    # shaping_gamma must equal the gamma the run TRAINED under, or the potential differs at
-    # evaluation from the one the policy learned against
-    "gamma": 0.99,
-    "max_episode_steps": 300,
-    "render_size": 96,
-    "keypoint_visible_rate": 1.0,
-    "occlusion": "iid",
-    "occlusion_persistence": 20.0,
-    "reward": "dense",
-    "shaping_coef": 0.0,
-    "shaping_potential": "arm",
-    "progress_coef": 30.0,
-    "success_bonus": 10.0,
-    "block_zero_coverage": False,
-    "action_mode": "absolute",
-    "delta_scale": 32.0,
-    "agent_start_range": [50.0, 450.0],
-    "block_start_range": [100.0, 400.0],
-    "agent_near_block_prob": 0.0,
-    "agent_block_gap": [20.0, 80.0],
-    "block_near_goal_prob": 0.0,
-    "block_goal_offset": [30.0, 0.25],
-}

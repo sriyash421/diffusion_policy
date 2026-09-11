@@ -63,15 +63,21 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import VecNormalize
 
 from recurrent_ppo.corrupt_policy import corrupting_extractor, set_corruption
-from recurrent_ppo.config import LEGACY
+from recurrent_ppo.config import DEFAULTS
 from recurrent_ppo.pusht_gym import build_vec_env, env_kwargs_from
 from recurrent_ppo.run_io import get_checkpoint_path, load_args, vecnormalize_path_for
 
 # how the env was shaped. A key is overridable only if this script exposes a flag for it;
 # getattr's default keeps the two from having to be kept in step by hand.
-RESOLVE_KEYS = tuple(LEGACY)
-# what a run recorded before a key existed -- NOT today's defaults; see config.LEGACY
-FALLBACKS = LEGACY
+RESOLVE_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate",
+                "occlusion", "occlusion_persistence", "reward", "shaping_coef",
+                "shaping_potential", "progress_coef", "success_bonus", "block_zero_coverage",
+                "action_mode", "delta_scale", "agent_start_range", "block_start_range",
+                "agent_near_block_prob", "agent_block_gap", "block_near_goal_prob",
+                "block_goal_offset", "gamma")
+# A run that predates a key gets today's default, announced per key. See
+# recurrent_ppo_runs_sep11.md for what past runs actually used.
+FALLBACKS = DEFAULTS
 
 
 def resolve_config(run_dir):
@@ -80,6 +86,12 @@ def resolve_config(run_dir):
     if not saved:
         print(f"[WARN] No params/args.yaml in {run_dir}; falling back to defaults, which may not "
               "be what this checkpoint trained on.")
+    missing = [k for k in RESOLVE_KEYS if k not in saved]
+    if missing:
+        print(f"[WARN] This run predates {len(missing)} key(s); assuming today's default for each. "
+              f"See recurrent_ppo_runs_sep11.md for what it actually used.")
+        for k in missing:
+            print(f"         {k} = {FALLBACKS[k]!r}")
     cfg = {}
     for key in RESOLVE_KEYS:
         override = getattr(args_cli, key, None)
