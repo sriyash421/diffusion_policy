@@ -34,7 +34,7 @@ parser.add_argument("--render-size", type=int, default=None, help="Override the 
 parser.add_argument("--keypoint-visible-rate", type=float, default=None, help="Override the run's keypoint visibility.")
 parser.add_argument("--action-mode", type=str, default=None, choices=["delta", "absolute"], help="Override the run's action mode.")
 parser.add_argument("--delta-scale", type=float, default=None, help="Override the run's delta scale.")
-parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse", "shaped"], help="Override the run's reward mode.")
+parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse", "shaped", "delta"], help="Override the run's reward mode.")
 parser.add_argument("--occlusion", type=str, default=None, choices=["iid", "persistent"], help="Override the run's occlusion mode.")
 parser.add_argument("--occlusion-persistence", type=float, default=None, help="Override the run's occlusion persistence.")
 parser.add_argument("--agent-near-block-prob", type=float, default=None, help="Override the run's near-block start fraction.")

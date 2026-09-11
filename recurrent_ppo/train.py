@@ -35,12 +35,21 @@ parser.add_argument("--occlusion", type=str, default=D["occlusion"], choices=["i
                          "which is the partial observability recurrence exists for.")
 parser.add_argument("--occlusion-persistence", type=float, default=D["occlusion_persistence"],
                     help="Mean hidden run in steps under --occlusion persistent.")
-parser.add_argument("--reward", type=str, default=D["reward"], choices=["dense", "sparse", "shaped"],
+parser.add_argument("--reward", type=str, default=D["reward"], choices=["dense", "sparse", "shaped", "delta"],
                     help="dense: coverage/0.95 every step, episode always runs to the horizon. sparse: +1 on "
                          "the first solve, then terminate. Termination is tied to the mode -- terminating "
                          "under dense would forfeit a reward stream worth more than the whole approach. "
                          "shaped: dense plus potential-based shaping toward the block, which is what gives "
                          "the agent any gradient at all before it makes contact.")
+parser.add_argument("--progress-coef", type=float, default=D["progress_coef"],
+                    help="Scale on the --reward delta progress term. The T starts a mean 167px from the goal "
+                         "pose (0.326 of the arena), so 30 makes a full solve worth about 10 in progress.")
+parser.add_argument("--success-bonus", type=float, default=D["success_bonus"],
+                    help="Paid once, on the first step coverage exceeds 0.95. At the default it is worth about "
+                         "as much as the entire approach, so finishing is not a rounding error on progress.")
+parser.add_argument("--block-zero-coverage", action="store_true", default=D["block_zero_coverage"],
+                    help="Reject block starts that already overlap the goal. 28.7%% of uniform draws do, and "
+                         "under a level reward that overlap is paid for every step of the episode.")
 parser.add_argument("--shaping-potential", type=str, default=D["shaping_potential"],
                     choices=["t_goal", "arm_t", "arm"],
                     help="What the shaping potential measures. t_goal: mean per-keypoint distance of the T "

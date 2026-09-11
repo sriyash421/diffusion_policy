@@ -53,6 +53,9 @@ class PushTGymEnv(gymnasium.Env):
         reward_mode=D["reward"],
         shaping_coef=D["shaping_coef"],
         shaping_potential=D["shaping_potential"],
+        progress_coef=D["progress_coef"],
+        success_bonus=D["success_bonus"],
+        block_zero_coverage=D["block_zero_coverage"],
         shaping_gamma=D["gamma"],
         occlusion=D["occlusion"],
         occlusion_persistence=D["occlusion_persistence"],
@@ -74,6 +77,9 @@ class PushTGymEnv(gymnasium.Env):
             f"unknown shaping_potential {shaping_potential!r}, expected {SHAPING_POTENTIALS}"
         self.shaping_potential = shaping_potential
         self.shaping_coef = float(shaping_coef)
+        self.progress_coef = float(progress_coef)
+        self.success_bonus = float(success_bonus)
+        self.block_zero_coverage = bool(block_zero_coverage)
         self.shaping_gamma = float(shaping_gamma)
         self.occlusion = occlusion
         self.obs_type = obs_type
@@ -133,6 +139,10 @@ class PushTGymEnv(gymnasium.Env):
             obs = self.env.reset()
             if not self._block_inside_arena():
                 continue
+            # zero coverage at reset: 28.7% of uniform block draws already overlap the goal, and
+            # under a level reward that overlap is paid for every step of the episode
+            if self.block_zero_coverage and self._block_coverage() > 0.0:
+                continue
             # guarded so prob=0 consumes no draw, i.e. it is bit-identical to not having the
             # curriculum at all rather than merely equivalent in distribution
             if self.agent_near_block_prob <= 0.0 or self.np_random.random() >= self.agent_near_block_prob:
@@ -153,6 +163,7 @@ class PushTGymEnv(gymnasium.Env):
         self._max_reward = 0.0
         self._solved = False
         self._prev_phi = self._potential()
+        self._prev_distance = self._t_goal_distance()
         if self.obs_type == "keypoint":
             # start the chain AT its stationary distribution, so episode step 0 is not
             # systematically cleaner than the rest
@@ -228,6 +239,19 @@ class PushTGymEnv(gymnasium.Env):
                 return candidate
         return None
 
+    def _t_goal_distance(self):
+        """Mean per-keypoint distance of the achieved T from the goal pose, in pixels."""
+        block = self.env.block
+        pose = np.array([block.position[0], block.position[1], block.angle], dtype=np.float32)
+        return float(t_goal_distance((GOAL_KEYPOINTS - keypoints_at_pose(pose)).reshape(-1)))
+
+    def _block_coverage(self):
+        """Fraction of the goal T the block currently covers -- PushTEnv's own reward quantity."""
+        goal_body = self.env._get_goal_pose_body(self.env.goal_pose)
+        goal_geom = pymunk_to_shapely(goal_body, self.env.block.shapes)
+        block_geom = pymunk_to_shapely(self.env.block, self.env.block.shapes)
+        return goal_geom.intersection(block_geom).area / goal_geom.area
+
     def _potential(self):
         """Phi(s), in units of WS. Reuses feedback_util so these terms mean exactly what the
         repo's verifier means by them, rather than a second definition of the same quantity.
@@ -272,6 +296,18 @@ class PushTGymEnv(gymnasium.Env):
         # there is nothing left to earn, so terminating costs nothing.
         if self.reward_mode == "dense":
             reward, terminated = float(reward), False
+        elif self.reward_mode == "delta":
+            # Pays for CHANGE, not level: exactly 0 when the T does not move, however well or
+            # badly it happens to be placed. That is the fix for dense's free lunch -- under
+            # dense, doing nothing from a lucky reset paid a return of 92.7, more than any
+            # policy earned by acting. Summed over an episode this telescopes to
+            # (d_start - d_end), i.e. total progress, so it cannot be farmed by loitering.
+            distance = self._t_goal_distance()
+            reward = self.progress_coef * (self._prev_distance - distance) / WS
+            if newly_solved:
+                reward += self.success_bonus
+            self._prev_distance = distance
+            terminated = False
         elif self.reward_mode == "shaped":
             # Potential-based shaping (Ng, Harada & Russell 1999): F = gamma*Phi(s') - Phi(s)
             # PROVABLY leaves the optimal policy unchanged, which a raw distance bonus does not.
@@ -413,6 +449,8 @@ def env_kwargs_from(cfg, obs_type):
     kwargs["reward_mode"] = cfg["reward"]
     kwargs["shaping_coef"] = cfg.get("shaping_coef", D["shaping_coef"])
     kwargs["shaping_potential"] = cfg.get("shaping_potential", D["shaping_potential"])
+    for key in ("progress_coef", "success_bonus", "block_zero_coverage"):
+        kwargs[key] = cfg.get(key, D[key])
     kwargs["shaping_gamma"] = cfg.get("gamma", D["gamma"])
     if obs_type == "keypoint":
         kwargs.update({k: cfg[k] for k in KEYPOINT_ONLY_KEYS})

@@ -43,7 +43,7 @@ NEAR_TRIES = 40                  # redraws for an agent start at the requested g
 
 OBS_TYPES = ("keypoint", "image")
 ACTION_MODES = ("delta", "absolute")
-REWARD_MODES = ("dense", "sparse", "shaped")
+REWARD_MODES = ("dense", "sparse", "shaped", "delta")
 OCCLUSION_MODES = ("iid", "persistent")
 # What the shaping potential measures, all reusing diffusion_policy/env/pusht/feedback_util:
 #   t_goal  -(mean per-keypoint distance of the achieved T from the goal T). Captures position
@@ -70,6 +70,9 @@ DEFAULTS = {
     "occlusion_persistence": 20.0,
     "reward": "dense",
     "shaping_coef": 10.0,
+    "progress_coef": 30.0,
+    "success_bonus": 10.0,
+    "block_zero_coverage": False,
     "shaping_potential": "t_goal",
     "action_mode": "delta",
     "delta_scale": "auto",
@@ -136,7 +139,8 @@ KEYPOINT_ONLY_KEYS = ("keypoint_visible_rate", "occlusion", "occlusion_persisten
 # What changes what a checkpoint IS, as opposed to how a run is driven. Resuming with any of
 # these altered would continue one experiment under another's name.
 IDENTITY_KEYS = (
-    "obs", "corrupt_obs", "corrupt_t_max", "reward", "shaping_coef", "shaping_potential",
+    "obs", "corrupt_obs", "corrupt_t_max", "reward", "shaping_coef", "shaping_potential", "progress_coef", "success_bonus",
+    "block_zero_coverage",
     "max_episode_steps", "render_size", "keypoint_visible_rate",
     "occlusion", "occlusion_persistence", "action_mode", "delta_scale",
     "agent_start_range", "block_start_range",
@@ -169,6 +173,9 @@ LEGACY = {
     "reward": "dense",
     "shaping_coef": 0.0,
     "shaping_potential": "arm",
+    "progress_coef": 30.0,
+    "success_bonus": 10.0,
+    "block_zero_coverage": False,
     "action_mode": "absolute",
     "delta_scale": 32.0,
     "agent_start_range": [50.0, 450.0],
