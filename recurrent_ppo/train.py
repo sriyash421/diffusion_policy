@@ -137,8 +137,17 @@ parser.add_argument("--video-freq", type=int, default=D["video_freq"],
                          "rollout/* series already sync from tensorboard; this is the picture of what they "
                          "describe -- 'the policy stands still' is an inference from action_clip_frac until "
                          "you watch it.")
-parser.add_argument("--video-length", type=int, default=D["video_length"], help="Max frames per recorded rollout.")
+parser.add_argument("--video-length", type=int, default=D["video_length"], help="Max frames per EPISODE in a clip.")
+parser.add_argument("--video-episodes", type=int, default=D["video_episodes"],
+                    help="Episodes per clip. One episode is a poor sample of a policy whose eval reward has a "
+                         "+/-7 spread from the initial pose alone; five shows whether a behaviour is the "
+                         "policy or the draw.")
 parser.add_argument("--n-eval-episodes", type=int, default=D["n_eval_episodes"], help="Episodes per evaluation.")
+parser.add_argument("--eval-curriculum", type=str, default=D["eval_curriculum"], choices=["match", "off"],
+                    help="match: eval/ uses the SAME start distribution as training, so it measures what was "
+                         "actually trained. off: eval/ uses the real uniform distribution. Either way the "
+                         "other one is logged too, as eval_real/ or eval_train/ -- the matched number says "
+                         "whether the policy improved, the real one says whether it can do the task.")
 parser.add_argument("--checkpoint", type=str, default=D["checkpoint"], help="Continue training from a checkpoint, in its own run directory.")
 parser.add_argument("--device", type=str, default=D["device"], help="Torch device.")
 args_cli = parser.parse_args()
@@ -154,6 +163,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback,
 from stable_baselines3.common.vec_env import VecNormalize
 
 import torch as th
+from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.utils import explained_variance
 
 from recurrent_ppo.corrupt_policy import (corrupting_extractor, features_extractor_kwargs,
@@ -220,6 +230,39 @@ class QHead(BaseCallback):
                            float(explained_variance(th.cat(preds).cpu().numpy(), th.cat(targets).cpu().numpy())))
 
 
+class SecondEval(BaseCallback):
+    """A second evaluation on the OTHER start distribution, logged under its own prefix.
+
+    Whichever distribution `eval/` uses, this reports the other. Matching training says whether
+    the policy is improving at what it practises; the real uniform distribution says whether that
+    is the task. Reporting only one of those is how a curriculum run flatters or libels itself --
+    the nb=1.0 arm pushes the block 47.9px with its curricula on and 15.4px without.
+    """
+
+    def __init__(self, env, prefix, freq, n_episodes):
+        super().__init__()
+        self.env, self.prefix, self.freq, self.n_episodes = env, prefix, freq, n_episodes
+        self._next = freq
+
+    def _on_step(self):
+        if self.num_timesteps < self._next:
+            return True
+        self._next = self.num_timesteps + self.freq
+        extractor = corrupting_extractor(self.model.policy)
+        was_on = extractor is not None and extractor.enabled
+        if was_on:
+            extractor.enabled = False
+        try:
+            rewards, lengths = evaluate_policy(self.model, self.env, n_eval_episodes=self.n_episodes,
+                                               deterministic=True, return_episode_rewards=True, warn=False)
+        finally:
+            if was_on:
+                extractor.enabled = True
+        self.logger.record(f"{self.prefix}/mean_reward", float(np.mean(rewards)))
+        self.logger.record(f"{self.prefix}/mean_ep_length", float(np.mean(lengths)))
+        return True
+
+
 class RolloutVideo(BaseCallback):
     """Record one deterministic episode to W&B every `video_freq` steps.
 
@@ -229,7 +272,7 @@ class RolloutVideo(BaseCallback):
     PushTGymEnv rather than a VecEnv, so no auto-reset can splice the next episode in.
     """
 
-    def __init__(self, env_kwargs, obs_type, freq, length, seed):
+    def __init__(self, env_kwargs, obs_type, freq, length, seed, episodes=1):
         super().__init__()
         self.env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0,
                                render_mode="rgb_array")
@@ -237,6 +280,7 @@ class RolloutVideo(BaseCallback):
             # the keypoint observation does not depend on render_size, so the video can be legible
             self.env_kwargs["render_size"] = 512
         self.obs_type, self.freq, self.length, self.seed = obs_type, freq, length, seed
+        self.episodes = episodes
         self.env = None
         self._next = freq
 
@@ -256,23 +300,31 @@ class RolloutVideo(BaseCallback):
         if self.env is None:
             self.env = PushTGymEnv(obs_type=self.obs_type, **self.env_kwargs)
             self.env.reset(seed=self.seed)
-        obs, _ = self.env.reset()
-        state, starts, frames, reward = None, np.ones(1, dtype=bool), [], 0.0
-        for _ in range(self.length):
-            frames.append(self.env.render())
-            batched = {k: v[None] for k, v in obs.items()} if isinstance(obs, dict) else obs[None]
-            action, state = self.model.policy.predict(batched, state=state, episode_start=starts,
-                                                      deterministic=True)
-            obs, r, terminated, truncated, info = self.env.step(action[0])
-            starts, reward = np.zeros(1, dtype=bool), reward + r
-            if terminated or truncated:
-                break
+        frames, returns, successes = [], [], []
+        for _ in range(self.episodes):
+            obs, _ = self.env.reset()
+            # the LSTM state is reset PER EPISODE, exactly as it is in a vec env rollout -- one
+            # clip spanning several episodes must not carry memory across their boundaries
+            state, starts, reward = None, np.ones(1, dtype=bool), 0.0
+            for _ in range(self.length):
+                frames.append(self.env.render())
+                batched = {k: v[None] for k, v in obs.items()} if isinstance(obs, dict) else obs[None]
+                action, state = self.model.policy.predict(batched, state=state, episode_start=starts,
+                                                          deterministic=True)
+                obs, r, terminated, truncated, info = self.env.step(action[0])
+                starts, reward = np.zeros(1, dtype=bool), reward + r
+                if terminated or truncated:
+                    break
+            returns.append(reward)
+            successes.append(bool(info["is_success"]))
         path = os.path.join(self.logger.dir or ".", f"rollout_{self.num_timesteps}.mp4")
         # imageio, not wandb's own encoder: moviepy is not installed and this avoids the dependency
         imageio.mimsave(path, frames, fps=10, macro_block_size=1)
-        wandb.log({"rollout/video": wandb.Video(path, caption=f"{self.num_timesteps} steps, "
-                                                              f"return {reward:.1f}, "
-                                                              f"success {bool(info['is_success'])}")})
+        caption = (f"{self.num_timesteps} steps | {len(returns)} episodes | "
+                   f"returns {' '.join(f'{r:.0f}' for r in returns)} | "
+                   f"successes {sum(successes)}/{len(successes)}")
+        wandb.log({"rollout/video": wandb.Video(path, caption=caption)})
+        self.logger.record("rollout/video_return_mean", float(np.mean(returns)))
         os.remove(path)
 
 
@@ -468,12 +520,16 @@ def main():
         if run is None:
             raise SystemExit("[ERROR] --video-freq needs --wandb: the video has nowhere else to go.")
         callbacks.append(RolloutVideo(env_kwargs, args_cli.obs, args_cli.video_freq,
-                                      args_cli.video_length, args_cli.seed + 20_000))
+                                      args_cli.video_length, args_cli.seed + 20_000,
+                                      episodes=args_cli.video_episodes))
     if args_cli.eval_freq > 0:
-        # Evaluation always uses the REAL start distribution, even when training uses the
-        # near-block curriculum: a curriculum is a way to learn the task, not a redefinition of
-        # it, and evaluating on it would make the number incomparable with a uniform-start run.
-        eval_env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0)
+        # Two evaluations, on the two start distributions, so neither question is answered by
+        # the other's number: `match` is the one the policy trained on, `off` is the real task.
+        real_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0)
+        matched = args_cli.eval_curriculum == "match"
+        eval_env_kwargs = dict(env_kwargs) if matched else real_kwargs
+        second_kwargs = real_kwargs if matched else dict(env_kwargs)
+        second_prefix = "eval_real" if matched else "eval_train"
         eval_env = build_vec_env(
             obs_type=args_cli.obs,
             n_envs=1,
@@ -495,6 +551,14 @@ def main():
             deterministic=True,
             verbose=1,
         ))
+        second_env = build_vec_env(obs_type=args_cli.obs, n_envs=1, seed=args_cli.seed + 30_000,
+                                   use_subproc=False, **second_kwargs)
+        if isinstance(env, VecNormalize):
+            second_env = VecNormalize(second_env, training=False, norm_obs=False, norm_reward=False,
+                                      gamma=args_cli.gamma, clip_reward=np.inf)
+        callbacks.append(SecondEval(second_env, second_prefix,
+                                    max(args_cli.eval_freq // args_cli.num_envs, 1) * args_cli.num_envs,
+                                    args_cli.n_eval_episodes))
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):

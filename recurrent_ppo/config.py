@@ -118,7 +118,9 @@ DEFAULTS = {
     "eval_freq": 0,
     "video_freq": 0,
     "video_length": 300,
+    "video_episodes": 5,
     "n_eval_episodes": 20,
+    "eval_curriculum": "match",
     "checkpoint": None,
     "device": "auto",
 }
