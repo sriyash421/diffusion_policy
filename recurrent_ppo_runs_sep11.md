@@ -8,7 +8,7 @@ re-run the script. Every number here is read from the run's own `params/args.yam
 distribution, so those numbers are NOT comparable with `off` runs. Where a run logged a
 second evaluation it appears in tensorboard as `eval_real/` or `eval_train/`.
 
-13 runs. **No run has ever recorded a non-zero evaluation success rate.**
+17 runs. **No run has ever recorded a non-zero evaluation success rate.**
 
 | run | w&b | reward | curricula (nb/ng) | ent | steps | evals | best | final | mean±sd | trend | success |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -24,7 +24,11 @@ second evaluation it appears in tensorboard as `eval_real/` or `eval_train/`.
 | `2026-09-11_16-02-30` | 2wfuyg18 | dense | 1.0/0.5 | 0.0005 | 100,000 | 1 | 79.7 | 79.7 | 79.7±0.0 | — | 0.00 |
 | `2026-09-11_16-02-50` | xz6jxs59 | dense | 0.0/0.0 | 0.0005 | 100,000 | 1 | 16.3 | 16.3 | 16.3±0.0 | — | 0.00 |
 | `2026-09-11_16-08-15` | 8i3cyhpm | dense | 1.0/0.0 | 0.0005 | 100,000 | 1 | 9.0 | 9.0 | 9.0±0.0 | — | 0.00 |
-| `2026-09-11_16-15-33` | ldtj21mq | delta | 1.0/0.0 | 0.0005 | 400,000 | 4 | -0.0 | -0.2 | -0.1±0.1 | -0.1→-0.2 | 0.00 |
+| `2026-09-11_16-15-33` | ldtj21mq | delta | 1.0/0.0 | 0.0005 | 500,000 | 5 | -0.0 | -0.6 | -0.2±0.2 | -0.1→-0.3 | 0.00 |
+| `2026-09-11_16-26-02` | kwgar80x | delta | 1.0/0.0 | 0.0005 | 0 | 0 | — | — | — | — | — |
+| `2026-09-11_16-31-52` | lc78emiq | delta | 1.0/0.0 | 0.0005 | 300,000 | 3 | -0.1 | -0.2 | -0.2±0.1 | — | 0.00 |
+| `2026-09-11_16-38-22` | gj4s8u0z | delta | 1.0/0.0 | 0.0005 | 100,000 | 1 | -0.1 | -0.1 | -0.1±0.0 | — | 0.00 |
+| `2026-09-11_16-40-33` | ahj7ohx9 | delta | 1.0/0.0 | 0.001 | 2,000,000 | 20 | 0.4 | -0.7 | -0.4±0.3 | -0.3→-0.5 | 0.00 |
 
 ## What the run directories cannot tell you
 
@@ -288,6 +292,98 @@ block_zero_coverage      True
 action_mode              delta
 delta_scale              33.0
 ent_coef                 0.0005
+log_std_init             -1.0
+eval_curriculum          match
+```
+
+**`2026-09-11_16-26-02`** — kwgar80x
+
+```
+obs                      keypoint
+reward                   delta
+shaping_potential        t_goal
+shaping_coef             10.0
+progress_coef            30.0
+success_bonus            10.0
+corrupt_obs              False
+corrupt_t_max            200
+keypoint_visible_rate    1.0
+occlusion                iid
+agent_near_block_prob    1.0
+block_near_goal_prob     0.0
+block_zero_coverage      True
+action_mode              delta
+delta_scale              33.0
+ent_coef                 0.0005
+log_std_init             -1.0
+eval_curriculum          match
+```
+
+**`2026-09-11_16-31-52`** — lc78emiq
+
+```
+obs                      keypoint
+reward                   delta
+shaping_potential        t_goal
+shaping_coef             10.0
+progress_coef            30.0
+success_bonus            10.0
+corrupt_obs              False
+corrupt_t_max            200
+keypoint_visible_rate    1.0
+occlusion                iid
+agent_near_block_prob    1.0
+block_near_goal_prob     0.0
+block_zero_coverage      True
+action_mode              delta
+delta_scale              33.0
+ent_coef                 0.0005
+log_std_init             -1.0
+eval_curriculum          match
+```
+
+**`2026-09-11_16-38-22`** — gj4s8u0z
+
+```
+obs                      keypoint
+reward                   delta
+shaping_potential        t_goal
+shaping_coef             10.0
+progress_coef            30.0
+success_bonus            10.0
+corrupt_obs              False
+corrupt_t_max            200
+keypoint_visible_rate    1.0
+occlusion                iid
+agent_near_block_prob    1.0
+block_near_goal_prob     0.0
+block_zero_coverage      True
+action_mode              delta
+delta_scale              33.0
+ent_coef                 0.0005
+log_std_init             -1.0
+eval_curriculum          match
+```
+
+**`2026-09-11_16-40-33`** — ahj7ohx9
+
+```
+obs                      keypoint
+reward                   delta
+shaping_potential        t_goal
+shaping_coef             10.0
+progress_coef            30.0
+success_bonus            10.0
+corrupt_obs              False
+corrupt_t_max            200
+keypoint_visible_rate    1.0
+occlusion                iid
+agent_near_block_prob    1.0
+block_near_goal_prob     0.0
+block_zero_coverage      True
+action_mode              delta
+delta_scale              33.0
+ent_coef                 0.001
 log_std_init             -1.0
 eval_curriculum          match
 ```

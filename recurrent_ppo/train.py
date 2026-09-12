@@ -144,10 +144,11 @@ parser.add_argument("--log-interval", type=int, default=D["log_interval"], help=
 parser.add_argument("--save-freq", type=int, default=D["save_freq"], help="Checkpoint every n timesteps.")
 parser.add_argument("--eval-freq", type=int, default=D["eval_freq"], help="Evaluate every n timesteps (0 disables).")
 parser.add_argument("--video-freq", type=int, default=D["video_freq"],
-                    help="Record one rollout to W&B every n timesteps (0 disables). Needs --wandb. The scalar "
-                         "rollout/* series already sync from tensorboard; this is the picture of what they "
-                         "describe -- 'the policy stands still' is an inference from action_clip_frac until "
-                         "you watch it.")
+                    help="Record one rollout to W&B every n TRAINING ITERATIONS -- one rollout collection plus "
+                         "its update, i.e. one block in the training log, n_steps * num_envs env steps "
+                         "(0 disables). Needs --wandb. At the defaults a 2M-step run is 976 iterations, so "
+                         "24 gives 40 clips. The scalar rollout/* series already sync from tensorboard; this "
+                         "is the picture of what they describe.")
 parser.add_argument("--video-length", type=int, default=D["video_length"], help="Max frames per EPISODE in a clip.")
 parser.add_argument("--video-episodes", type=int, default=D["video_episodes"], help="Episodes per clip.")
 parser.add_argument("--video-stride", type=int, default=D["video_stride"],
@@ -294,14 +295,16 @@ class RolloutVideo(BaseCallback):
         self.obs_type, self.freq, self.length, self.seed = obs_type, freq, length, seed
         self.episodes, self.stride = episodes, max(1, stride)
         self.env = None
-        self._next = freq
+        self._iteration = 0
 
     def _on_step(self):
-        if self.num_timesteps < self._next:
-            return True
-        self._next = self.num_timesteps + self.freq
-        self._record()
         return True
+
+    def _on_rollout_end(self):
+        # one call per training iteration, which is exactly the unit the frequency is expressed in
+        self._iteration += 1
+        if self._iteration % self.freq == 0:
+            self._record()
 
     def _record(self):
         import imageio
@@ -334,7 +337,7 @@ class RolloutVideo(BaseCallback):
         path = os.path.join(self.logger.dir or ".", f"rollout_{self.num_timesteps}.mp4")
         # imageio, not wandb's own encoder: moviepy is not installed and this avoids the dependency
         imageio.mimsave(path, frames, fps=10, macro_block_size=1)
-        caption = (f"{self.num_timesteps} steps | {len(returns)} episode(s) | "
+        caption = (f"iter {self._iteration} | {self.num_timesteps} steps | {len(returns)} episode(s) | "
                    f"1 frame per {self.stride} steps ({self.stride}x speed) | "
                    f"returns {' '.join(f'{r:.1f}' for r in returns)} | "
                    f"successes {sum(successes)}/{len(successes)}")
