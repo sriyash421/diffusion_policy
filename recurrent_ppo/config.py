@@ -84,7 +84,7 @@ DEFAULTS = {
     "agent_start_range": [50.0, 450.0],
     "block_start_range": [60.0, 490.0],
     "agent_near_block_prob": 0.0,
-    "agent_block_gap": [20.0, 80.0],
+    "agent_block_gap": [16.0, 25.0],
     "block_near_goal_prob": 0.0,
     "block_goal_offset": [30.0, 0.25],
     "dummy_vec_env": False,

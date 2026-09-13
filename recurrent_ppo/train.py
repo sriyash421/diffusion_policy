@@ -84,7 +84,10 @@ parser.add_argument("--agent-near-block-prob", type=float, default=D["agent_near
                          "at reset until contact happens by chance -- measured at 1.5%% of steps. Opt-in: this "
                          "is a curriculum choice, not a bug fix.")
 parser.add_argument("--agent-block-gap", type=float, nargs=2, default=D["agent_block_gap"], metavar=("LO", "HI"),
-                    help="Clear distance from the block's surface for those starts, in px.")
+                    help="Distance from the block's SURFACE to the agent CENTRE, so clearance is this minus "
+                         "the 15px agent radius. Measured with a random policy: at [20,80] the median episode "
+                         "takes 58 steps to make first contact, at [16,25] it takes 3. Below ~15.5 the agent "
+                         "can spawn interpenetrating.")
 parser.add_argument("--block-near-goal-prob", type=float, default=D["block_near_goal_prob"],
                     help="Fraction of episodes that start with the block part-way to the goal. A reverse "
                          "curriculum: with a uniform block start the first 2M-step run never once crossed the "

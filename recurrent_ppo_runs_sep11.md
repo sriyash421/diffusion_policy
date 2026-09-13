@@ -8,7 +8,7 @@ re-run the script. Every number here is read from the run's own `params/args.yam
 distribution, so those numbers are NOT comparable with `off` runs. Where a run logged a
 second evaluation it appears in tensorboard as `eval_real/` or `eval_train/`.
 
-17 runs. **No run has ever recorded a non-zero evaluation success rate.**
+18 runs. **No run has ever recorded a non-zero evaluation success rate.**
 
 | run | w&b | reward | curricula (nb/ng) | ent | steps | evals | best | final | mean±sd | trend | success |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -29,6 +29,7 @@ second evaluation it appears in tensorboard as `eval_real/` or `eval_train/`.
 | `2026-09-11_16-31-52` | lc78emiq | delta | 1.0/0.0 | 0.0005 | 300,000 | 3 | -0.1 | -0.2 | -0.2±0.1 | — | 0.00 |
 | `2026-09-11_16-38-22` | gj4s8u0z | delta | 1.0/0.0 | 0.0005 | 100,000 | 1 | -0.1 | -0.1 | -0.1±0.0 | — | 0.00 |
 | `2026-09-11_16-40-33` | ahj7ohx9 | delta | 1.0/0.0 | 0.001 | 2,000,000 | 20 | 0.4 | -0.7 | -0.4±0.3 | -0.3→-0.5 | 0.00 |
+| `2026-09-12_08-45-58` | zu7beul2 | delta | 1.0/0.0 | 0.01 | 10,000,000 | 50 | 9.3 | 7.4 | 3.7±3.3 | 0.7→6.7 | 0.00 |
 
 ## What the run directories cannot tell you
 
@@ -384,6 +385,29 @@ block_zero_coverage      True
 action_mode              delta
 delta_scale              33.0
 ent_coef                 0.001
+log_std_init             -1.0
+eval_curriculum          match
+```
+
+**`2026-09-12_08-45-58`** — zu7beul2
+
+```
+obs                      keypoint
+reward                   delta
+shaping_potential        t_goal
+shaping_coef             10.0
+progress_coef            30.0
+success_bonus            10.0
+corrupt_obs              False
+corrupt_t_max            200
+keypoint_visible_rate    1.0
+occlusion                iid
+agent_near_block_prob    1.0
+block_near_goal_prob     0.0
+block_zero_coverage      True
+action_mode              delta
+delta_scale              33.0
+ent_coef                 0.01
 log_std_init             -1.0
 eval_curriculum          match
 ```
