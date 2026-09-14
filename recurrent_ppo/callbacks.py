@@ -87,15 +87,18 @@ class SecondEval(BaseCallback):
     the nb=1.0 arm pushes the block 47.9px with its curricula on and 15.4px without.
     """
 
-    def __init__(self, env, prefix, freq, n_episodes):
+    def __init__(self, env, prefix, freq, n_episodes, seed):
         super().__init__()
         self.env, self.prefix, self.freq, self.n_episodes = env, prefix, freq, n_episodes
+        self.seed = seed
         self._next = freq
 
     def _on_step(self):
         if self.num_timesteps < self._next:
             return True
         self._next = self.num_timesteps + self.freq
+        # the same episodes every time -- see CleanEvalCallback for why
+        self.env.seed(self.seed)
         extractor = corrupting_extractor(self.model.policy)
         was_on = extractor is not None and extractor.enabled
         if was_on:
@@ -230,15 +233,34 @@ class RolloutVideo(BaseCallback):
 
 
 class CleanEvalCallback(EvalCallback):
-    """EvalCallback that evaluates with observation corruption switched OFF.
+    """EvalCallback that evaluates with observation corruption switched OFF, on a FIXED set.
 
-    The evaluation shares the training policy object, so corruption cannot be a construction-time
-    choice here -- it has to be toggled around the rollout. Clean is the convention: every
-    reported number is then a clean-observation number and the arms differ only in how they
-    trained. play.py's --corrupt-obs-eval opts back in.
+    Corruption: the evaluation shares the training policy object, so it cannot be a
+    construction-time choice here -- it has to be toggled around the rollout. Clean is the
+    convention: every reported number is then a clean-observation number and the arms differ only
+    in how they trained. play.py's --corrupt-obs-eval opts back in.
+
+    Fixed set: SB3 seeds an eval env once, at construction, and neither EvalCallback nor
+    evaluate_policy touches the seed again -- so every evaluation drew a FRESH sample and
+    consecutive points were unpaired. At 20 episodes that is a standard error of 0.057 on a
+    success rate near 0.07, which is most of the jitter seen between checkpoints. Re-seeding
+    immediately before each evaluation replays the same episodes in the same order, so two
+    checkpoints differ by the policy rather than by the draw. This is ST's convention
+    (`test_start_seed`, pusht_keypoints_runner.py:111), and the base seed already matches its
+    10000.
+
+    The start states are policy-independent -- reset draws come from the env's own RNG and
+    rejection sampling consumes a policy-independent number of them -- so the set is the same for
+    every checkpoint and every arm, not merely stable within a run.
     """
 
+    def __init__(self, *args, eval_seed=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.eval_seed = eval_seed
+
     def _on_step(self):
+        if self.eval_seed is not None and self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            self.eval_env.seed(self.eval_seed)
         extractor = corrupting_extractor(self.model.policy)
         was_on = extractor is not None and extractor.enabled
         if was_on:

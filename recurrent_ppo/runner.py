@@ -194,6 +194,7 @@ def train(args_cli, arch):
             best_model_save_path=log_dir,
             deterministic=True,
             verbose=1,
+            eval_seed=args_cli.seed + 10_000,
         ))
         second_env = arch.wrap(build_vec_env(obs_type=args_cli.obs, n_envs=1, seed=args_cli.seed + 30_000,
                                              use_subproc=False, **second_kwargs), cfg)
@@ -201,7 +202,7 @@ def train(args_cli, arch):
             second_env = VecNormalize(second_env, training=False, norm_obs=False, norm_reward=False,
                                       gamma=args_cli.gamma, clip_reward=np.inf)
         callbacks.append(SecondEval(second_env, second_prefix, eval_freq * args_cli.num_envs,
-                                    args_cli.n_eval_episodes))
+                                    args_cli.n_eval_episodes, args_cli.seed + 30_000))
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):

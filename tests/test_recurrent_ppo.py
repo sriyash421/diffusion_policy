@@ -290,3 +290,87 @@ def test_state_angle_has_no_discontinuity_at_the_wrap():
     assert np.linalg.norm(near_zero - near_two_pi) < 0.05
     # and it is not degenerate: half a turn away is far
     assert np.linalg.norm(near_zero - angle_obs(np.pi)) > 1.9
+
+
+# ------------------------------------------------------------------ the fixed evaluation set
+
+def _eval_starts(env, n_episodes, seed=None):
+    """The first observation of n consecutive episodes, as evaluate_policy would meet them."""
+    if seed is not None:
+        env.seed(seed)
+    return np.array([env.reset()[0].copy() for _ in range(n_episodes)])
+
+
+def test_evaluation_replays_the_same_episodes_when_reseeded():
+    """A fixed benchmark set, so two checkpoints differ by the policy and not by the draw.
+
+    SB3 seeds an eval env once at construction and never again -- neither EvalCallback nor
+    evaluate_policy mentions `seed` -- so without this every evaluation sampled fresh episodes and
+    consecutive points were unpaired.
+    """
+    from recurrent_ppo.pusht_gym import build_vec_env
+
+    env = build_vec_env(obs_type="keypoint", n_envs=1, seed=10_000, use_subproc=False,
+                        max_episode_steps=20, agent_near_block_prob=1.0)
+    try:
+        assert np.allclose(_eval_starts(env, 6, seed=10_000), _eval_starts(env, 6, seed=10_000))
+        # and that it is re-seeding that does it, not the env being degenerate
+        assert not np.allclose(_eval_starts(env, 6, seed=10_000), _eval_starts(env, 6))
+    finally:
+        env.close()
+
+
+def test_the_fixed_eval_set_does_not_depend_on_the_policy():
+    """The set must be the same for every checkpoint and every arm, not merely stable in one run.
+
+    Episode starts come from the env's own RNG, and reset's rejection sampling consumes a
+    policy-independent number of draws -- so stepping different actions in between cannot shift
+    which episodes the next evaluation sees.
+    """
+    from recurrent_ppo.pusht_gym import build_vec_env
+
+    env = build_vec_env(obs_type="keypoint", n_envs=1, seed=10_000, use_subproc=False,
+                        max_episode_steps=20, agent_near_block_prob=1.0)
+    try:
+        baseline = _eval_starts(env, 5, seed=10_000)
+        env.seed(10_000)
+        env.reset()
+        for _ in range(37):                       # an arbitrary, different "policy"
+            env.step(np.array([[0.7, -0.4]], dtype=np.float32))
+        assert np.allclose(_eval_starts(env, 5, seed=10_000), baseline)
+    finally:
+        env.close()
+
+
+def test_clean_eval_callback_scores_a_fixed_policy_identically_twice():
+    """The re-seed reaches the real callback path, not just a hand-driven env.
+
+    With the policy held fixed, two evaluations must return the SAME mean reward. Before the
+    fix they differed, because each drew a fresh sample of episodes.
+    """
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.logger import Logger
+
+    from recurrent_ppo.callbacks import CleanEvalCallback
+    from recurrent_ppo.pusht_gym import build_vec_env
+
+    env = build_vec_env(obs_type="keypoint", n_envs=1, seed=10_000, use_subproc=False,
+                        max_episode_steps=25, reward_mode="delta", agent_near_block_prob=1.0)
+    model = PPO("MlpPolicy", env, n_steps=8, batch_size=8, device="cpu", seed=0)
+    model.set_logger(Logger(folder=None, output_formats=[]))
+
+    def run(eval_seed):
+        cb = CleanEvalCallback(env, n_eval_episodes=4, eval_freq=1, deterministic=True,
+                               warn=False, verbose=0, eval_seed=eval_seed)
+        cb.init_callback(model)
+        scores = []
+        for _ in range(2):
+            cb.on_step()
+            scores.append(cb.last_mean_reward)
+        return scores
+
+    fixed = run(10_000)
+    assert fixed[0] == pytest.approx(fixed[1]), f"fixed set drifted: {fixed}"
+    # and the old behaviour is what it replaces: without a seed the two samples differ
+    assert run(None)[0] != pytest.approx(run(None)[1])
+    env.close()
