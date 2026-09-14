@@ -36,7 +36,10 @@ from sb3_contrib.common.recurrent.policies import (
     RecurrentActorCriticPolicy,
     RecurrentMultiInputActorCriticPolicy,
 )
-from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.common.policies import (
+    ActorCriticPolicy,
+    MultiInputActorCriticPolicy,
+)
 from stable_baselines3.common.preprocessing import get_action_dim
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor
 
@@ -48,7 +51,8 @@ from recurrent_ppo.pusht_gym import AUG_CROP_KEY, AUG_NOISE_KEY, AUG_T_KEY, STAT
 DEFAULT_T_MAX = 200
 ST_CROP = 76
 # 9 block keypoints x2 + agent xy, then the same again as a visibility mask
-KEYPOINT_OBS_DIM = 40        # crop_shape in diffusion_policy/config/pusht_base.yaml
+# flat observation widths, by arm; the image arm's is its encoder's output instead
+OBS_DIMS = {"keypoint": 40, "state": 6}        # crop_shape in diffusion_policy/config/pusht_base.yaml
 
 
 def make_obs_noise_scheduler():
@@ -185,11 +189,14 @@ class CorruptingExtractor(BaseFeaturesExtractor):
 
 
 class _QHeadMixin:
-    """Q(history, a), trained alongside PPO but never inside its objective.
+    """Q(s, a), trained alongside PPO but never inside its objective.
 
     Built AFTER `super().__init__()`, which is what keeps `q_net` out of `self.optimizer`: the
     policy optimizer was already constructed over the parameters that existed then. The Q head
     carries its own, so it provably cannot move the policy. See tests.
+
+    Two subclasses supply the critic latent, because that is the only thing the architectures
+    disagree about: under the LSTM it is Q(history, a), under frame stacking Q(stack, a).
 
     WHAT THIS Q IS. It is fitted by `train.QHead` to `rollout_buffer.returns`, the TD(lambda)
     return of the BEHAVIOUR policy, so it is Q^pi and not Q*: an evaluation of whatever PPO
@@ -208,41 +215,80 @@ class _QHeadMixin:
         self.q_net = nn.Sequential(*layers, nn.Linear(last, 1))
         self.q_optimizer = th.optim.Adam(self.q_net.parameters(), lr=q_lr)
 
-    def q_values(self, obs, actions, lstm_states, episode_starts):
+    def q_values(self, obs, actions, **latent_kwargs):
         """Mirrors predict_values, then conditions on the action. Upstream is detached."""
         with th.no_grad():
-            features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
-            if self.lstm_critic is not None:
-                latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_critic)
-            elif self.shared_lstm:
-                latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
-            else:
-                latent = self.critic(features)
-            latent = self.mlp_extractor.forward_critic(latent)
+            latent = self._q_latent(obs, **latent_kwargs)
         return self.q_net(th.cat([latent, actions], dim=-1)).flatten()
 
+    def q_batch(self, data):
+        """(prediction, target) for one rollout-buffer batch, so the callback needs no `if`."""
+        raise NotImplementedError
 
-class QHeadRecurrentPolicy(_QHeadMixin, RecurrentActorCriticPolicy):
+
+class _RecurrentQHeadMixin(_QHeadMixin):
+    def _q_latent(self, obs, lstm_states, episode_starts):
+        features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
+        if self.lstm_critic is not None:
+            latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_critic)
+        elif self.shared_lstm:
+            latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
+        else:
+            latent = self.critic(features)
+        return self.mlp_extractor.forward_critic(latent)
+
+    def q_batch(self, data):
+        # the recurrent buffer pads sequences to a common length; `mask` is which entries are real
+        mask = data.mask > 1e-8
+        q = self.q_values(data.observations, data.actions,
+                          lstm_states=data.lstm_states.vf, episode_starts=data.episode_starts)
+        return q[mask], data.returns[mask]
+
+
+class _FeedForwardQHeadMixin(_QHeadMixin):
+    def _q_latent(self, obs):
+        features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
+        return self.mlp_extractor.forward_critic(features)
+
+    def q_batch(self, data):
+        # no padding without sequences, so every entry is real and there is no mask
+        return self.q_values(data.observations, data.actions), data.returns
+
+
+class QHeadRecurrentPolicy(_RecurrentQHeadMixin, RecurrentActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
         super().__init__(*args, **kwargs)
         self._build_q_head(q_net_arch, q_lr)
 
 
-class QHeadRecurrentMultiInputPolicy(_QHeadMixin, RecurrentMultiInputActorCriticPolicy):
+class QHeadRecurrentMultiInputPolicy(_RecurrentQHeadMixin, RecurrentMultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
         super().__init__(*args, **kwargs)
         self._build_q_head(q_net_arch, q_lr)
 
 
-def policy_for(obs_type, corrupt_obs=False):
+class QHeadPolicy(_FeedForwardQHeadMixin, ActorCriticPolicy):
+    def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._build_q_head(q_net_arch, q_lr)
+
+
+class QHeadMultiInputPolicy(_FeedForwardQHeadMixin, MultiInputActorCriticPolicy):
+    def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._build_q_head(q_net_arch, q_lr)
+
+
+def policy_for(obs_type, recurrent=True, corrupt_obs=False):
     """The policy class matching an arm.
 
-    The observation is a plain Box only for the clean keypoint arm. The image arm is a Dict
-    already, and corruption makes the keypoint arm one too, because the draw rides alongside
-    the observation.
+    The image arm is a Dict space; `keypoint` and `state` are a flat Box -- until corruption,
+    which makes them Dict too, because the per-transition draw rides alongside the observation.
     """
-    flat = obs_type == "keypoint" and not corrupt_obs
-    return QHeadRecurrentPolicy if flat else QHeadRecurrentMultiInputPolicy
+    dict_space = obs_type == "image" or corrupt_obs
+    if recurrent:
+        return QHeadRecurrentMultiInputPolicy if dict_space else QHeadRecurrentPolicy
+    return QHeadMultiInputPolicy if dict_space else QHeadPolicy
 
 
 def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):
@@ -256,7 +302,8 @@ def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):
     }
 
 
-def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T_MAX):
+def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T_MAX,
+            n_stack=1):
     """The AugmentationDraw kwargs an arm needs, or None if it needs no draw.
 
     The crop draw is needed by the image arm whether or not it is corrupted -- a redrawn crop
@@ -264,7 +311,9 @@ def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T
     """
     aug = {}
     if corrupt_obs:
-        aug["feature_dim"] = (512 + 2) if obs_type == "image" else KEYPOINT_OBS_DIM
+        # the draw is applied AFTER frame stacking, so it covers the whole stacked vector
+        base = (512 + 2) if obs_type == "image" else OBS_DIMS[obs_type]
+        aug["feature_dim"] = base * max(1, n_stack)
         aug["t_max"] = t_max
     if obs_type == "image":
         aug["crop_span"] = render_size - crop

@@ -5,12 +5,15 @@ takes no seed, `render(mode)` with no default, and no time limit. SB3 2.x speaks
 Everything that gap costs lives here and nowhere else, so train.py and play.py build the
 same env through `make_env` and cannot drift apart.
 
-Two observation variants, matching the ST arms:
+Three observation variants:
 
     keypoint  9 block T keypoints plus the agent xy (the 20-d lowdim obs of
               diffusion_policy/config/task/pusht_lowdim.yaml), followed by the 20-d
               visibility mask saying which of those `keypoint_visible_rate` occluded.
               40 numbers.
+    state     PushTEnv's own observation -- agent xy, block xy, block angle -- with the
+              angle as (cos, sin) rather than a scalar. 6 numbers. The smallest sufficient
+              description of the task; see _convert_obs for why the angle is split.
     image     PushTImageEnv's {image (3, 96, 96), agent_pos (2)}.
 
 EVERYTHING THE POLICY SEES IS IN [-1, 1]. Positions are scaled against the arena's known
@@ -24,10 +27,11 @@ training and play.
 import gymnasium
 import numpy as np
 from gymnasium import spaces
+from stable_baselines3.common.vec_env import VecEnvWrapper
 
 from shapely.geometry import Point
 
-from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
+from diffusion_policy.env.pusht.pusht_env import PushTEnv, pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
@@ -123,6 +127,11 @@ class PushTGymEnv(gymnasium.Env):
                 float(keypoint_visible_rate), float(occlusion_persistence))
             self._visible = np.ones(self._n_kps, dtype=bool)
             self.observation_space = spaces.Box(-1.0, 1.0, shape=(2 * self._half,), dtype=np.float32)
+        elif obs_type == "state":
+            # PushTEnv itself, the base class of the other two -- no keypoints, no rendering in
+            # the observation path. Its `_get_obs` is the 5-d state; we re-encode the angle.
+            self.env = PushTEnv(legacy=legacy, render_size=render_size, render_action=False)
+            self.observation_space = spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
         else:
             self.env = PushTImageEnv(legacy=legacy, render_size=render_size)
             self.observation_space = spaces.Dict({
@@ -353,6 +362,15 @@ class PushTGymEnv(gymnasium.Env):
             mask = np.ones(self._half, dtype=np.float32)
             mask[: 2 * self._n_kps] = self._step_occlusion()
             return np.concatenate([norm * mask, 2.0 * mask - 1.0])
+        if self.obs_type == "state":
+            # The angle arrives as `block.angle % 2*pi`, so a scalar encoding has a break at the
+            # wrap: 0.01 and 6.27 rad are the SAME pose but land at opposite ends of [-1, 1], the
+            # furthest apart two values can be. (cos, sin) is continuous everywhere, at the cost
+            # of one dimension. The keypoint arm never had this problem because 9 points encode
+            # rotation continuously by construction.
+            angle = float(obs[4])
+            return np.concatenate([self._normalise(obs[:4]),
+                                   np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)])
         return {
             # PushTImageEnv hands back float32 in [0, 1]; SB3 normalises uint8 itself and the
             # rollout buffer is 4x smaller for it.
@@ -420,6 +438,68 @@ def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
         return DELTA_SCALE_FALLBACK
 
 
+def aug_spaces(inner, feature_dim=None, t_max=None, crop_span=None):
+    """The observation space with the draw's keys added. A Box is nested under STATE_KEY."""
+    spaces_map = dict(inner.spaces) if isinstance(inner, spaces.Dict) else {STATE_KEY: inner}
+    if feature_dim is not None:
+        spaces_map[AUG_NOISE_KEY] = spaces.Box(-np.inf, np.inf, shape=(feature_dim,), dtype=np.float32)
+        # float, not int: it is an integer timestep, but a float box keeps every buffer and
+        # normaliser on one dtype path. The extractor casts it back with .long().
+        spaces_map[AUG_T_KEY] = spaces.Box(0.0, float(t_max), shape=(1,), dtype=np.float32)
+    if crop_span is not None:
+        spaces_map[AUG_CROP_KEY] = spaces.Box(0.0, float(crop_span - 1), shape=(2,), dtype=np.float32)
+    return spaces.Dict(spaces_map)
+
+
+def aug_draw(rng, feature_dim=None, t_max=None, crop_span=None, n=None):
+    """One draw, or a batch of `n` when called for a vectorised env."""
+    shape = (lambda *d: d) if n is None else (lambda *d: (n,) + d)
+    out = {}
+    if feature_dim is not None:
+        out[AUG_NOISE_KEY] = rng.standard_normal(shape(feature_dim)).astype(np.float32)
+        out[AUG_T_KEY] = rng.integers(0, t_max, size=shape(1)).astype(np.float32)
+    if crop_span is not None:
+        # [0, span), matching CropRandomizer's own sampler exactly -- it scales rand() by
+        # (image - crop) and truncates, so the last offset it can draw is span - 1.
+        out[AUG_CROP_KEY] = rng.integers(0, crop_span, size=shape(2)).astype(np.float32)
+    return out
+
+
+class VecAugmentationDraw(VecEnvWrapper):
+    """The draw, applied to a VECTORISED observation -- after any frame stacking.
+
+    Placement is the whole point. VecFrameStack concatenates every key of a Dict observation,
+    so a draw made further in would be stacked too: the noise would silently widen and the
+    timestep would become n_stack values where add_noise needs one. Applied here the stacked
+    observation is corrupted as a unit, one noise vector and one t per transition, which is
+    what a DDPM level means in ST's flat arm.
+    """
+
+    def __init__(self, venv, feature_dim=None, t_max=None, crop_span=None, seed=0):
+        super().__init__(venv, observation_space=aug_spaces(venv.observation_space, feature_dim,
+                                                            t_max, crop_span))
+        self.feature_dim, self.t_max, self.crop_span = feature_dim, t_max, crop_span
+        self.rng = np.random.default_rng(seed)
+
+    def _add(self, obs):
+        out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
+        out.update(aug_draw(self.rng, self.feature_dim, self.t_max, self.crop_span,
+                            n=self.num_envs))
+        return out
+
+    def reset(self):
+        return self._add(self.venv.reset())
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        return self._add(obs), rewards, dones, infos
+
+    def seed(self, seed=None):
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        return self.venv.seed(seed)
+
+
 class AugmentationDraw(gymnasium.ObservationWrapper):
     """Carry the per-transition corruption noise and crop offset IN the observation.
 
@@ -441,32 +521,12 @@ class AugmentationDraw(gymnasium.ObservationWrapper):
 
     def __init__(self, env, feature_dim=None, t_max=None, crop_span=None):
         super().__init__(env)
-        self.feature_dim = feature_dim
-        self.t_max = t_max
-        self.crop_span = crop_span
-        inner = env.observation_space
-        # a Box observation has to be nested under a key to sit beside the draw; a Dict one
-        # already has keys, and the ST image extractor indexes them by name, so it is untouched
-        spaces_map = dict(inner.spaces) if isinstance(inner, spaces.Dict) else {STATE_KEY: inner}
-        if feature_dim is not None:
-            spaces_map[AUG_NOISE_KEY] = spaces.Box(-np.inf, np.inf, shape=(feature_dim,), dtype=np.float32)
-            # float, not int: it is an integer timestep, but a float box keeps every buffer and
-            # normaliser on one dtype path. The extractor casts it back with .long().
-            spaces_map[AUG_T_KEY] = spaces.Box(0.0, float(t_max), shape=(1,), dtype=np.float32)
-        if crop_span is not None:
-            spaces_map[AUG_CROP_KEY] = spaces.Box(0.0, float(crop_span - 1), shape=(2,), dtype=np.float32)
-        self.observation_space = spaces.Dict(spaces_map)
+        self.feature_dim, self.t_max, self.crop_span = feature_dim, t_max, crop_span
+        self.observation_space = aug_spaces(env.observation_space, feature_dim, t_max, crop_span)
 
     def observation(self, obs):
         out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
-        if self.feature_dim is not None:
-            out[AUG_NOISE_KEY] = self.np_random.standard_normal(self.feature_dim).astype(np.float32)
-            out[AUG_T_KEY] = np.array([self.np_random.integers(0, self.t_max)], dtype=np.float32)
-        if self.crop_span is not None:
-            # [0, span), matching CropRandomizer's own sampler exactly -- it scales rand() by
-            # (image - crop) and truncates, so the last offset it can draw is span - 1. A wider
-            # range here would make this a different augmentation than ST's.
-            out[AUG_CROP_KEY] = self.np_random.integers(0, self.crop_span, size=2).astype(np.float32)
+        out.update(aug_draw(self.np_random, self.feature_dim, self.t_max, self.crop_span))
         return out
 
 

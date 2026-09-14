@@ -1,25 +1,50 @@
-# Recurrent PPO on PushT
+# PPO on PushT, with and without recurrence
 
-A recurrent policy and value function trained with `sb3_contrib.RecurrentPPO`, in two
-observation arms and two noise regimes.
+A policy, a value function and a Q head trained on PushT, in three observation arms and two
+noise regimes, under **two architectures**: an LSTM (`sb3_contrib.RecurrentPPO`) and frame stacking
+(`stable_baselines3.PPO` + `VecFrameStack`). sb3-contrib's own RecurrentPPO documentation
+recommends trying the second first -- "a simpler, faster and usually competitive alternative" --
+so both are here and they share everything except the architecture.
 
 ```
-train.py                       argparse -> vec env -> RecurrentPPO.learn, plus its three callbacks
-play.py                        checkpoint -> LSTM-stateful rollout -> success rate, score, video
+train.py                       LSTM entry point: flags -> runner.train(args, LstmArch)
+play.py                        LSTM entry point: flags -> runner.play(args, LstmArch)
+ppo/train.py                   frame-stacking entry point, plus --n-stack
+ppo/play.py                    frame-stacking entry point
+arch.py                        LstmArch / StackArch: the FOUR things that differ
+runner.py                      the training and evaluation loops, shared
+cli.py                         every flag that is not the architecture, shared
+callbacks.py                   action diagnostics, Q head, dual eval, rollout video, clean eval
 pusht_gym.py                   gym-0.21 PushT -> gymnasium: obs, actions, rewards, occlusion
 corrupt_policy.py              the corrupting features extractor, ST's ResNet, and the Q head
-run_io.py                      run-directory bookkeeping, shared by train.py and play.py
+config.py                      every default, in one place
+run_io.py                      run-directory bookkeeping
 scripts/plot_start_states.py   where episodes start, and how far one action moves the agent
 scripts/render_noise_levels.py what each corruption level actually destroys, decoded to images
 ```
 
-`pusht_gym.py` and `corrupt_policy.py` are each imported by both entry points, which is the
-whole reason they are not inside one of them: play.py must rebuild bit-for-bit the environment
-and policy that train.py built, and a wrapper that drifted between the two would silently change
-what an evaluation measures. `run_io.py` is there for the same reason -- it holds the four things
-both scripts need to agree on (what `params/args.yaml` contains, how a checkpoint is found, where
-the VecNormalize pickle sits, which arguments a resume may not change) and nothing else. The
-callbacks, by contrast, have exactly one caller, so they live in train.py.
+The split is driven by one thing: **the two architectures exist to be compared.** Anything
+duplicated between them -- the reward, the curricula, the evaluation protocol, the seed offsets,
+the run bookkeeping -- is a place where the comparison can quietly stop being like-for-like, so
+none of it is duplicated. The entry points are ~20 lines each and differ only in which `arch`
+object they pass. `arch.py` lists exactly what an architecture gets to decide: how the vec env is
+wrapped, how the agent is built, how it is loaded, and how many frames the video rollout has to
+stack by hand.
+
+The same argument is why `pusht_gym.py`, `corrupt_policy.py` and `run_io.py` were already
+separate: play.py must rebuild bit-for-bit the environment and policy that train.py built, and a
+wrapper that drifted between the two would silently change what an evaluation measures.
+
+### What frame stacking can and cannot do here
+
+It reconstructs state hidden from a single observation -- velocity, in the report sb3-contrib
+cites. **Our observation is currently missing none.** Corruption is off by default, occlusion is
+off by default, and PushT sets `space.damping = 0`, so the block carries no momentum between
+steps. On the clean arm the LSTM, `--n-stack 4` and `--n-stack 1` are all looking at a Markov
+observation, and any difference between them is an optimisation effect rather than a
+representational one. `--n-stack 1` is therefore the honest plain-PPO baseline, and the
+architecture comparison only becomes meaningful once `--keypoint-visible-rate` or
+`--corrupt-obs` is on.
 
 ## Running
 
@@ -31,6 +56,7 @@ removed, and gymnasium coexists with the `gym==0.21` the rest of the repo uses.
 ```bash
 # phase 1 -- clean observations
 python -m recurrent_ppo.train --obs keypoint
+python -m recurrent_ppo.train --obs state                    # 6-d: agent xy, block xy, cos/sin
 python -m recurrent_ppo.train --obs image --lstm-hidden-size 256
 
 # phase 2 -- noised observations
@@ -42,13 +68,15 @@ python -m recurrent_ppo.train --obs keypoint --keypoint-visible-rate 0.5
 # arm 2's actual answer: the same checkpoint scored clean and corrupted
 python -m recurrent_ppo.train --obs keypoint --corrupt-obs --eval-corrupt
 
+# the frame-stacking arm -- same flags, plus --n-stack
+python -m recurrent_ppo.ppo.train --obs keypoint --n-stack 4
+python -m recurrent_ppo.ppo.train --obs keypoint --n-stack 1     # plain PPO, no stacking
+
 # evaluate the newest run of an arm; --arm picks the DIRECTORY, it does not corrupt anything
 python -m recurrent_ppo.play --n-episodes 50
 python -m recurrent_ppo.play --arm corrupt --corrupt-obs-eval
 python -m recurrent_ppo.play --checkpoint logs/.../model.zip --video --render-size 512
-
-# arm 1's deliverable: the value and Q heads, de-normalised into real reward units
-python -m recurrent_ppo.play --checkpoint logs/.../model.zip --report-values
+python -m recurrent_ppo.ppo.play --checkpoint logs/ppo/.../model.zip
 ```
 
 `--eval-freq` defaults to 100k steps, so an `eval/` series exists without asking. `--eval-corrupt`
@@ -57,10 +85,11 @@ whether the POMDP was solved, and the clean series stays beside it so the two ar
 Both re-seed the eval env before every evaluation, from a seed block disjoint from training's:
 SB3 hands seeds over at the next reset and then clears them, so without that each eval point
 draws different episodes and the curve mixes policy improvement with episode luck — and the two
-series would not be scoring the same task. Neither eval nominates a checkpoint: they record, and
-which step to evaluate is passed explicitly.
+series would not be scoring the same task.
 
-Runs land in `logs/recurrent_ppo/<obs>_<clean|corrupt>/<timestamp>/`. The noise regime is part
+Runs land in `logs/recurrent_ppo/<obs>_<clean|corrupt>/<timestamp>/` for the LSTM arm and
+`logs/ppo/...` for the frame-stacking arm -- the architecture is part of a run's identity, like
+the noise regime, so the two cannot collide. The noise regime is part
 of the directory name because it is part of the run's identity, not a knob: two regimes sharing
 a directory would overwrite each other's checkpoints. `--checkpoint` resumes **in the
 checkpoint's own directory**, continuing its step counter, and refuses any flag that would
@@ -71,6 +100,25 @@ nothing to retype; a CLI flag still overrides, and says so when it does. `--rend
 image obs resolution as well as the video resolution, so for the `image` arm it must match what
 the checkpoint trained at — the keypoint arm's observation does not depend on it, so raise it
 there for a legible video.
+
+## The three observation arms
+
+| `--obs` | what the policy sees | dim |
+|---|---|---|
+| `keypoint` (default) | 9 block-T keypoints + agent xy, then their visibility mask as {-1,+1} | 40 |
+| `state` | agent xy, block xy, block angle as (cos, sin) | 6 |
+| `image` | `{image (3,96,96) uint8, agent_pos (2)}` | dict |
+
+`state` is `PushTEnv`'s own `_get_obs` with one change: the angle arrives as `block.angle % 2*pi`,
+so a scalar encoding breaks at the wrap -- 0.01 and 6.27 rad are the same pose but land at
+opposite ends of [-1,1], the furthest apart two values can be. (cos, sin) is continuous
+everywhere for one extra dimension. The keypoint arm never had this problem because 9 points
+encode rotation continuously by construction; that is plausibly a large part of why the repo's
+lowdim task uses them.
+
+Occlusion (`--keypoint-visible-rate`, `--occlusion`) applies to the **keypoint arm only** -- it
+is defined per keypoint, and there is no corresponding notion for a 6-d pose. The DDPM
+corruption (`--corrupt-obs`) applies to all three, since it acts on the encoded features.
 
 ## The reward, and why termination is tied to it
 
@@ -198,7 +246,7 @@ bypass `ActorCriticPolicy.extract_features`. Overriding that one method would co
 gradient and the rollout while leaving the value bootstrap and the play rollout clean. So the
 features extractor itself is wrapped, which covers every path without copying SB3 internals.
 
-**9. Action-clipping diagnostics** (`ActionDiagnostics` in train.py). PPO stores the *unclipped* Gaussian samples
+**8. Action-clipping diagnostics** (`ActionDiagnostics` in callbacks.py). PPO stores the *unclipped* Gaussian samples
 in the rollout buffer and clips only on the way into the env, so the buffer is the one place the
 raw exploration distribution is visible. `rollout/action_clip_frac`, `action_corner_frac` and
 `action_abs_mean` are logged from it every rollout.

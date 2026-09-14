@@ -44,7 +44,7 @@ AGENT_BOUNDS = (WALL_INNER + AGENT_RADIUS, WS - WALL_INNER - AGENT_RADIUS)     #
 SPAWN_TRIES = 20                 # redraws when the block's arms would spawn through a wall
 NEAR_TRIES = 40                  # redraws for an agent start at the requested gap
 
-OBS_TYPES = ("keypoint", "image")
+OBS_TYPES = ("keypoint", "state", "image")
 ACTION_MODES = ("delta", "absolute")
 REWARD_MODES = ("dense", "sparse", "shaped", "delta")
 OCCLUSION_MODES = ("iid", "persistent")
@@ -112,6 +112,8 @@ DEFAULTS = {
     "lstm_hidden_size": 128,
     "n_lstm_layers": 1,
     "shared_lstm": False,
+    # frame stacking, for the feed-forward arm (recurrent_ppo/ppo). 1 is plain PPO.
+    "n_stack": 4,
     "norm_reward": True,
     "target_kl": None,
     "lr_schedule": "constant",
@@ -134,6 +136,8 @@ DEFAULTS = {
     "eval_curriculum": "match",
     "checkpoint": None,
     "device": "auto",
+    # set by the entry point, not by a flag: train.py is lstm, ppo/train.py is stack
+    "arch": "lstm",
 }
 
 # The PushTGymEnv kwargs an arm takes. keypoint_visible_rate / occlusion belong to
@@ -156,6 +160,7 @@ IDENTITY_KEYS = (
     "block_near_goal_prob", "block_goal_offset",
     "lstm_hidden_size", "n_lstm_layers", "shared_lstm", "net_arch",
     "q_net_arch", "q_lr",
+    "arch", "n_stack",
 )
 
 # The training hyperparameters a checkpoint carries: RecurrentPPO.load rebuilds the agent from
