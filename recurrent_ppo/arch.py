@@ -85,8 +85,8 @@ class LstmArch:
         return RecurrentPPO(policy_for(cfg["obs"], recurrent=True), env,
                             policy_kwargs=policy_kwargs, **_shared_kwargs(cfg, log_dir))
 
-    def load(self, path, env, cfg):
-        return RecurrentPPO.load(path, env, print_system_info=True, device=cfg["device"])
+    def load(self, path, env, cfg, print_system_info=True):
+        return RecurrentPPO.load(path, env, print_system_info=print_system_info, device=cfg["device"])
 
 
 class StackArch:
@@ -114,8 +114,8 @@ class StackArch:
         return PPO(policy_for(cfg["obs"], recurrent=False), env,
                    policy_kwargs=_shared_policy_kwargs(cfg), **_shared_kwargs(cfg, log_dir))
 
-    def load(self, path, env, cfg):
-        return PPO.load(path, env, print_system_info=True, device=cfg["device"])
+    def load(self, path, env, cfg, print_system_info=True):
+        return PPO.load(path, env, print_system_info=print_system_info, device=cfg["device"])
 
 
 ARCHS = {a.name: a for a in (LstmArch(), StackArch())}
