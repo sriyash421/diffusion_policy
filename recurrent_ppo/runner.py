@@ -25,6 +25,26 @@ from recurrent_ppo.run_io import (check_conflicts, dump_args, get_checkpoint_pat
                                   vecnormalize_path_for)
 
 
+def _claim(log_dir):
+    """A run directory this process alone owns.
+
+    The timestamp is only second-resolution, so two runs launched in the same second -- which is
+    what a shell loop does -- resolved to the SAME directory. `exist_ok=True` then accepted it
+    silently and the two overwrote each other's checkpoints, args.yaml and evaluations.npz for
+    the length of the run. Claiming the directory exclusively turns that into a suffix rather
+    than a collision. An explicit --log-dir is claimed the same way: a resume goes through the
+    other branch, so arriving here means a NEW run, and a new run must never land on used files.
+    """
+    for suffix in range(100):
+        candidate = log_dir if suffix == 0 else f"{log_dir}_{suffix}"
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f"[ERROR] Could not claim a run directory near {log_dir}")
+
+
 def train(args_cli, arch):
     """Train one arm. `arch` is LstmArch or StackArch."""
     cfg = vars(args_cli)
@@ -53,7 +73,7 @@ def train(args_cli, arch):
         # why each one has its own log root.
         run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_dir = os.path.abspath(args_cli.log_dir or os.path.join("logs", arch.log_root, arm, run_info))
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir = _claim(log_dir)
         dump_args(log_dir, cfg)
         print(f"[INFO] Logging experiment in directory: {log_dir}")
 
