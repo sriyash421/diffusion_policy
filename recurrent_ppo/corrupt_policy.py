@@ -176,12 +176,18 @@ class CorruptingExtractor(BaseFeaturesExtractor):
     """
 
     def __init__(self, observation_space, inner_class=FlattenExtractor, inner_kwargs=None,
-                 enabled=True, t_max=DEFAULT_T_MAX, std_momentum=0.99):
+                 enabled=True, t_max=None, std_momentum=0.99):
         inner = inner_class(observation_space, **(inner_kwargs or {}))
         super().__init__(observation_space, features_dim=inner.features_dim)
         self.inner = inner
         self.enabled = bool(enabled)
-        self.t_max = int(t_max)
+        # `t_max` is ACCEPTED AND IGNORED, and only so that checkpoints saved before it was
+        # removed still load -- SB3 pickles features_extractor_kwargs into the zip and replays
+        # them on load. The level is the env's alone: `aug_draw` draws t into the observation and
+        # forward() reads back whatever it finds. Storing a cap here implied the extractor
+        # enforced one, which it never did, and --corrupt-snr now deliberately draws a single t
+        # that can sit well past any U[0, t_max) range.
+        del t_max
         self.std_momentum = float(std_momentum)
         self.scheduler = make_obs_noise_scheduler()
         # The EMA may move only while the ROLLOUT is being collected, never during the update
@@ -326,14 +332,18 @@ def policy_for(obs_type, recurrent=True, corrupt_obs=False):
     return QHeadMultiInputPolicy if dict_space else QHeadPolicy
 
 
-def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):
-    """The features_extractor_class / _kwargs pair for an arm, for policy_kwargs."""
+def features_extractor_kwargs(obs_type, corrupt_obs):
+    """The features_extractor_class / _kwargs pair for an arm, for policy_kwargs.
+
+    No noise level here: the level lives in the observation, so it is `aug_for`'s to set and the
+    extractor never needs to be told it.
+    """
     inner_class = STResNetExtractor if obs_type == "image" else KeypointExtractor
     if not corrupt_obs:
         return {"features_extractor_class": inner_class, "features_extractor_kwargs": {}}
     return {
         "features_extractor_class": CorruptingExtractor,
-        "features_extractor_kwargs": {"inner_class": inner_class, "t_max": t_max},
+        "features_extractor_kwargs": {"inner_class": inner_class},
     }
 
 

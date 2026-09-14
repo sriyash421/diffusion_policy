@@ -145,6 +145,41 @@ def test_occlusion_modes_share_a_marginal_and_differ_in_structure(mode, expected
     assert np.mean(runs) == pytest.approx(expected_run, rel=0.25)
 
 
+def test_an_unreachable_persistent_combination_is_announced_not_clipped(capsys):
+    """The two modes are only comparable while they share a marginal, and they cannot always.
+
+    Holding a mean hidden run of `persistence` at a low visible rate needs
+    p(visible->hidden) = (1-v)/(v*persistence) > 1, which no rate can be. The clip that follows
+    silently moves the stationary visible fraction off `visible_rate`, so a `persistent` arm
+    stops being matched with the `iid` arm it is supposed to be read against -- the one property
+    test_occlusion_modes_share_a_marginal_and_differ_in_structure exists to pin. Announcing it
+    is the difference between a known limitation and a wrong comparison.
+    """
+    # 1/(1 + 20) = 0.0476 is the lowest rate a mean run of 20 can hold
+    env = PushTGymEnv(obs_type="keypoint", keypoint_visible_rate=0.02, occlusion="persistent",
+                      occlusion_persistence=20.0)
+    out = capsys.readouterr().out
+    assert "[WARN]" in out and "NOT matched" in out
+    # and the warning tells the truth about what was actually built
+    p_hv, p_vh = env._p_hidden_to_visible, env._p_visible_to_hidden
+    assert p_vh == 1.0                                     # clipped
+    assert f"{p_hv / (p_hv + 1.0):.3f}" in out
+    assert env._stationary_visible == pytest.approx(p_hv / (p_hv + p_vh))
+    assert env._stationary_visible > 0.02                  # NOT the requested rate
+
+    # the reachable side of the same boundary stays silent and stays matched
+    env = PushTGymEnv(obs_type="keypoint", keypoint_visible_rate=0.5, occlusion="persistent",
+                      occlusion_persistence=20.0)
+    assert "[WARN]" not in capsys.readouterr().out
+    assert env._stationary_visible == pytest.approx(0.5)
+
+    # `iid` can never reach it: p_vh is 1 - v there, always a rate
+    env = PushTGymEnv(obs_type="keypoint", keypoint_visible_rate=0.02, occlusion="iid",
+                      occlusion_persistence=20.0)
+    assert "[WARN]" not in capsys.readouterr().out
+    assert env._stationary_visible == pytest.approx(0.02)
+
+
 def test_corruption_matches_the_repo_mixin_when_unscaled():
     """A copy kept honest: if ObsCorruptionMixin changes, this fails instead of drifting.
 
@@ -160,8 +195,7 @@ def test_corruption_matches_the_repo_mixin_when_unscaled():
             self._init_corruption(True, True)
 
     dim = 64
-    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor,
-                                    t_max=1000).eval()
+    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor).eval()
     features = th.randn(32, dim)
     # the draw the mixin makes internally, made here instead and handed in with the observation
     th.manual_seed(7)
@@ -177,7 +211,7 @@ def test_scaling_makes_the_snr_independent_of_feature_magnitude():
     """Why a level chosen from the VAE renders transfers to a ResNet arm at all."""
     space, ratios = _corrupt_space(64, t_max=200), []
     for scale in (0.03, 0.44, 30.0, 9188.0):
-        extractor = CorruptingExtractor(space, inner_class=KeypointExtractor, t_max=200).train()
+        extractor = CorruptingExtractor(space, inner_class=KeypointExtractor).train()
         features = th.randn(4096, 64) * scale
         extractor._update_feature_std(features)
         th.manual_seed(0)
@@ -194,7 +228,7 @@ def test_q_head_cannot_move_the_policy():
     space = _corrupt_space(40, t_max=200)
     policy = policy_for("keypoint", corrupt_obs=True)(
         space, gym.spaces.Box(-1, 1, (2,)), lambda _: 3e-4, lstm_hidden_size=32,
-        **features_extractor_kwargs("keypoint", corrupt_obs=True, t_max=200))
+        **features_extractor_kwargs("keypoint", corrupt_obs=True))
     q_params = {id(p) for p in policy.q_net.parameters()}
     policy_params = {id(p) for group in policy.optimizer.param_groups for p in group["params"]}
     assert q_params and not (q_params & policy_params)
@@ -205,7 +239,7 @@ def test_feedforward_q_head_cannot_move_the_policy():
     """The same separate-optimizer guarantee, for the non-recurrent policy."""
     policy = policy_for("keypoint", recurrent=False)(
         gym.spaces.Box(-1, 1, (160,)), gym.spaces.Box(-1, 1, (2,)), lambda _: 3e-4,
-        **features_extractor_kwargs("keypoint", corrupt_obs=True, t_max=200))
+        **features_extractor_kwargs("keypoint", corrupt_obs=True))
     q_params = {id(p) for p in policy.q_net.parameters()}
     policy_params = {id(p) for group in policy.optimizer.param_groups for p in group["params"]}
     assert q_params and not (q_params & policy_params)
@@ -398,7 +432,7 @@ def test_the_draw_is_replayed_rather_than_redrawn():
     observations rather than two policies.
     """
     dim = 64
-    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor, t_max=200)
+    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor)
     obs = {STATE_KEY: th.randn(8, dim), AUG_NOISE_KEY: th.randn(8, dim),
            AUG_T_KEY: th.randint(0, 200, (8, 1)).float()}
     extractor.train()                     # the mode PPO's update epochs run in
@@ -410,7 +444,7 @@ def test_the_draw_is_replayed_rather_than_redrawn():
 def test_feature_std_is_frozen_outside_collection():
     """A std that moved between epochs would re-scale an already-stored transition's noise."""
     dim = 64
-    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor, t_max=200)
+    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor)
     obs = {STATE_KEY: th.randn(256, dim) * 5.0, AUG_NOISE_KEY: th.randn(256, dim),
            AUG_T_KEY: th.randint(0, 200, (256, 1)).float()}
     extractor.train()
@@ -431,7 +465,7 @@ def test_a_single_row_batch_cannot_poison_the_feature_std():
     case -- it is hit every 300 steps, and the eval env's single env hits it every step.
     """
     dim = 64
-    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor, t_max=200)
+    extractor = CorruptingExtractor(_corrupt_space(dim), inner_class=KeypointExtractor)
     extractor.update_std = True
     one = {STATE_KEY: th.randn(1, dim), AUG_NOISE_KEY: th.randn(1, dim),
            AUG_T_KEY: th.randint(0, 200, (1, 1)).float()}
@@ -475,7 +509,7 @@ def test_evaluate_actions_reproduces_the_collected_log_prob(obs_type, corrupt):
 
     policy = policy_for(obs_type, recurrent=True, corrupt_obs=corrupt)(
         env.observation_space, env.action_space, lambda _: 3e-4, lstm_hidden_size=16,
-        **features_extractor_kwargs(obs_type, corrupt, t_max=200))
+        **features_extractor_kwargs(obs_type, corrupt))
     # raw, not pre-divided: the policy's own preprocess_obs does the /255 on the image space
     obs_t = {k: th.as_tensor(np.asarray(v)).unsqueeze(0).float() for k, v in obs.items()}
     if obs_type == "image":
@@ -569,3 +603,39 @@ def test_a_target_snr_pins_one_level():
     drawn = aug_for("keypoint", True, t_max=200)
     assert (drawn["t_min"], drawn["t_max"]) == (0, 200)
     assert len({int(aug_draw(rng, **drawn)[AUG_T_KEY][0]) for _ in range(200)}) > 1
+
+
+@pytest.mark.parametrize("n_stack", [1, 4])
+def test_the_terminal_observation_carries_the_draw(n_stack):
+    """SB3 encodes infos["terminal_observation"] to bootstrap a truncated episode.
+
+    That observation reaches the same extractor as any other, so it needs the draw's keys. It
+    did not have them, and because dense-reward episodes ALWAYS truncate, every corrupted run
+    died at its first episode boundary -- a few minutes in, on a GPU, well past any import check.
+    """
+    from recurrent_ppo.arch import ARCHS
+    from recurrent_ppo.config import DEFAULTS
+    from recurrent_ppo.pusht_gym import VecAugmentationDraw, build_vec_env, env_kwargs_from
+
+    horizon = 8
+    cfg = dict(DEFAULTS)
+    cfg.update(obs="keypoint", n_stack=n_stack, corrupt_obs=True, delta_scale=33.0,
+               max_episode_steps=horizon)
+    venv = ARCHS["stack"].wrap(build_vec_env(obs_type="keypoint", n_envs=2, seed=0,
+                                             use_subproc=False,
+                                             **env_kwargs_from(cfg, "keypoint")), cfg)
+    venv = VecAugmentationDraw(venv, seed=0,
+                               **aug_for("keypoint", True, n_stack=n_stack, snr=1.92))
+    keys = set(venv.observation_space.spaces)
+    venv.reset()
+    saw_terminal = False
+    for _ in range(horizon + 2):
+        _, _, dones, infos = venv.step(np.zeros((2, 2), dtype=np.float32))
+        for done, info in zip(dones, infos):
+            if done and "terminal_observation" in info:
+                saw_terminal = True
+                assert set(info["terminal_observation"]) == keys
+                assert info["terminal_observation"][AUG_NOISE_KEY].shape == \
+                    venv.observation_space[AUG_NOISE_KEY].shape
+    assert saw_terminal, "the horizon should have truncated at least one episode"
+    venv.close()

@@ -200,14 +200,30 @@ class PushTGymEnv(gymnasium.Env):
         hidden run of 1/v, i.e. 2 steps at v=0.5, exactly what PushTKeypointsEnv does per step.
         `persistent` sets that mean run to `persistence` instead. One chain, so the two arms are
         matched on HOW MUCH is missing and differ only in how it is distributed over time.
+
+        That match is the whole basis of the comparison, and it is NOT always available: holding
+        a long hidden run at a low visible rate needs p(visible->hidden) > 1, which no chain can
+        do. The combination is announced rather than clipped silently -- see below.
         """
         v = float(np.clip(visible_rate, 0.0, 1.0))
         if v >= 1.0:
             return 1.0, 0.0                                   # never hidden
         if v <= 0.0:
             return 0.0, 1.0                                   # never visible
-        p_hv = v if self.occlusion == "iid" else 1.0 / max(persistence, 1.0)
-        return p_hv, float(np.clip(p_hv * (1.0 - v) / v, 0.0, 1.0))
+        run = max(persistence, 1.0)
+        p_hv = v if self.occlusion == "iid" else 1.0 / run
+        p_vh = p_hv * (1.0 - v) / v
+        if p_vh > 1.0:
+            # Only reachable under `persistent`: in `iid` p_vh is 1 - v, which is always a rate.
+            # Clipping moves the stationary visible fraction OFF visible_rate, so this arm stops
+            # being matched with `iid` -- which is the one thing the two modes must agree on.
+            print(f"[WARN] --occlusion persistent cannot hold --keypoint-visible-rate {v:g} at a "
+                  f"mean hidden run of {run:g}: it needs p(visible->hidden) = {p_vh:.2f}, and a "
+                  f"rate cannot exceed 1. Clipping leaves the stationary visible fraction at "
+                  f"{p_hv / (p_hv + 1.0):.3f}, NOT {v:g}, so this run is NOT matched with an "
+                  f"`iid` run at the same rate. Raise the rate above "
+                  f"{1.0 / (1.0 + run):.3f} or lower --occlusion-persistence.")
+        return p_hv, float(np.clip(p_vh, 0.0, 1.0))
 
     def _step_occlusion(self):
         """Advance the per-keypoint chain one step and return the (2 * n_kps,) obs-half mask."""
@@ -493,7 +509,21 @@ class VecAugmentationDraw(VecEnvWrapper):
 
     def step_wait(self):
         obs, rewards, dones, infos = self.venv.step_wait()
+        # SB3 bootstraps a truncated episode by encoding infos[i]["terminal_observation"], so that
+        # observation reaches the extractor too and needs the draw. Dense-reward episodes always
+        # truncate, so without this every corrupted run dies at the first episode boundary. Its
+        # draw is fresh: it is a different observation, and it is never stored, so nothing replays.
+        for i, done in enumerate(dones):
+            if done and "terminal_observation" in infos[i]:
+                infos[i] = dict(infos[i])
+                infos[i]["terminal_observation"] = self._add_one(infos[i]["terminal_observation"])
         return self._add(obs), rewards, dones, infos
+
+    def _add_one(self, obs):
+        """The draw for a SINGLE, unbatched observation."""
+        out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
+        out.update(aug_draw(self.rng, self.feature_dim, self.t_min, self.t_max, self.crop_span))
+        return out
 
     def seed(self, seed=None):
         if seed is not None:

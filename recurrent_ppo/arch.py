@@ -56,7 +56,7 @@ def _shared_policy_kwargs(cfg):
         "q_net_arch": tuple(int(x) for x in cfg["q_net_arch"].split(",") if x),
         "q_lr": cfg["q_lr"],
         # corruption arrives as a features extractor, through SB3's own extension point
-        **features_extractor_kwargs(cfg["obs"], cfg["corrupt_obs"], cfg["corrupt_t_max"]),
+        **features_extractor_kwargs(cfg["obs"], cfg["corrupt_obs"]),
     }
 
 
