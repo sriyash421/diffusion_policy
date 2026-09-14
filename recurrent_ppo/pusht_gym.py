@@ -25,30 +25,19 @@ import gymnasium
 import numpy as np
 from gymnasium import spaces
 
+from shapely.geometry import Point
+
+from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
-# arena is 512x512; obs positions and action targets both live in it
-WS = 512.0
-OBS_TYPES = ("keypoint", "image")
-ACTION_MODES = ("delta", "absolute")
-REWARD_MODES = ("dense", "sparse")
-OCCLUSION_MODES = ("iid", "persistent")
-# fallback only, for when the demonstrations are not on disk; --delta-scale auto measures it
-DEFAULT_DELTA_SCALE = 32.0
-DEMO_ZARR = "data/pusht_cchi_v7_replay.zarr"
-# PushTEnv draws the agent from [50, 450] and the block from [100, 400]. The demonstrations in
-# data/pusht_cchi_v7_replay.zarr keep every agent start inside that agent range, but a quarter of
-# their BLOCK starts fall outside [100, 400] (measured span x 66-440, y 116-486). Training on the
-# narrower box means the policy never resets where a quarter of the demonstrated episodes begin,
-# so this widens to cover them, with a little margin.
-DEFAULT_AGENT_START_RANGE = (50.0, 450.0)
-DEFAULT_BLOCK_START_RANGE = (60.0, 490.0)
-# A block CENTRE inside the range above can still put the T's arms through a wall, which spawns
-# the block overlapping it and pushes keypoints outside the arena. Redraw when that happens:
-# ~74% of draws are accepted, so this costs about 1.4 resets, and it covers 201 of the 206
-# demonstrated starts (the other 5 genuinely poke out of the arena).
-SPAWN_TRIES = 20
+from diffusion_policy.env.pusht.feedback_util import (GOAL_KEYPOINTS, arm_to_t_distance,
+                                                     keypoints_at_pose, t_goal_distance)
+from recurrent_ppo.config import (ACTION_MODES, AGENT_BOUNDS, AGENT_RADIUS, DEFAULTS as D,
+                                  DELTA_SCALE_FALLBACK, DEMO_ZARR, ENV_KEYS, GOAL_POSE, KEYPOINT_ONLY_KEYS, NEAR_TRIES,
+                                  OBS_TYPES, OCCLUSION_MODES, REWARD_MODES, SHAPING_POTENTIALS,
+                                  SPAWN_TRIES, WS)
+
 # Keys of the per-transition AUGMENTATION DRAW (see AugmentationDraw). Prefixed so they cannot
 # collide with an observation key, and named in one place because the extractor reads them back.
 STATE_KEY = "state"
@@ -64,17 +53,27 @@ class PushTGymEnv(gymnasium.Env):
 
     def __init__(
         self,
-        obs_type="keypoint",
-        max_episode_steps=300,
-        render_size=96,
-        keypoint_visible_rate=1.0,
-        action_mode="delta",
-        delta_scale=DEFAULT_DELTA_SCALE,
-        reward_mode="dense",
-        occlusion="iid",
-        occlusion_persistence=20.0,
-        agent_start_range=DEFAULT_AGENT_START_RANGE,
-        block_start_range=DEFAULT_BLOCK_START_RANGE,
+        obs_type=D["obs"],
+        max_episode_steps=D["max_episode_steps"],
+        render_size=D["render_size"],
+        keypoint_visible_rate=D["keypoint_visible_rate"],
+        action_mode=D["action_mode"],
+        delta_scale=DELTA_SCALE_FALLBACK,
+        reward_mode=D["reward"],
+        shaping_coef=D["shaping_coef"],
+        shaping_potential=D["shaping_potential"],
+        progress_coef=D["progress_coef"],
+        success_bonus=D["success_bonus"],
+        block_zero_coverage=D["block_zero_coverage"],
+        shaping_gamma=D["gamma"],
+        occlusion=D["occlusion"],
+        occlusion_persistence=D["occlusion_persistence"],
+        agent_start_range=D["agent_start_range"],
+        block_start_range=D["block_start_range"],
+        agent_near_block_prob=D["agent_near_block_prob"],
+        agent_block_gap=D["agent_block_gap"],
+        block_near_goal_prob=D["block_near_goal_prob"],
+        block_goal_offset=D["block_goal_offset"],
         legacy=False,
         render_mode=None,
     ):
@@ -83,6 +82,14 @@ class PushTGymEnv(gymnasium.Env):
         assert reward_mode in REWARD_MODES, f"unknown reward_mode {reward_mode!r}, expected {REWARD_MODES}"
         assert occlusion in OCCLUSION_MODES, f"unknown occlusion {occlusion!r}, expected {OCCLUSION_MODES}"
         self.reward_mode = reward_mode
+        assert shaping_potential in SHAPING_POTENTIALS, \
+            f"unknown shaping_potential {shaping_potential!r}, expected {SHAPING_POTENTIALS}"
+        self.shaping_potential = shaping_potential
+        self.shaping_coef = float(shaping_coef)
+        self.progress_coef = float(progress_coef)
+        self.success_bonus = float(success_bonus)
+        self.block_zero_coverage = bool(block_zero_coverage)
+        self.shaping_gamma = float(shaping_gamma)
         self.occlusion = occlusion
         self.obs_type = obs_type
         self.max_episode_steps = max_episode_steps
@@ -90,6 +97,10 @@ class PushTGymEnv(gymnasium.Env):
         self.delta_scale = float(delta_scale)
         self.agent_start_range = tuple(float(x) for x in agent_start_range)
         self.block_start_range = tuple(float(x) for x in block_start_range)
+        self.agent_near_block_prob = float(agent_near_block_prob)
+        self.agent_block_gap = tuple(float(x) for x in agent_block_gap)
+        self.block_near_goal_prob = float(block_near_goal_prob)
+        self.block_goal_offset = tuple(float(x) for x in block_goal_offset)
         self.render_mode = render_mode
 
         if obs_type == "keypoint":
@@ -130,18 +141,38 @@ class PushTGymEnv(gymnasium.Env):
         # advances it, so without intervention every episode is the SAME episode. And its block
         # range is [100, 400], which excludes a quarter of the demonstrated block starts.
         for _ in range(SPAWN_TRIES):
-            self.env.reset_to_state = self._sample_state()
+            state = self._sample_state()
+            self.env.reset_to_state = state
             # seeded per episode: PushTKeypointsEnv draws its visibility mask from this RNG
             self.env.seed(int(self.np_random.integers(0, 2**31 - 1)))
             obs = self.env.reset()
-            if self._block_inside_arena():
+            if not self._block_inside_arena():
+                continue
+            # zero coverage at reset: 28.7% of uniform block draws already overlap the goal, and
+            # under a level reward that overlap is paid for every step of the episode
+            if self.block_zero_coverage and self._block_coverage() > 0.0:
+                continue
+            # guarded so prob=0 consumes no draw, i.e. it is bit-identical to not having the
+            # curriculum at all rather than merely equivalent in distribution
+            if self.agent_near_block_prob <= 0.0 or self.np_random.random() >= self.agent_near_block_prob:
                 break
+            # the block's geometry is only known once it is placed, so the curriculum draw is a
+            # second reset rather than part of _sample_state
+            near = self._sample_agent_near_block()
+            if near is None:
+                continue
+            state[:2] = near
+            self.env.reset_to_state = state
+            obs = self.env.reset()
+            break
         else:
             print(f"[WARN] {SPAWN_TRIES} spawn draws all put the block through a wall; "
                   f"using the last one. Narrow --block-start-range.")
         self._elapsed_steps = 0
         self._max_reward = 0.0
         self._solved = False
+        self._prev_phi = self._potential()
+        self._prev_distance = self._t_goal_distance()
         if self.obs_type == "keypoint":
             # start the chain AT its stationary distribution, so episode step 0 is not
             # systematically cleaner than the rest
@@ -179,15 +210,79 @@ class PushTGymEnv(gymnasium.Env):
     def _sample_state(self):
         agent_lo, agent_hi = self.agent_start_range
         block_lo, block_hi = self.block_start_range
+        if self.block_near_goal_prob > 0.0 and self.np_random.random() < self.block_near_goal_prob:
+            # A reverse curriculum: start the block part-way solved so the agent can reach the
+            # goal, and see a reward for doing so, within an episode. With a uniform block start
+            # the first 2M-step run never once crossed the success threshold.
+            pos_offset, angle_offset = self.block_goal_offset
+            block = GOAL_POSE[:2] + self.np_random.uniform(-pos_offset, pos_offset, size=2)
+            angle = GOAL_POSE[2] + self.np_random.uniform(-angle_offset, angle_offset)
+        else:
+            block = self.np_random.uniform(block_lo, block_hi, size=2)
+            # PushTEnv draws randn()*2pi - pi here, which is a wrapped normal with sigma = 2pi:
+            # uniform to ~9 decimal places once taken mod 2pi. Drawn uniformly and said plainly.
+            angle = self.np_random.uniform(0.0, 2.0 * np.pi)
         return np.array([
             self.np_random.uniform(agent_lo, agent_hi),
             self.np_random.uniform(agent_lo, agent_hi),
-            self.np_random.uniform(block_lo, block_hi),
-            self.np_random.uniform(block_lo, block_hi),
-            # PushTEnv draws randn()*2pi - pi here, which is a wrapped normal with sigma = 2pi:
-            # uniform to ~9 decimal places once taken mod 2pi. Drawn uniformly and said plainly.
-            self.np_random.uniform(0.0, 2.0 * np.pi),
+            block[0], block[1], angle,
         ])
+
+    def _sample_agent_near_block(self):
+        """An agent start a short clear gap from the block's SURFACE, or None if no draw landed.
+
+        Distance to the surface, not to the centroid: the T is asymmetric, so a fixed radius would
+        put the agent inside one arm and a wide gap from the other. The lower bound clears the
+        agent's own radius, so it never spawns overlapping.
+        """
+        geom = pymunk_to_shapely(self.env.block, self.env.block.shapes)
+        centre = np.asarray(geom.centroid.coords[0])
+        lo_gap, hi_gap = self.agent_block_gap
+        agent_lo, agent_hi = self.agent_start_range
+        reach = float(np.hypot(*(np.asarray(geom.bounds[2:]) - centre))) + hi_gap
+        for _ in range(NEAR_TRIES):
+            candidate = centre + self.np_random.uniform(-reach, reach, size=2)
+            if not (agent_lo <= candidate[0] <= agent_hi and agent_lo <= candidate[1] <= agent_hi):
+                continue
+            if lo_gap <= geom.distance(Point(candidate)) <= hi_gap:
+                return candidate
+        return None
+
+    def _t_goal_distance(self):
+        """Mean per-keypoint distance of the achieved T from the goal pose, in pixels."""
+        block = self.env.block
+        pose = np.array([block.position[0], block.position[1], block.angle], dtype=np.float32)
+        return float(t_goal_distance((GOAL_KEYPOINTS - keypoints_at_pose(pose)).reshape(-1)))
+
+    def _block_coverage(self):
+        """Fraction of the goal T the block currently covers -- PushTEnv's own reward quantity."""
+        goal_body = self.env._get_goal_pose_body(self.env.goal_pose)
+        goal_geom = pymunk_to_shapely(goal_body, self.env.block.shapes)
+        block_geom = pymunk_to_shapely(self.env.block, self.env.block.shapes)
+        return goal_geom.intersection(block_geom).area / goal_geom.area
+
+    def _potential(self):
+        """Phi(s), in units of WS. Reuses feedback_util so these terms mean exactly what the
+        repo's verifier means by them, rather than a second definition of the same quantity.
+
+        `feedback` is the goal-vs-achieved per-keypoint displacement, so t_goal captures the
+        block's POSITION AND ROTATION error and is 0 only at the goal pose. A centroid distance
+        would be blind to rotation, which is half of what PushT asks for.
+
+        arm-to-T is the only term that varies before the agent touches the block; t_goal alone is
+        flat until the block moves, which is why `arm_t` exists as the combination.
+        """
+        block = self.env.block
+        pose = np.array([block.position[0], block.position[1], block.angle], dtype=np.float32)
+        feedback = (GOAL_KEYPOINTS - keypoints_at_pose(pose)).reshape(-1)
+        if self.shaping_potential == "arm":
+            distance = arm_to_t_distance(np.asarray(self.env.agent.position), feedback)
+        elif self.shaping_potential == "t_goal":
+            distance = t_goal_distance(feedback)
+        else:
+            distance = t_goal_distance(feedback) + arm_to_t_distance(
+                np.asarray(self.env.agent.position), feedback)
+        return -float(distance) / WS
 
     def _block_inside_arena(self):
         verts = np.array([self.env.block.local_to_world(v)
@@ -210,6 +305,28 @@ class PushTGymEnv(gymnasium.Env):
         # there is nothing left to earn, so terminating costs nothing.
         if self.reward_mode == "dense":
             reward, terminated = float(reward), False
+        elif self.reward_mode == "delta":
+            # Pays for CHANGE, not level: exactly 0 when the T does not move, however well or
+            # badly it happens to be placed. That is the fix for dense's free lunch -- under
+            # dense, doing nothing from a lucky reset paid a return of 92.7, more than any
+            # policy earned by acting. Summed over an episode this telescopes to
+            # (d_start - d_end), i.e. total progress, so it cannot be farmed by loitering.
+            distance = self._t_goal_distance()
+            reward = self.progress_coef * (self._prev_distance - distance) / WS
+            if newly_solved:
+                reward += self.success_bonus
+            self._prev_distance = distance
+            terminated = False
+        elif self.reward_mode == "shaped":
+            # Potential-based shaping (Ng, Harada & Russell 1999): F = gamma*Phi(s') - Phi(s)
+            # PROVABLY leaves the optimal policy unchanged, which a raw distance bonus does not.
+            # It exists because PushT's own reward is a function of the block pose alone, so
+            # nothing the agent does before contact changes its return -- and the 2M-step runs
+            # duly learned to drive into a corner and stop.
+            phi = self._potential()
+            reward = float(reward) + self.shaping_coef * (self.shaping_gamma * phi - self._prev_phi)
+            self._prev_phi = phi
+            terminated = False
         else:
             reward, terminated = (1.0 if newly_solved else 0.0), self._solved
         truncated = (not terminated) and self._elapsed_steps >= self.max_episode_steps
@@ -260,11 +377,13 @@ class PushTGymEnv(gymnasium.Env):
         human demonstrations move it a median of 8px per step: an absolute-position Gaussian at
         std 1 would explore with a standard deviation of 256px, half the table.
         """
+        lo, hi = AGENT_BOUNDS
         action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
         if self.action_mode == "delta":
             target = np.asarray(self.env.agent.position, dtype=np.float64) + action * self.delta_scale
-            return np.clip(target, 0.0, WS)
-        return (action + 1.0) * (WS / 2)
+            return np.clip(target, lo, hi)
+        # absolute spans the same usable region, so the two modes address the same set of points
+        return lo + (action + 1.0) * 0.5 * (hi - lo)
 
 
 def demo_action_steps(zarr_path=DEMO_ZARR):
@@ -290,15 +409,15 @@ def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
     The percentile answers "what counts as a big step for a human here": at p99 the full action
     range spans essentially everything the demonstrations do (median 4px, p99 33px) without the
     rare 135px outlier stretching the scale so that ordinary moves live in the first 3% of it.
-    Falls back to DEFAULT_DELTA_SCALE, loudly, when the dataset is not on disk -- this is a
+    Falls back to DELTA_SCALE_FALLBACK, loudly, when the dataset is not on disk -- this is a
     convenience for picking a number, not a dependency of training.
     """
     try:
         return float(np.percentile(demo_action_steps(zarr_path), percentile))
     except Exception as exc:
         print(f"[WARN] Could not measure the demo action steps from {zarr_path} ({exc}); "
-              f"falling back to --delta-scale {DEFAULT_DELTA_SCALE}.")
-        return DEFAULT_DELTA_SCALE
+              f"falling back to --delta-scale {DELTA_SCALE_FALLBACK}.")
+        return DELTA_SCALE_FALLBACK
 
 
 class AugmentationDraw(gymnasium.ObservationWrapper):
@@ -390,41 +509,15 @@ def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, moni
     return venv
 
 
-def env_defaults():
-    """The cfg-key defaults, read off PushTGymEnv's own signature.
-
-    play.py falls back to these for a run that predates a key. Reading them from the
-    constructor rather than restating them is what stops the two from drifting: restated,
-    they had gone stale at `action_mode: "absolute"` and `block_start_range: [100, 400]`,
-    so a run with no args.yaml was silently evaluated in a different MDP than it trained in.
-    """
-    import inspect
-
-    params = inspect.signature(PushTGymEnv.__init__).parameters
-    d = {n: p.default for n, p in params.items() if p.default is not inspect.Parameter.empty}
-    # the two places a cfg key and an env kwarg are spelled differently
-    d["obs"] = d.pop("obs_type")
-    d["reward"] = d.pop("reward_mode")
-    return d
-
-
 def env_kwargs_from(cfg, obs_type):
-    """The PushTGymEnv kwargs an arm takes, out of a flat config dict (CLI args or args.yaml).
-
-    keypoint_visible_rate belongs to PushTKeypointsEnv only, so the image arm must not be handed
-    it -- the one place that asymmetry is expressed, rather than at every call site.
-    """
-    kwargs = {
-        "max_episode_steps": cfg["max_episode_steps"],
-        "render_size": cfg["render_size"],
-        "action_mode": cfg["action_mode"],
-        "delta_scale": cfg["delta_scale"],
-        "agent_start_range": cfg["agent_start_range"],
-        "block_start_range": cfg["block_start_range"],
-        "reward_mode": cfg["reward"],
-    }
+    """The PushTGymEnv kwargs an arm takes, out of a flat config dict (CLI args or args.yaml)."""
+    kwargs = {k: cfg[k] for k in ENV_KEYS}
+    kwargs["reward_mode"] = cfg["reward"]
+    kwargs["shaping_coef"] = cfg.get("shaping_coef", D["shaping_coef"])
+    kwargs["shaping_potential"] = cfg.get("shaping_potential", D["shaping_potential"])
+    for key in ("progress_coef", "success_bonus", "block_zero_coverage"):
+        kwargs[key] = cfg.get(key, D[key])
+    kwargs["shaping_gamma"] = cfg.get("gamma", D["gamma"])
     if obs_type == "keypoint":
-        kwargs["keypoint_visible_rate"] = cfg["keypoint_visible_rate"]
-        kwargs["occlusion"] = cfg["occlusion"]
-        kwargs["occlusion_persistence"] = cfg["occlusion_persistence"]
+        kwargs.update({k: cfg[k] for k in KEYPOINT_ONLY_KEYS})
     return kwargs

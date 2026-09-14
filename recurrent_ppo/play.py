@@ -39,9 +39,13 @@ def build_parser():
     parser.add_argument("--keypoint-visible-rate", type=float, default=None, help="Override the run's keypoint visibility.")
     parser.add_argument("--action-mode", type=str, default=None, choices=["delta", "absolute"], help="Override the run's action mode.")
     parser.add_argument("--delta-scale", type=float, default=None, help="Override the run's delta scale.")
-    parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse"], help="Override the run's reward mode.")
+    parser.add_argument("--reward", type=str, default=None, choices=["dense", "sparse", "shaped", "delta"], help="Override the run's reward mode.")
     parser.add_argument("--occlusion", type=str, default=None, choices=["iid", "persistent"], help="Override the run's occlusion mode.")
     parser.add_argument("--occlusion-persistence", type=float, default=None, help="Override the run's occlusion persistence.")
+    parser.add_argument("--agent-near-block-prob", type=float, default=None, help="Override the run's near-block start fraction.")
+    parser.add_argument("--agent-block-gap", type=float, nargs=2, default=None, help="Override the run's near-block gap.")
+    parser.add_argument("--block-near-goal-prob", type=float, default=None, help="Override the run's near-goal start fraction.")
+    parser.add_argument("--block-goal-offset", type=float, nargs=2, default=None, help="Override the run's near-goal offset.")
     parser.add_argument("--agent-start-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
                         help="Override the run's agent start range.")
     parser.add_argument("--block-start-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
@@ -57,10 +61,6 @@ def build_parser():
     parser.add_argument("--report-values", action="store_true", default=False,
                         help="Also report the value and Q heads: their explained variance against the "
                              "realised discounted return, de-normalised into real reward units.")
-    parser.add_argument("--allow-missing-args", action="store_true", default=False,
-                        help="Evaluate a run that has no params/args.yaml, accepting the current defaults "
-                             "for how its environment was shaped. Off by default: that is a silent way to "
-                             "measure a different task than the one trained.")
     parser.add_argument("--device", type=str, default="auto", help="Torch device.")
     return parser
 
@@ -72,36 +72,38 @@ from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.common.vec_env import VecNormalize
 
 from recurrent_ppo.corrupt_policy import aug_for, corrupting_extractor, set_corruption
-from recurrent_ppo.pusht_gym import build_vec_env, env_defaults, env_kwargs_from
+from recurrent_ppo.config import DEFAULTS
+from recurrent_ppo.pusht_gym import build_vec_env, env_kwargs_from
 from recurrent_ppo.run_io import get_checkpoint_path, load_args, vecnormalize_path_for
 
-# how the env was shaped, and this script's flag for overriding each
-ENV_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate", "action_mode",
-            "delta_scale", "agent_start_range", "block_start_range", "reward", "occlusion",
-            "occlusion_persistence")
-# what a run recorded before these keys existed -- taken from PushTGymEnv itself, never
-# restated here, so they cannot drift away from the env the way they had
-FALLBACKS = env_defaults()
+# how the env was shaped. A key is overridable only if this script exposes a flag for it;
+# getattr's default keeps the two from having to be kept in step by hand.
+RESOLVE_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate",
+                "occlusion", "occlusion_persistence", "reward", "shaping_coef",
+                "shaping_potential", "progress_coef", "success_bonus", "block_zero_coverage",
+                "action_mode", "delta_scale", "agent_start_range", "block_start_range",
+                "agent_near_block_prob", "agent_block_gap", "block_near_goal_prob",
+                "block_goal_offset", "gamma")
+# A run that predates a key gets today's default, announced per key. See
+# recurrent_ppo_runs_sep11.md for what past runs actually used.
+FALLBACKS = DEFAULTS
 
 
 def resolve_config(run_dir, args_cli):
     """The run's recorded environment configuration, with any CLI flag overriding it out loud."""
     saved = load_args(run_dir) or {}
-    if not saved and not args_cli.allow_missing_args:
-        # a warning was not enough: falling back silently evaluates the checkpoint in whatever
-        # MDP the defaults happen to describe, which is the one failure an evaluation cannot
-        # survive. Opt in explicitly, or pass the env flags yourself.
-        raise SystemExit(
-            f"[ERROR] No params/args.yaml in {run_dir}, so how this checkpoint's environment "
-            "was shaped is unknown. Evaluating it against the current defaults would measure "
-            "a different task. Pass --allow-missing-args to accept the defaults anyway, or "
-            "give the env flags explicitly.")
     if not saved:
-        print(f"[WARN] No params/args.yaml in {run_dir}; using defaults, which may not be what "
-              "this checkpoint trained on.")
+        print(f"[WARN] No params/args.yaml in {run_dir}; falling back to defaults, which may not "
+              "be what this checkpoint trained on.")
+    missing = [k for k in RESOLVE_KEYS if k not in saved]
+    if missing:
+        print(f"[WARN] This run predates {len(missing)} key(s); assuming today's default for each. "
+              f"See recurrent_ppo_runs_sep11.md for what it actually used.")
+        for k in missing:
+            print(f"         {k} = {FALLBACKS[k]!r}")
     cfg = {}
-    for key in ENV_KEYS:
-        override = getattr(args_cli, key)
+    for key in RESOLVE_KEYS:
+        override = getattr(args_cli, key, None)
         recorded = saved.get(key, FALLBACKS[key])
         if override is not None and override != recorded:
             print(f"[INFO] Overriding {key}: run recorded {recorded!r}, using {override!r}")

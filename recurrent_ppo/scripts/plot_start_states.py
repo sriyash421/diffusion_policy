@@ -26,8 +26,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import zarr
 
-from recurrent_ppo.pusht_gym import (DEFAULT_AGENT_START_RANGE, DEFAULT_BLOCK_START_RANGE,
-                                     WS, PushTGymEnv, delta_scale_from_demos, demo_action_steps)
+from recurrent_ppo.config import DEFAULTS, WS
+from recurrent_ppo.pusht_gym import PushTGymEnv, delta_scale_from_demos, demo_action_steps
+
+# the start boxes live in config now, with every other default
+DEFAULT_AGENT_START_RANGE = tuple(DEFAULTS["agent_start_range"])
+DEFAULT_BLOCK_START_RANGE = tuple(DEFAULTS["block_start_range"])
 
 # Okabe-Ito, and never hue alone: RL is always a circle / solid, demos always a cross / dashed.
 RL_C, DEMO_C = "#0072B2", "#D55E00"

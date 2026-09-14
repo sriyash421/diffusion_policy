@@ -14,27 +14,7 @@ import yaml
 
 # the arguments that change what the checkpoint IS, rather than how a run is driven. Resuming
 # with any of these altered would continue one experiment under another's name.
-IDENTITY_KEYS = (
-    "obs",
-    "corrupt_obs",
-    "corrupt_t_max",
-    "reward",
-    "occlusion",
-    "occlusion_persistence",
-    "max_episode_steps",
-    "render_size",
-    "keypoint_visible_rate",
-    "action_mode",
-    "delta_scale",
-    "agent_start_range",
-    "block_start_range",
-    "lstm_hidden_size",
-    "n_lstm_layers",
-    "shared_lstm",
-    "net_arch",
-    "q_net_arch",
-    "q_lr",
-)
+from recurrent_ppo.config import IDENTITY_KEYS
 
 
 def dump_args(log_dir, args_dict):
