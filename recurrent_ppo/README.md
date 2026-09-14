@@ -1,25 +1,50 @@
-# Recurrent PPO on PushT
+# PPO on PushT, with and without recurrence
 
-A recurrent policy and value function trained with `sb3_contrib.RecurrentPPO`, in two
-observation arms and two noise regimes.
+A policy, a value function and a Q head trained on PushT, in two observation arms and two noise
+regimes, under **two architectures**: an LSTM (`sb3_contrib.RecurrentPPO`) and frame stacking
+(`stable_baselines3.PPO` + `VecFrameStack`). sb3-contrib's own RecurrentPPO documentation
+recommends trying the second first -- "a simpler, faster and usually competitive alternative" --
+so both are here and they share everything except the architecture.
 
 ```
-train.py                       argparse -> vec env -> RecurrentPPO.learn, plus its three callbacks
-play.py                        checkpoint -> LSTM-stateful rollout -> success rate, score, video
+train.py                       LSTM entry point: flags -> runner.train(args, LstmArch)
+play.py                        LSTM entry point: flags -> runner.play(args, LstmArch)
+ppo/train.py                   frame-stacking entry point, plus --n-stack
+ppo/play.py                    frame-stacking entry point
+arch.py                        LstmArch / StackArch: the FOUR things that differ
+runner.py                      the training and evaluation loops, shared
+cli.py                         every flag that is not the architecture, shared
+callbacks.py                   action diagnostics, Q head, dual eval, rollout video, clean eval
 pusht_gym.py                   gym-0.21 PushT -> gymnasium: obs, actions, rewards, occlusion
 corrupt_policy.py              the corrupting features extractor, ST's ResNet, and the Q head
-run_io.py                      run-directory bookkeeping, shared by train.py and play.py
+config.py                      every default, in one place
+run_io.py                      run-directory bookkeeping
 scripts/plot_start_states.py   where episodes start, and how far one action moves the agent
 scripts/render_noise_levels.py what each corruption level actually destroys, decoded to images
 ```
 
-`pusht_gym.py` and `corrupt_policy.py` are each imported by both entry points, which is the
-whole reason they are not inside one of them: play.py must rebuild bit-for-bit the environment
-and policy that train.py built, and a wrapper that drifted between the two would silently change
-what an evaluation measures. `run_io.py` is there for the same reason -- it holds the four things
-both scripts need to agree on (what `params/args.yaml` contains, how a checkpoint is found, where
-the VecNormalize pickle sits, which arguments a resume may not change) and nothing else. The
-callbacks, by contrast, have exactly one caller, so they live in train.py.
+The split is driven by one thing: **the two architectures exist to be compared.** Anything
+duplicated between them -- the reward, the curricula, the evaluation protocol, the seed offsets,
+the run bookkeeping -- is a place where the comparison can quietly stop being like-for-like, so
+none of it is duplicated. The entry points are ~20 lines each and differ only in which `arch`
+object they pass. `arch.py` lists exactly what an architecture gets to decide: how the vec env is
+wrapped, how the agent is built, how it is loaded, and how many frames the video rollout has to
+stack by hand.
+
+The same argument is why `pusht_gym.py`, `corrupt_policy.py` and `run_io.py` were already
+separate: play.py must rebuild bit-for-bit the environment and policy that train.py built, and a
+wrapper that drifted between the two would silently change what an evaluation measures.
+
+### What frame stacking can and cannot do here
+
+It reconstructs state hidden from a single observation -- velocity, in the report sb3-contrib
+cites. **Our observation is currently missing none.** Corruption is off by default, occlusion is
+off by default, and PushT sets `space.damping = 0`, so the block carries no momentum between
+steps. On the clean arm the LSTM, `--n-stack 4` and `--n-stack 1` are all looking at a Markov
+observation, and any difference between them is an optimisation effect rather than a
+representational one. `--n-stack 1` is therefore the honest plain-PPO baseline, and the
+architecture comparison only becomes meaningful once `--keypoint-visible-rate` or
+`--corrupt-obs` is on.
 
 ## Running
 
@@ -37,13 +62,20 @@ python recurrent_ppo/train.py --obs keypoint --corrupt-obs
 # occlusion, an axis independent of the DDPM corruption
 python recurrent_ppo/train.py --obs keypoint --keypoint-visible-rate 0.5
 
+# the frame-stacking arm -- same flags, plus --n-stack
+python recurrent_ppo/ppo/train.py --obs keypoint --n-stack 4
+python recurrent_ppo/ppo/train.py --obs keypoint --n-stack 1     # plain PPO, no stacking
+
 # evaluate the newest run of an arm; --arm picks the DIRECTORY, it does not corrupt anything
 python recurrent_ppo/play.py --n-episodes 50
 python recurrent_ppo/play.py --arm corrupt --corrupt-obs-eval
 python recurrent_ppo/play.py --checkpoint logs/.../model.zip --video --render-size 512
+python recurrent_ppo/ppo/play.py --checkpoint logs/ppo/.../model.zip
 ```
 
-Runs land in `logs/recurrent_ppo/<obs>_<clean|corrupt>/<timestamp>/`. The noise regime is part
+Runs land in `logs/recurrent_ppo/<obs>_<clean|corrupt>/<timestamp>/` for the LSTM arm and
+`logs/ppo/...` for the frame-stacking arm -- the architecture is part of a run's identity, like
+the noise regime, so the two cannot collide. The noise regime is part
 of the directory name because it is part of the run's identity, not a knob: two regimes sharing
 a directory would overwrite each other's checkpoints. `--checkpoint` resumes **in the
 checkpoint's own directory**, continuing its step counter, and refuses any flag that would
@@ -170,7 +202,7 @@ bypass `ActorCriticPolicy.extract_features`. Overriding that one method would co
 gradient and the rollout while leaving the value bootstrap and the play rollout clean. So the
 features extractor itself is wrapped, which covers every path without copying SB3 internals.
 
-**8. Action-clipping diagnostics** (`ActionDiagnostics` in train.py). PPO stores the *unclipped* Gaussian samples
+**8. Action-clipping diagnostics** (`ActionDiagnostics` in callbacks.py). PPO stores the *unclipped* Gaussian samples
 in the rollout buffer and clips only on the way into the env, so the buffer is the one place the
 raw exploration distribution is visible. `rollout/action_clip_frac`, `action_corner_frac` and
 `action_abs_mean` are logged from it every rollout.

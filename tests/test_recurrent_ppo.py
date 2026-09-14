@@ -181,3 +181,78 @@ def test_q_head_cannot_move_the_policy():
     policy_params = {id(p) for group in policy.optimizer.param_groups for p in group["params"]}
     assert q_params and not (q_params & policy_params)
     assert hasattr(policy, "q_optimizer")
+
+
+# ------------------------------------------------------------------ the frame-stacking arm
+
+def test_feedforward_q_head_cannot_move_the_policy():
+    """The same separate-optimizer guarantee, for the non-recurrent policy."""
+    policy = policy_for("keypoint", recurrent=False)(
+        gym.spaces.Box(-1, 1, (160,)), gym.spaces.Box(-1, 1, (2,)), lambda _: 3e-4,
+        **features_extractor_kwargs("keypoint", corrupt_obs=True, t_max=200))
+    q_params = {id(p) for p in policy.q_net.parameters()}
+    policy_params = {id(p) for group in policy.optimizer.param_groups for p in group["params"]}
+    assert q_params and not (q_params & policy_params)
+    assert hasattr(policy, "q_optimizer")
+
+
+@pytest.mark.parametrize("space", [
+    gym.spaces.Box(-1, 1, (40,), dtype=np.float32),                       # the keypoint obs
+    gym.spaces.Box(0, 255, (3, 8, 8), dtype=np.uint8),                    # a channels-first image
+    gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 8, 8), dtype=np.uint8),
+                     "agent_pos": gym.spaces.Box(-1, 1, (2,), dtype=np.float32)}),
+])
+def test_frame_stacker_matches_vec_frame_stack(space):
+    """The video rollout stacks by hand, because its env is not a VecEnv.
+
+    Both the AXIS and the order are invisible when wrong -- it simply feeds the policy a
+    differently-arranged input than it trained on -- so this pins them against SB3's own
+    StackedObservations, which is also what FrameStacker delegates to. The test is therefore
+    about the num_envs=1 adapter around it: the batch axis, and the dict handling.
+    """
+    from stable_baselines3.common.vec_env.stacked_observations import StackedObservations
+
+    from recurrent_ppo.callbacks import FrameStacker
+
+    n_stack = 4
+    reference = StackedObservations(1, n_stack, space)
+    ours = FrameStacker(n_stack, space)
+    frames = [space.sample() for _ in range(6)]
+
+    def batch(obs):
+        return {k: v[None] for k, v in obs.items()} if isinstance(obs, dict) else obs[None]
+
+    def same(theirs, mine):
+        if isinstance(mine, dict):
+            return all(np.array_equal(theirs[k][0], mine[k]) for k in mine)
+        return np.array_equal(theirs[0], mine)
+
+    assert same(reference.reset(batch(frames[0])), ours.reset(frames[0]))
+    for frame in frames[1:]:
+        theirs, _ = reference.update(batch(frame), np.zeros(1, dtype=bool), [{}])
+        mine = ours.update(frame)
+        assert same(theirs, mine), "stacked observations diverged"
+
+    # the newest frame is LAST, which is the half of the convention a symmetric test would miss
+    flat = mine["agent_pos"] if isinstance(mine, dict) else mine
+    newest = frames[-1]["agent_pos"] if isinstance(mine, dict) else frames[-1]
+    axis = 0 if getattr(reference, "channels_first", False) else -1
+    if not isinstance(mine, dict):
+        assert np.array_equal(np.take(flat, range(-newest.shape[axis], 0), axis=axis), newest)
+    else:
+        assert np.array_equal(flat[-newest.shape[0]:], newest)
+
+
+@pytest.mark.parametrize("n_stack,expected", [(1, 40), (4, 160)])
+def test_stack_arch_widens_the_observation(n_stack, expected):
+    """What the policy is actually handed, through the same wrap() training and play both use."""
+    from recurrent_ppo.arch import StackArch
+    from recurrent_ppo.pusht_gym import build_vec_env
+
+    venv = build_vec_env(obs_type="keypoint", n_envs=1, seed=0, use_subproc=False,
+                         max_episode_steps=10)
+    try:
+        wrapped = StackArch().wrap(venv, {"n_stack": n_stack})
+        assert wrapped.observation_space.shape == (expected,)
+    finally:
+        venv.close()

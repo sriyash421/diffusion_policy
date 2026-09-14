@@ -34,7 +34,10 @@ from sb3_contrib.common.recurrent.policies import (
     RecurrentActorCriticPolicy,
     RecurrentMultiInputActorCriticPolicy,
 )
-from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.common.policies import (
+    ActorCriticPolicy,
+    MultiInputActorCriticPolicy,
+)
 from stable_baselines3.common.preprocessing import get_action_dim
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor
 
@@ -123,11 +126,14 @@ class CorruptingExtractor(BaseFeaturesExtractor):
 
 
 class _QHeadMixin:
-    """Q(history, a), trained alongside PPO but never inside its objective.
+    """Q(s, a), trained alongside PPO but never inside its objective.
 
     Built AFTER `super().__init__()`, which is what keeps `q_net` out of `self.optimizer`: the
     policy optimizer was already constructed over the parameters that existed then. The Q head
     carries its own, so it provably cannot move the policy. See tests.
+
+    Two subclasses supply the critic latent, because that is the only thing the architectures
+    disagree about: under the LSTM it is Q(history, a), under frame stacking Q(stack, a).
     """
 
     def _build_q_head(self, q_net_arch=(128, 128), q_lr=1e-3):
@@ -139,35 +145,75 @@ class _QHeadMixin:
         self.q_net = nn.Sequential(*layers, nn.Linear(last, 1))
         self.q_optimizer = th.optim.Adam(self.q_net.parameters(), lr=q_lr)
 
-    def q_values(self, obs, actions, lstm_states, episode_starts):
+    def q_values(self, obs, actions, **latent_kwargs):
         """Mirrors predict_values, then conditions on the action. Upstream is detached."""
         with th.no_grad():
-            features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
-            if self.lstm_critic is not None:
-                latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_critic)
-            elif self.shared_lstm:
-                latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
-            else:
-                latent = self.critic(features)
-            latent = self.mlp_extractor.forward_critic(latent)
+            latent = self._q_latent(obs, **latent_kwargs)
         return self.q_net(th.cat([latent, actions], dim=-1)).flatten()
 
+    def q_batch(self, data):
+        """(prediction, target) for one rollout-buffer batch, so the callback needs no `if`."""
+        raise NotImplementedError
 
-class QHeadRecurrentPolicy(_QHeadMixin, RecurrentActorCriticPolicy):
+
+class _RecurrentQHeadMixin(_QHeadMixin):
+    def _q_latent(self, obs, lstm_states, episode_starts):
+        features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
+        if self.lstm_critic is not None:
+            latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_critic)
+        elif self.shared_lstm:
+            latent, _ = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
+        else:
+            latent = self.critic(features)
+        return self.mlp_extractor.forward_critic(latent)
+
+    def q_batch(self, data):
+        # the recurrent buffer pads sequences to a common length; `mask` is which entries are real
+        mask = data.mask > 1e-8
+        q = self.q_values(data.observations, data.actions,
+                          lstm_states=data.lstm_states.vf, episode_starts=data.episode_starts)
+        return q[mask], data.returns[mask]
+
+
+class _FeedForwardQHeadMixin(_QHeadMixin):
+    def _q_latent(self, obs):
+        features = super(ActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
+        return self.mlp_extractor.forward_critic(features)
+
+    def q_batch(self, data):
+        # no padding without sequences, so every entry is real and there is no mask
+        return self.q_values(data.observations, data.actions), data.returns
+
+
+class QHeadRecurrentPolicy(_RecurrentQHeadMixin, RecurrentActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
         super().__init__(*args, **kwargs)
         self._build_q_head(q_net_arch, q_lr)
 
 
-class QHeadRecurrentMultiInputPolicy(_QHeadMixin, RecurrentMultiInputActorCriticPolicy):
+class QHeadRecurrentMultiInputPolicy(_RecurrentQHeadMixin, RecurrentMultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
         super().__init__(*args, **kwargs)
         self._build_q_head(q_net_arch, q_lr)
 
 
-def policy_for(obs_type):
+class QHeadPolicy(_FeedForwardQHeadMixin, ActorCriticPolicy):
+    def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._build_q_head(q_net_arch, q_lr)
+
+
+class QHeadMultiInputPolicy(_FeedForwardQHeadMixin, MultiInputActorCriticPolicy):
+    def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._build_q_head(q_net_arch, q_lr)
+
+
+def policy_for(obs_type, recurrent=True):
     """The policy class matching an observation type from pusht_gym.OBS_TYPES."""
-    return QHeadRecurrentPolicy if obs_type == "keypoint" else QHeadRecurrentMultiInputPolicy
+    if recurrent:
+        return QHeadRecurrentPolicy if obs_type == "keypoint" else QHeadRecurrentMultiInputPolicy
+    return QHeadPolicy if obs_type == "keypoint" else QHeadMultiInputPolicy
 
 
 def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):
