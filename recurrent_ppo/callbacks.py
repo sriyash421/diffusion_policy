@@ -165,8 +165,8 @@ class RolloutVideo(BaseCallback):
         super().__init__()
         self.env_kwargs = dict(env_kwargs, agent_near_block_prob=0.0, block_near_goal_prob=0.0,
                                render_mode="rgb_array")
-        if obs_type == "keypoint":
-            # the keypoint observation does not depend on render_size, so the video can be legible
+        if obs_type != "image":
+            # a lowdim observation does not depend on render_size, so the video can be legible
             self.env_kwargs["render_size"] = 512
         self.obs_type, self.freq, self.length, self.seed = obs_type, freq, length, seed
         self.episodes, self.stride = episodes, max(1, stride)

@@ -210,10 +210,13 @@ class QHeadMultiInputPolicy(_FeedForwardQHeadMixin, MultiInputActorCriticPolicy)
 
 
 def policy_for(obs_type, recurrent=True):
-    """The policy class matching an observation type from pusht_gym.OBS_TYPES."""
+    """The policy class matching an observation type from pusht_gym.OBS_TYPES.
+
+    Only the image arm is a Dict space; `keypoint` and `state` are both a flat Box.
+    """
     if recurrent:
-        return QHeadRecurrentPolicy if obs_type == "keypoint" else QHeadRecurrentMultiInputPolicy
-    return QHeadPolicy if obs_type == "keypoint" else QHeadMultiInputPolicy
+        return QHeadRecurrentMultiInputPolicy if obs_type == "image" else QHeadRecurrentPolicy
+    return QHeadMultiInputPolicy if obs_type == "image" else QHeadPolicy
 
 
 def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):

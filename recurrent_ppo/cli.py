@@ -17,7 +17,7 @@ from recurrent_ppo.config import DEFAULTS as D
 def add_common_args(parser):
     """Everything that is not the architecture."""
     # environment
-    parser.add_argument("--obs", type=str, default=D["obs"], choices=["keypoint", "image"], help="Observation type.")
+    parser.add_argument("--obs", type=str, default=D["obs"], choices=["keypoint", "state", "image"], help="Observation type.")
     parser.add_argument("--num-envs", type=int, default=D["num_envs"], help="Number of parallel environments.")
     parser.add_argument("--max-episode-steps", type=int, default=D["max_episode_steps"], help="Episode truncation length.")
     parser.add_argument("--render-size", type=int, default=D["render_size"], help="Render size; also the image obs resolution.")
@@ -178,7 +178,7 @@ def add_play_args(parser):
     parser.add_argument("--arm", type=str, default="clean", choices=["clean", "corrupt"],
                         help="Which arm's logs to search when no --checkpoint is given. This selects a DIRECTORY; "
                              "it does not corrupt anything -- see --corrupt-obs-eval.")
-    parser.add_argument("--obs", type=str, default=None, choices=["keypoint", "image"],
+    parser.add_argument("--obs", type=str, default=None, choices=["keypoint", "state", "image"],
                         help="Observation type. Default: whatever the checkpoint's run recorded.")
     parser.add_argument("--use-last-checkpoint", action="store_true", default=False,
                         help="When no checkpoint is given, use the last periodic save rather than the final model.")

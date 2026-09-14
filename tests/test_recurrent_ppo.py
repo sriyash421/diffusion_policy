@@ -69,7 +69,7 @@ def test_solving_earlier_scores_higher_under_dense():
     assert returns[0] > returns[1]
 
 
-@pytest.mark.parametrize("obs_type", ["keypoint", "image"])
+@pytest.mark.parametrize("obs_type", ["keypoint", "state", "image"])
 def test_observations_stay_in_the_declared_box(obs_type):
     env = PushTGymEnv(obs_type=obs_type, max_episode_steps=40)
     env.reset(seed=0)
@@ -77,7 +77,7 @@ def test_observations_stay_in_the_declared_box(obs_type):
         obs, _ = env.reset()
         for _ in range(40):
             obs, _, term, trunc, _ = env.step(env.action_space.sample())
-            vec = obs if obs_type == "keypoint" else obs["agent_pos"]
+            vec = obs["agent_pos"] if obs_type == "image" else obs
             assert vec.min() >= -1.0 and vec.max() <= 1.0
             if term or trunc:
                 break
@@ -256,3 +256,37 @@ def test_stack_arch_widens_the_observation(n_stack, expected):
         assert wrapped.observation_space.shape == (expected,)
     finally:
         venv.close()
+
+
+# ------------------------------------------------------------------ the state arm
+
+def test_state_obs_is_six_dimensional_and_matches_pushtenv():
+    """The state arm is PushTEnv's own observation, with only the angle re-encoded."""
+    env = PushTGymEnv(obs_type="state", max_episode_steps=20)
+    obs, _ = env.reset(seed=0)
+    raw = env.env._get_obs()
+    assert env.observation_space.shape == (6,)
+    assert np.allclose(obs[:4], np.asarray(raw[:4]) / (WS / 2) - 1.0, atol=1e-5)
+    assert np.allclose(obs[4:], [np.cos(raw[4]), np.sin(raw[4])], atol=1e-6)
+
+
+def test_state_angle_has_no_discontinuity_at_the_wrap():
+    """Why the angle is (cos, sin) and not a scalar.
+
+    `block.angle % 2*pi` means 0.01 and 6.27 rad are the SAME pose. Under a scalar encoding they
+    land at opposite ends of [-1, 1] -- the furthest apart two values can be -- and the policy
+    has to learn that the coordinate wraps from the handful of episodes where the block rotates
+    through zero.
+    """
+    env = PushTGymEnv(obs_type="state", max_episode_steps=20)
+    env.reset(seed=0)
+
+    def angle_obs(theta):
+        env.env.reset_to_state = np.array([256.0, 200.0, 256.0, 256.0, theta])
+        env.env.reset()
+        return env._convert_obs(env.env._get_obs())[4:]
+
+    near_zero, near_two_pi = angle_obs(0.01), angle_obs(2 * np.pi - 0.01)
+    assert np.linalg.norm(near_zero - near_two_pi) < 0.05
+    # and it is not degenerate: half a turn away is far
+    assert np.linalg.norm(near_zero - angle_obs(np.pi)) > 1.9

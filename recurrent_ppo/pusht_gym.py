@@ -5,11 +5,14 @@ takes no seed, `render(mode)` with no default, and no time limit. SB3 2.x speaks
 Everything that gap costs lives here and nowhere else, so train.py and play.py build the
 same env through `make_env` and cannot drift apart.
 
-Two observation variants, matching the ST arms:
+Three observation variants:
 
     keypoint  9 block T keypoints plus the agent xy (the 20-d lowdim obs of
               config/task/pusht_lowdim.yaml), followed by the 20-d visibility mask that
               says which of those entries `keypoint_visible_rate` occluded. 40 numbers.
+    state     PushTEnv's own observation -- agent xy, block xy, block angle -- with the
+              angle as (cos, sin) rather than a scalar. 6 numbers. The smallest sufficient
+              description of the task; see _convert_obs for why the angle is split.
     image     PushTImageEnv's {image (3, 96, 96), agent_pos (2)}.
 
 EVERYTHING THE POLICY SEES IS IN [-1, 1]. Positions are scaled against the arena's known
@@ -25,7 +28,7 @@ from gymnasium import spaces
 
 from shapely.geometry import Point
 
-from diffusion_policy.env.pusht.pusht_env import pymunk_to_shapely
+from diffusion_policy.env.pusht.pusht_env import PushTEnv, pymunk_to_shapely
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 
@@ -114,6 +117,11 @@ class PushTGymEnv(gymnasium.Env):
                 float(keypoint_visible_rate), float(occlusion_persistence))
             self._visible = np.ones(self._n_kps, dtype=bool)
             self.observation_space = spaces.Box(-1.0, 1.0, shape=(2 * self._half,), dtype=np.float32)
+        elif obs_type == "state":
+            # PushTEnv itself, the base class of the other two -- no keypoints, no rendering in
+            # the observation path. Its `_get_obs` is the 5-d state; we re-encode the angle.
+            self.env = PushTEnv(legacy=legacy, render_size=render_size, render_action=False)
+            self.observation_space = spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
         else:
             self.env = PushTImageEnv(legacy=legacy, render_size=render_size)
             self.observation_space = spaces.Dict({
@@ -344,6 +352,15 @@ class PushTGymEnv(gymnasium.Env):
             mask = np.ones(self._half, dtype=np.float32)
             mask[: 2 * self._n_kps] = self._step_occlusion()
             return np.concatenate([norm * mask, 2.0 * mask - 1.0])
+        if self.obs_type == "state":
+            # The angle arrives as `block.angle % 2*pi`, so a scalar encoding has a break at the
+            # wrap: 0.01 and 6.27 rad are the SAME pose but land at opposite ends of [-1, 1], the
+            # furthest apart two values can be. (cos, sin) is continuous everywhere, at the cost
+            # of one dimension. The keypoint arm never had this problem because 9 points encode
+            # rotation continuously by construction.
+            angle = float(obs[4])
+            return np.concatenate([self._normalise(obs[:4]),
+                                   np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)])
         return {
             # PushTImageEnv hands back float32 in [0, 1]; SB3 normalises uint8 itself and the
             # rollout buffer is 4x smaller for it.

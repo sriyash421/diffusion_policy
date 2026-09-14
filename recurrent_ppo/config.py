@@ -44,7 +44,7 @@ AGENT_BOUNDS = (WALL_INNER + AGENT_RADIUS, WS - WALL_INNER - AGENT_RADIUS)     #
 SPAWN_TRIES = 20                 # redraws when the block's arms would spawn through a wall
 NEAR_TRIES = 40                  # redraws for an agent start at the requested gap
 
-OBS_TYPES = ("keypoint", "image")
+OBS_TYPES = ("keypoint", "state", "image")
 ACTION_MODES = ("delta", "absolute")
 REWARD_MODES = ("dense", "sparse", "shaped", "delta")
 OCCLUSION_MODES = ("iid", "persistent")

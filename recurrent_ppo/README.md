@@ -1,7 +1,7 @@
 # PPO on PushT, with and without recurrence
 
-A policy, a value function and a Q head trained on PushT, in two observation arms and two noise
-regimes, under **two architectures**: an LSTM (`sb3_contrib.RecurrentPPO`) and frame stacking
+A policy, a value function and a Q head trained on PushT, in three observation arms and two
+noise regimes, under **two architectures**: an LSTM (`sb3_contrib.RecurrentPPO`) and frame stacking
 (`stable_baselines3.PPO` + `VecFrameStack`). sb3-contrib's own RecurrentPPO documentation
 recommends trying the second first -- "a simpler, faster and usually competitive alternative" --
 so both are here and they share everything except the architecture.
@@ -54,6 +54,7 @@ in only `gymnasium`, `stable_baselines3` and `farama-notifications`).
 ```bash
 # phase 1 -- clean observations
 python recurrent_ppo/train.py --obs keypoint
+python recurrent_ppo/train.py --obs state                    # 6-d: agent xy, block xy, cos/sin
 python recurrent_ppo/train.py --obs image --lstm-hidden-size 256
 
 # phase 2 -- noised observations
@@ -86,6 +87,25 @@ nothing to retype; a CLI flag still overrides, and says so when it does. `--rend
 image obs resolution as well as the video resolution, so for the `image` arm it must match what
 the checkpoint trained at — the keypoint arm's observation does not depend on it, so raise it
 there for a legible video.
+
+## The three observation arms
+
+| `--obs` | what the policy sees | dim |
+|---|---|---|
+| `keypoint` (default) | 9 block-T keypoints + agent xy, then their visibility mask as {-1,+1} | 40 |
+| `state` | agent xy, block xy, block angle as (cos, sin) | 6 |
+| `image` | `{image (3,96,96) uint8, agent_pos (2)}` | dict |
+
+`state` is `PushTEnv`'s own `_get_obs` with one change: the angle arrives as `block.angle % 2*pi`,
+so a scalar encoding breaks at the wrap -- 0.01 and 6.27 rad are the same pose but land at
+opposite ends of [-1,1], the furthest apart two values can be. (cos, sin) is continuous
+everywhere for one extra dimension. The keypoint arm never had this problem because 9 points
+encode rotation continuously by construction; that is plausibly a large part of why the repo's
+lowdim task uses them.
+
+Occlusion (`--keypoint-visible-rate`, `--occlusion`) applies to the **keypoint arm only** -- it
+is defined per keypoint, and there is no corresponding notion for a 6-d pose. The DDPM
+corruption (`--corrupt-obs`) applies to all three, since it acts on the encoded features.
 
 ## The reward, and why termination is tied to it
 
