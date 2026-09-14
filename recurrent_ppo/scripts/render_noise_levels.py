@@ -10,7 +10,7 @@ The gate, borrowed from scripts/decode_obs_latents.py: a corrupted latent should
 BLURRED, UNCERTAIN T -- still a plausible scene -- not to noise. A level whose decode is noise is
 not a hard observation, it is an absent one.
 
-    python recurrent_ppo/scripts/render_noise_levels.py
+    python -m recurrent_ppo.scripts.render_noise_levels
 
 The forward chain matches SDVAEEncoder exactly (render 96 -> centre-crop 72 -> [0,1]*2-1 ->
 encode -> posterior MEAN -> x0.18215); the decode is its exact inverse.

@@ -32,6 +32,8 @@ IDENTITY_KEYS = (
     "n_lstm_layers",
     "shared_lstm",
     "net_arch",
+    "q_net_arch",
+    "q_lr",
 )
 
 

@@ -7,7 +7,7 @@ Two questions this answers, both of which set defaults in train.py:
   * How big is a useful action? The human's step distribution is what --delta-scale is set
     from, and it is what makes an absolute-position Gaussian look as coarse as it is.
 
-    python recurrent_ppo/plot_start_states.py
+    python -m recurrent_ppo.scripts.plot_start_states
 """
 
 import os

@@ -8,15 +8,17 @@ same env through `make_env` and cannot drift apart.
 Two observation variants, matching the ST arms:
 
     keypoint  9 block T keypoints plus the agent xy (the 20-d lowdim obs of
-              config/task/pusht_lowdim.yaml), followed by the 20-d visibility mask that
-              says which of those entries `keypoint_visible_rate` occluded. 40 numbers.
+              diffusion_policy/config/task/pusht_lowdim.yaml), followed by the 20-d
+              visibility mask saying which of those `keypoint_visible_rate` occluded.
+              40 numbers.
     image     PushTImageEnv's {image (3, 96, 96), agent_pos (2)}.
 
 EVERYTHING THE POLICY SEES IS IN [-1, 1]. Positions are scaled against the arena's known
 bounds, the visibility mask is mapped to {-1, +1} rather than left at {0, 1}, and the image
-is uint8 [0, 255] for the one reason that SB3's NatureCNN then does the /255 itself. Known
-constants, so no VecNormalize: nothing to estimate and no running statistics to keep in sync
-between training and play.
+is uint8 [0, 255] for the one reason that SB3's `preprocess_obs` then does the /255 itself,
+and the rollout buffer is 4x smaller for it. Known constants, so no VecNormalize on the
+observation: nothing to estimate and no running statistics to keep in sync between
+training and play.
 """
 
 import gymnasium
@@ -47,6 +49,12 @@ DEFAULT_BLOCK_START_RANGE = (60.0, 490.0)
 # ~74% of draws are accepted, so this costs about 1.4 resets, and it covers 201 of the 206
 # demonstrated starts (the other 5 genuinely poke out of the arena).
 SPAWN_TRIES = 20
+# Keys of the per-transition AUGMENTATION DRAW (see AugmentationDraw). Prefixed so they cannot
+# collide with an observation key, and named in one place because the extractor reads them back.
+STATE_KEY = "state"
+AUG_NOISE_KEY = "aug_noise"
+AUG_T_KEY = "aug_t"
+AUG_CROP_KEY = "aug_crop"
 
 
 class PushTGymEnv(gymnasium.Env):
@@ -293,19 +301,75 @@ def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
         return DEFAULT_DELTA_SCALE
 
 
-def make_env(obs_type="keypoint", seed=0, rank=0, monitor_path=None, **env_kwargs):
-    """Thunk for a single seeded, Monitor-wrapped env. Pass it to Dummy/SubprocVecEnv."""
+class AugmentationDraw(gymnasium.ObservationWrapper):
+    """Carry the per-transition corruption noise and crop offset IN the observation.
+
+    These are learner-side draws, not environment state, and it is worth saying plainly why
+    they are emitted here anyway: PPO re-encodes every stored transition once per epoch, and
+    SB3's only per-transition channel into a features extractor is the observation it was
+    stored with. A draw made inside the extractor is therefore a DIFFERENT draw on every
+    epoch, so `ratio = exp(log_prob - old_log_prob)` compares pi(a | draw 2) against
+    pi_old(a | draw 1) and stops being a policy ratio at all. Drawing here puts the draw in
+    the rollout buffer, where all `--n-epochs` passes read back the same numbers and
+    reproduce the same noise and the same crop.
+
+    The draw is attached to the observation the action was chosen FROM, which is the
+    transition it belongs to: SB3 stores `self._last_obs` alongside that action.
+
+    `feature_dim` and `crop_span` are learner-side facts (the encoder's output width, and
+    `render_size - crop`), so they are passed in rather than inferred.
+    """
+
+    def __init__(self, env, feature_dim=None, t_max=None, crop_span=None):
+        super().__init__(env)
+        self.feature_dim = feature_dim
+        self.t_max = t_max
+        self.crop_span = crop_span
+        inner = env.observation_space
+        # a Box observation has to be nested under a key to sit beside the draw; a Dict one
+        # already has keys, and the ST image extractor indexes them by name, so it is untouched
+        spaces_map = dict(inner.spaces) if isinstance(inner, spaces.Dict) else {STATE_KEY: inner}
+        if feature_dim is not None:
+            spaces_map[AUG_NOISE_KEY] = spaces.Box(-np.inf, np.inf, shape=(feature_dim,), dtype=np.float32)
+            # float, not int: it is an integer timestep, but a float box keeps every buffer and
+            # normaliser on one dtype path. The extractor casts it back with .long().
+            spaces_map[AUG_T_KEY] = spaces.Box(0.0, float(t_max), shape=(1,), dtype=np.float32)
+        if crop_span is not None:
+            spaces_map[AUG_CROP_KEY] = spaces.Box(0.0, float(crop_span - 1), shape=(2,), dtype=np.float32)
+        self.observation_space = spaces.Dict(spaces_map)
+
+    def observation(self, obs):
+        out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
+        if self.feature_dim is not None:
+            out[AUG_NOISE_KEY] = self.np_random.standard_normal(self.feature_dim).astype(np.float32)
+            out[AUG_T_KEY] = np.array([self.np_random.integers(0, self.t_max)], dtype=np.float32)
+        if self.crop_span is not None:
+            # [0, span), matching CropRandomizer's own sampler exactly -- it scales rand() by
+            # (image - crop) and truncates, so the last offset it can draw is span - 1. A wider
+            # range here would make this a different augmentation than ST's.
+            out[AUG_CROP_KEY] = self.np_random.integers(0, self.crop_span, size=2).astype(np.float32)
+        return out
+
+
+def make_env(obs_type="keypoint", seed=0, rank=0, monitor_path=None, aug=None, **env_kwargs):
+    """Thunk for a single seeded, Monitor-wrapped env. Pass it to Dummy/SubprocVecEnv.
+
+    `aug` is the AugmentationDraw kwargs, or None to leave the observation alone.
+    """
     def _init():
         from stable_baselines3.common.monitor import Monitor
 
         env = PushTGymEnv(obs_type=obs_type, **env_kwargs)
+        if aug:
+            env = AugmentationDraw(env, **aug)
         env.action_space.seed(seed + rank)
         return Monitor(env, filename=monitor_path, info_keywords=("is_success", "max_reward"))
 
     return _init
 
 
-def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, monitor_dir=None, **env_kwargs):
+def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, monitor_dir=None,
+                  aug=None, **env_kwargs):
     """The vectorised env both scripts train and evaluate on."""
     import os
 
@@ -314,7 +378,8 @@ def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, moni
     fns = []
     for rank in range(n_envs):
         monitor_path = None if monitor_dir is None else os.path.join(monitor_dir, f"env_{rank}")
-        fns.append(make_env(obs_type=obs_type, seed=seed, rank=rank, monitor_path=monitor_path, **env_kwargs))
+        fns.append(make_env(obs_type=obs_type, seed=seed, rank=rank, monitor_path=monitor_path,
+                            aug=aug, **env_kwargs))
     # forkserver: pymunk/pygame state does not survive a plain fork cleanly
     venv = SubprocVecEnv(fns, start_method="forkserver") if use_subproc and n_envs > 1 else DummyVecEnv(fns)
     # ONE seeding path for training and play alike. SB3 hands seed + idx to each env at the next
@@ -323,6 +388,24 @@ def build_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True, moni
     # algorithm's set_random_seed.
     venv.seed(seed)
     return venv
+
+
+def env_defaults():
+    """The cfg-key defaults, read off PushTGymEnv's own signature.
+
+    play.py falls back to these for a run that predates a key. Reading them from the
+    constructor rather than restating them is what stops the two from drifting: restated,
+    they had gone stale at `action_mode: "absolute"` and `block_start_range: [100, 400]`,
+    so a run with no args.yaml was silently evaluated in a different MDP than it trained in.
+    """
+    import inspect
+
+    params = inspect.signature(PushTGymEnv.__init__).parameters
+    d = {n: p.default for n, p in params.items() if p.default is not inspect.Parameter.empty}
+    # the two places a cfg key and an env kwarg are spelled differently
+    d["obs"] = d.pop("obs_type")
+    d["reward"] = d.pop("reward_mode")
+    return d
 
 
 def env_kwargs_from(cfg, obs_type):

@@ -23,25 +23,42 @@ callbacks, by contrast, have exactly one caller, so they live in train.py.
 
 ## Running
 
-Everything runs from the repo root in `robodiff2` (`sb3_contrib` was added to it; it brought
-in only `gymnasium`, `stable_baselines3` and `farama-notifications`).
+Everything runs from the repo root in the `robodiff` conda env. `sb3_contrib` was added to it
+with `pip install sb3_contrib==2.7.1`, which brought in only `stable_baselines3==2.7.1`,
+`gymnasium==1.1.1` and `farama-notifications` — nothing already installed was upgraded or
+removed, and gymnasium coexists with the `gym==0.21` the rest of the repo uses.
 
 ```bash
 # phase 1 -- clean observations
-python recurrent_ppo/train.py --obs keypoint
-python recurrent_ppo/train.py --obs image --lstm-hidden-size 256
+python -m recurrent_ppo.train --obs keypoint
+python -m recurrent_ppo.train --obs image --lstm-hidden-size 256
 
 # phase 2 -- noised observations
-python recurrent_ppo/train.py --obs keypoint --corrupt-obs
+python -m recurrent_ppo.train --obs keypoint --corrupt-obs
 
 # occlusion, an axis independent of the DDPM corruption
-python recurrent_ppo/train.py --obs keypoint --keypoint-visible-rate 0.5
+python -m recurrent_ppo.train --obs keypoint --keypoint-visible-rate 0.5
+
+# arm 2's actual answer: the same checkpoint scored clean and corrupted
+python -m recurrent_ppo.train --obs keypoint --corrupt-obs --eval-corrupt
 
 # evaluate the newest run of an arm; --arm picks the DIRECTORY, it does not corrupt anything
-python recurrent_ppo/play.py --n-episodes 50
-python recurrent_ppo/play.py --arm corrupt --corrupt-obs-eval
-python recurrent_ppo/play.py --checkpoint logs/.../model.zip --video --render-size 512
+python -m recurrent_ppo.play --n-episodes 50
+python -m recurrent_ppo.play --arm corrupt --corrupt-obs-eval
+python -m recurrent_ppo.play --checkpoint logs/.../model.zip --video --render-size 512
+
+# arm 1's deliverable: the value and Q heads, de-normalised into real reward units
+python -m recurrent_ppo.play --checkpoint logs/.../model.zip --report-values
 ```
+
+`--eval-freq` defaults to 100k steps, so an `eval/` series exists without asking. `--eval-corrupt`
+adds `eval_corrupt/` alongside it — for the `--corrupt-obs` arm that is the number that says
+whether the POMDP was solved, and the clean series stays beside it so the two are comparable.
+Both re-seed the eval env before every evaluation, from a seed block disjoint from training's:
+SB3 hands seeds over at the next reset and then clears them, so without that each eval point
+draws different episodes and the curve mixes policy improvement with episode luck — and the two
+series would not be scoring the same task. Neither eval nominates a checkpoint: they record, and
+which step to evaluate is passed explicitly.
 
 Runs land in `logs/recurrent_ppo/<obs>_<clean|corrupt>/<timestamp>/`. The noise regime is part
 of the directory name because it is part of the run's identity, not a knob: two regimes sharing
@@ -92,9 +109,11 @@ that env is shared with the diffusion-policy training and must not change behavi
 
 **Everything the policy sees is in `[-1, 1]`.** Positions are scaled against the arena's known
 bounds, the keypoint visibility mask is mapped to `{-1, +1}` rather than left at `{0, 1}`, and
-the image is uint8 `[0, 255]` for the single reason that SB3's `NatureCNN` then does the `/255`
-itself. Bounds-based scaling, not `VecNormalize`: the ranges are constants, so there is nothing
-to estimate and no running statistics to keep in sync between training and play.
+the image is uint8 `[0, 255]` for the single reason that SB3's `preprocess_obs` then does the
+`/255` itself, and the rollout buffer is 4x smaller for it. (The image arm's encoder is
+`STResNetExtractor`, never `NatureCNN`.) Bounds-based scaling, not `VecNormalize`: the ranges
+are constants, so there is nothing to estimate and no running statistics to keep in sync between
+training and play.
 
 **Corruption is scaled and capped.** The noise is multiplied by a running per-dimension feature
 std, so `sqrt(alpha_bar_t)` denotes a fixed SNR instead of riding on the encoder's magnitude —
@@ -127,7 +146,7 @@ whatever move you request with no saturation, so "how far is one action" is a qu
 demonstrations answer. `--delta-percentile` moves the choice; a plain number bypasses it. Under
 `--action-mode absolute` the action is a target anywhere in the arena, so a Gaussian at std 1
 explores with a standard deviation of 256 px — half the table, ~32x the median human step.
-`scripts/plot_start_states.py` draws exactly this comparison.
+`recurrent_ppo/scripts/plot_start_states.py` draws exactly this comparison.
 
 ## What SB3 does not provide
 
@@ -157,11 +176,20 @@ adapter zeroes the occluded entries and keeps the mask, giving a 40-d observatio
 **5. Delta actions.** The action space is an absolute PD-controller target in `[0, 512]`; the
 useful target is a waypoint near the agent. See the conventions above.
 
-**6. Episode metrics.** SB3 logs return and length. `is_success` (task solved) and `max_reward`
+**6. The value and Q readout** (`play.py --report-values`). Both heads are fitted to
+`VecNormalize`-scaled returns, so their outputs are in units of `reward / sqrt(ret_rms.var)` and
+mean nothing until that factor is put back — which is how a working critic looks broken. The
+readout de-normalises through the saved `model_vecnormalize.pkl`, prints the factor, and reports
+each head's explained variance against the realised discounted return, over complete episodes
+only. It threads the critic's LSTM state by hand: `predict` returns only the actor's, so one
+`policy.forward` drives the action, `V` and `Q` together. `Q` is asked about the **clipped**
+action, the one the env actually executed.
+
+**7. Episode metrics.** SB3 logs return and length. `is_success` (task solved) and `max_reward`
 (the repo's episode score: max normalised coverage, as in `pusht_image_runner`) are added to
 `info` so `rollout/success_rate` is logged and play.py can report the score.
 
-**7. The observation corruption** (`corrupt_policy.py`). The noise itself is the repo's —
+**8. The observation corruption** (`corrupt_policy.py`). The noise itself is the repo's —
 `ObsCorruptionMixin.corrupt_obs_features`, the flat `corrupt_obs` arm, under the same DDPM
 scheduler as `config/train_pusht_diffusion_search.yaml:339`, so a level here means what it means
 in ST. What is new is *where* it is injected. It has to act on the encoded vector, and SB3 reads
@@ -170,30 +198,65 @@ bypass `ActorCriticPolicy.extract_features`. Overriding that one method would co
 gradient and the rollout while leaving the value bootstrap and the play rollout clean. So the
 features extractor itself is wrapped, which covers every path without copying SB3 internals.
 
-**8. Action-clipping diagnostics** (`ActionDiagnostics` in train.py). PPO stores the *unclipped* Gaussian samples
+**9. Action-clipping diagnostics** (`ActionDiagnostics` in train.py). PPO stores the *unclipped* Gaussian samples
 in the rollout buffer and clips only on the way into the env, so the buffer is the one place the
 raw exploration distribution is visible. `rollout/action_clip_frac`, `action_corner_frac` and
 `action_abs_mean` are logged from it every rollout.
 
-**9. A stateful rollout** (`play.py`). `predict` needs the previous hidden state and an
+**10. A stateful rollout** (`play.py`). `predict` needs the previous hidden state and an
 episode_start mask threaded by hand, and because a vec env auto-resets, `dones` from step t is
 the mask for step t+1. Omitting it runs a memoryless policy that still looks like it works.
 Episodes are also counted on a **per-env budget**: stopping at the first N episodes across all
 envs over-samples the short ones, and success is exactly what ends an episode early, so a global
 count reports a success rate biased upward.
 
+## The draw rides in the observation, and why
+
+SB3 flips `policy.training` between rollout collection (`False`) and the update epochs (`True`),
+and PPO re-encodes every stored transition once per `--n-epochs`. Anything random inside the
+features extractor is therefore **a different draw on every epoch**, so
+`ratio = exp(log_prob - old_log_prob)` compares `pi(a | draw 2)` against `pi_old(a | draw 1)` and
+stops being a ratio of policies at all. Two things were doing this:
+
+* the DDPM corruption noise, and
+* the image arm's `CropRandomizer`, which switches on `self.training` — so the **clean** image
+  arm was biased too, not only the corrupted one.
+
+`AugmentationDraw` (in `pusht_gym.py`) fixes both by drawing the noise vector, its timestep and
+the crop offset **once per environment step** and carrying them in the observation. The
+observation is the only per-transition channel SB3 has into a features extractor, so that is what
+puts the draw in the rollout buffer, where every epoch reads back the same numbers.
+`CorruptingExtractor` then reads the noise instead of drawing it, and `STResNetExtractor` pins the
+stored offset through `CropRandomizer._forced_offsets` — that randomizer's own extension point,
+already used this way by `multi_image_obs_encoder`. No SB3 internals are copied and no buffer is
+subclassed. `test_evaluate_actions_reproduces_the_collected_log_prob` asserts the ratio is exactly
+1 on the first epoch, for the corrupted keypoint arm and for both image arms.
+
+One consequence: the corrupted keypoint arm's observation is a `Dict` rather than a `Box`, so it
+uses the MultiInput policy. `policy_for` dispatches on it.
+
+**The feature-std EMA is frozen for the update.** The noise is scaled by a running per-dimension
+std, and that std must track the encoder's drift across rollouts while holding still *within* one
+update — a std that moved between epochs would re-scale an already-stored transition's noise and
+undo the replay. `self.training` is exactly backwards for gating this, so `FeatureStdWindow` opens
+the EMA at `on_rollout_start` and closes it at `on_rollout_end`.
+
 ## Two things to hold in mind
 
-* **`corrupt_obs_eval` is pinned True in the policy.** SB3 flips `policy.training` between
-  rollout collection (False) and the update epochs (True), so the mixin's usual train/eval gate
-  would corrupt only the gradient and leave the behaviour policy clean. Whether a given rollout
-  is corrupted is decided by toggling `policy.corrupt_obs` instead — which is what
-  `CleanEvalCallback` and `play.py --corrupt-obs-eval` do.
-* **The noise is redrawn on every forward pass**, so the action sampled during collection and the
-  log-prob recomputed during the epochs sit at different draws, and PPO's importance ratio mixes
-  the two. This is what ST does, but ST is BC and has no ratio to bias; here it is the
-  dropout-in-PPO situation. Making it exact means replaying the per-step draw out of the rollout
-  buffer, i.e. a custom `RecurrentRolloutBuffer` — not a knob.
+* **Corruption is switched with `CorruptingExtractor.enabled`**, not with a policy attribute. The
+  evaluation shares the training policy object, so it cannot be a construction-time choice;
+  `CleanEvalCallback` turns it off around the eval rollout, `CorruptEvalCallback` turns it on, and
+  `play.py --corrupt-obs-eval` does the same for a whole rollout.
+* **The noise level was chosen in a space neither arm encodes.** `t_max = 200` comes from decoding
+  the frozen SD-VAE latent (`scripts/render_noise_levels.py`); what is actually corrupted is the
+  40-d keypoint vector or a 514-d end-to-end ResNet feature. The feature-std scaling makes the SNR
+  invariant to feature *magnitude* — which is all
+  `test_scaling_makes_the_snr_independent_of_feature_magnitude` checks — and magnitude invariance
+  is not semantic invariance. Re-deriving the level in the space actually corrupted is open.
+  Related: on the keypoint arm the corruption lands on the `{-1, +1}` visibility mask too, and
+  only because that mask's batch std is ~0 at full visibility does it escape untouched — below
+  `--keypoint-visible-rate 1.0` the flag that says what is hidden is noised as hard as the
+  positions are.
 
 ## Not built
 

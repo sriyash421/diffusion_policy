@@ -67,5 +67,10 @@ dependencies:
     - transformers==4.29.2
     # pip package required for jpeg-xl
     - imagecodecs==2022.9.26
+    # recurrent_ppo/ only. Additive: it upgrades nothing already listed here, and its gymnasium
+    # coexists with the gym 0.21 the rest of the repo is written against (different package).
+    - sb3_contrib==2.7.1
+    - stable_baselines3==2.7.1
+    - gymnasium==1.1.1
     # - r3m @ https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz
     # - dm-control==1.0.9
