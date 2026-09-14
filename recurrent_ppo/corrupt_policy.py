@@ -55,10 +55,43 @@ ST_CROP = 76
 OBS_DIMS = {"keypoint": 40, "state": 6}        # crop_shape in diffusion_policy/config/pusht_base.yaml
 
 
+def snr_to_timestep(snr):
+    """The DDPM step whose signal-to-noise ratio is closest to `snr`.
+
+    alpha_bar_t / (1 - alpha_bar_t) IS the SNR in feature space, because the noise is scaled by
+    the running feature std -- that is what the scaling buys, and what makes a level mean the
+    same thing to a 40-d keypoint vector and a 514-d ResNet feature.
+    """
+    ab = make_obs_noise_scheduler().alphas_cumprod.numpy()
+    return int(np.argmin(np.abs(ab / (1.0 - ab) - float(snr))))
+
+
 def make_obs_noise_scheduler():
     """The obs_noise_scheduler of train_pusht_diffusion_search.yaml, verbatim."""
     return DDPMScheduler(num_train_timesteps=1000, beta_start=0.0001, beta_end=0.02,
                          beta_schedule="linear", prediction_type="epsilon")
+
+
+def _widen_conv1(resnet, in_channels):
+    """Let the pretrained stem read a stack of frames, not just one.
+
+    VecFrameStack concatenates frames on the channel axis, so `--n-stack 4` hands the encoder
+    12 channels and resnet18's 3-channel conv1 rejects them. The pretrained filters are worth
+    keeping, so conv1 is rebuilt at the new width and its weights TILED across the stack and
+    divided by the repeat count. That makes the stem's response to a static scene -- every
+    frame identical, which is what the first steps of an episode and any motionless moment
+    look like -- exactly what the 3-channel net would have produced.
+    """
+    old = resnet.conv1
+    reps, remainder = divmod(in_channels, old.in_channels)
+    assert remainder == 0, f"{in_channels} channels is not a whole number of {old.in_channels}-channel frames"
+    conv = nn.Conv2d(in_channels, old.out_channels, kernel_size=old.kernel_size,
+                     stride=old.stride, padding=old.padding, bias=old.bias is not None)
+    with th.no_grad():
+        conv.weight.copy_(old.weight.repeat(1, reps, 1, 1) / reps)
+        if old.bias is not None:
+            conv.bias.copy_(old.bias)
+    resnet.conv1 = conv
 
 
 class STResNetExtractor(BaseFeaturesExtractor):
@@ -83,6 +116,8 @@ class STResNetExtractor(BaseFeaturesExtractor):
                 root_module=resnet,
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features))
+        if image_space.shape[0] != 3:
+            _widen_conv1(resnet, image_space.shape[0])
         self.resnet = resnet
         # CropRandomizer already switches on self.training itself (random crop in train, centre
         # crop in eval), so there is no ternary here; what we override is WHICH random crop.
@@ -303,7 +338,7 @@ def features_extractor_kwargs(obs_type, corrupt_obs, t_max=DEFAULT_T_MAX):
 
 
 def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T_MAX,
-            n_stack=1):
+            n_stack=1, snr=None):
     """The AugmentationDraw kwargs an arm needs, or None if it needs no draw.
 
     The crop draw is needed by the image arm whether or not it is corrupted -- a redrawn crop
@@ -311,10 +346,17 @@ def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T
     """
     aug = {}
     if corrupt_obs:
-        # the draw is applied AFTER frame stacking, so it covers the whole stacked vector
-        base = (512 + 2) if obs_type == "image" else OBS_DIMS[obs_type]
-        aug["feature_dim"] = base * max(1, n_stack)
-        aug["t_max"] = t_max
+        # The draw is applied AFTER frame stacking, so it has to match the width the extractor
+        # actually produces from a stacked observation -- and the two arms widen differently.
+        # A flat observation is concatenated whole, so its width scales with the stack. The
+        # image arm does NOT: VecFrameStack stacks the frames on the CHANNEL axis, the ResNet
+        # consumes all of them and still emits 512, and only agent_pos is concatenated. Scaling
+        # the image arm by n_stack gave a 2056-wide noise for a 520-wide feature.
+        stack = max(1, n_stack)
+        aug["feature_dim"] = (512 + 2 * stack) if obs_type == "image" else OBS_DIMS[obs_type] * stack
+        # a target SNR pins ONE level; without it the level is drawn from U[0, t_max)
+        t = snr_to_timestep(snr) if snr is not None else None
+        aug["t_min"], aug["t_max"] = (t, t + 1) if t is not None else (0, t_max)
     if obs_type == "image":
         aug["crop_span"] = render_size - crop
     return aug or None

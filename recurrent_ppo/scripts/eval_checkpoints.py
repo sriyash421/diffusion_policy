@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 
 from recurrent_ppo.arch import ARCHS
-from recurrent_ppo.pusht_gym import build_vec_env, env_kwargs_from
+from recurrent_ppo.corrupt_policy import aug_for
+from recurrent_ppo.pusht_gym import VecAugmentationDraw, build_vec_env, env_kwargs_from
 from recurrent_ppo.runner import resolve_config
 
 
@@ -96,6 +97,13 @@ def main():
 
     env = arch.wrap(build_vec_env(obs_type=cfg["obs"], n_envs=args.num_envs, seed=eval_seed,
                                   use_subproc=False, **env_kwargs_from(cfg, cfg["obs"])), cfg)
+    # a corrupted run's policy reads its noise back out of the observation, so this env has to
+    # emit it -- and outside arch.wrap, or VecFrameStack would stack the draw with the frames
+    aug = aug_for(cfg["obs"], cfg.get("corrupt_obs", False), render_size=cfg["render_size"],
+                  t_max=cfg.get("corrupt_t_max", 200), n_stack=arch.video_n_stack(cfg),
+                  snr=cfg.get("corrupt_snr"))
+    if aug:
+        env = VecAugmentationDraw(env, seed=eval_seed, **aug)
     names = checkpoints(run_dir)
     names = [n for i, n in enumerate(names) if not n.startswith("model_") or i % args.every == 0]
     print(f"\n{'checkpoint':26s} {'return':>9s} {'success':>9s} {'coverage':>9s}")

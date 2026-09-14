@@ -516,3 +516,56 @@ def test_the_scheduler_still_matches_the_config_it_copies():
     mine = make_obs_noise_scheduler().config
     for key, value in declared.items():
         assert mine[key] == value, f"{key}: config says {value!r}, make_obs_noise_scheduler {mine[key]!r}"
+
+
+@pytest.mark.parametrize("obs_type,n_stack,expected", [
+    ("state", 1, 6), ("state", 4, 24),
+    ("keypoint", 1, 40), ("keypoint", 4, 160),
+    ("image", 1, 514), ("image", 4, 520),
+])
+def test_the_draw_is_as_wide_as_the_features_it_corrupts(obs_type, n_stack, expected):
+    """The noise vector must match what the extractor produces from a STACKED observation.
+
+    The two arms widen differently and it is easy to get wrong: a flat observation is
+    concatenated whole, so n_stack scales it, but the image arm stacks on the channel axis --
+    the ResNet still emits 512 and only agent_pos grows. Computing the image width as
+    (512 + 2) * n_stack gave a 2056-wide draw for a 520-wide feature, which crashes at the
+    first forward, i.e. only once a run is already on a GPU.
+    """
+    from recurrent_ppo.arch import ARCHS
+    from recurrent_ppo.config import DEFAULTS
+    from recurrent_ppo.pusht_gym import VecAugmentationDraw, build_vec_env, env_kwargs_from
+
+    cfg = dict(DEFAULTS)
+    cfg.update(obs=obs_type, n_stack=n_stack, corrupt_obs=True, delta_scale=33.0)
+    venv = ARCHS["stack"].wrap(build_vec_env(obs_type=obs_type, n_envs=2, seed=0,
+                                             use_subproc=False,
+                                             **env_kwargs_from(cfg, obs_type)), cfg)
+    aug = aug_for(obs_type, True, render_size=cfg["render_size"], n_stack=n_stack, snr=1.92)
+    assert aug["feature_dim"] == expected
+    venv = VecAugmentationDraw(venv, seed=0, **aug)
+    kw = features_extractor_kwargs(obs_type, True)
+    ext = kw["features_extractor_class"](venv.observation_space, **kw["features_extractor_kwargs"])
+    assert ext.features_dim == expected
+    batch = {k: th.as_tensor(np.asarray(v)).float() for k, v in venv.reset().items()}
+    if "image" in batch:
+        batch["image"] = batch["image"] / 255.0
+    assert ext(batch).shape == (2, expected)
+    venv.close()
+
+
+def test_a_target_snr_pins_one_level():
+    """--corrupt-snr addresses a level by what it MEANS, not by an index into the schedule."""
+    from recurrent_ppo.corrupt_policy import snr_to_timestep
+    from recurrent_ppo.pusht_gym import aug_draw
+
+    assert snr_to_timestep(1.92) == 200
+    assert snr_to_timestep(3.67) == 150
+    fixed = aug_for("keypoint", True, snr=1.92)
+    assert (fixed["t_min"], fixed["t_max"]) == (200, 201)
+    rng = np.random.default_rng(0)
+    assert {int(aug_draw(rng, **fixed)[AUG_T_KEY][0]) for _ in range(200)} == {200}
+    # without it, the level is still drawn across the range
+    drawn = aug_for("keypoint", True, t_max=200)
+    assert (drawn["t_min"], drawn["t_max"]) == (0, 200)
+    assert len({int(aug_draw(rng, **drawn)[AUG_T_KEY][0]) for _ in range(200)}) > 1

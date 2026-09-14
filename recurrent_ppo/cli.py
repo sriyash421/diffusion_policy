@@ -99,6 +99,10 @@ def add_common_args(parser):
                              "gate: t=100 is the edge at which the block's orientation stops being readable, so "
                              "the median draw sits on that edge. The old U[0,1000) put 90%% of draws past it.")
     # agent
+    parser.add_argument("--corrupt-snr", type=float, default=D["corrupt_snr"],
+                        help="Corrupt at ONE level, the DDPM step whose feature-space SNR is "
+                             "closest to this, instead of drawing from U[0, --corrupt-t-max). "
+                             "3.67 is t=150.")
     parser.add_argument("--total-timesteps", type=int, default=D["total_timesteps"], help="Total environment steps to train for.")
     parser.add_argument("--n-steps", type=int, default=D["n_steps"], help="Rollout length per environment.")
     parser.add_argument("--batch-size", type=int, default=D["batch_size"], help="Minibatch size.")

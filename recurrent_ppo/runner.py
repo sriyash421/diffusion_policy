@@ -105,7 +105,8 @@ def train(args_cli, arch):
     env_kwargs = env_kwargs_from(cfg, args_cli.obs)
     # the per-transition corruption/crop draw rides in the observation; see AugmentationDraw
     aug = aug_for(args_cli.obs, args_cli.corrupt_obs, render_size=args_cli.render_size,
-                  t_max=args_cli.corrupt_t_max, n_stack=arch.video_n_stack(cfg))
+                  t_max=args_cli.corrupt_t_max, n_stack=arch.video_n_stack(cfg),
+                  snr=args_cli.corrupt_snr)
 
     def with_draw(venv, seed):
         """The draw goes OUTSIDE arch.wrap: inside, VecFrameStack would stack it."""
@@ -248,7 +249,8 @@ def train(args_cli, arch):
 
 # how the env was shaped. A key is overridable only if the entry point exposes a flag for it;
 # getattr's default keeps the two from having to be kept in step by hand.
-RESOLVE_KEYS = ("obs", "max_episode_steps", "render_size", "keypoint_visible_rate",
+RESOLVE_KEYS = ("obs", "corrupt_obs", "corrupt_snr", "corrupt_t_max",
+                "max_episode_steps", "render_size", "keypoint_visible_rate",
                 "occlusion", "occlusion_persistence", "reward", "shaping_coef",
                 "shaping_potential", "progress_coef", "success_bonus", "block_zero_coverage",
                 "action_mode", "delta_scale", "agent_start_range", "block_start_range",
@@ -296,7 +298,8 @@ def play(args_cli, arch):
     # or the policy is handed an observation missing the keys its extractor reads back
     saved = load_args(log_dir) or {}
     aug = aug_for(cfg["obs"], saved.get("corrupt_obs", False), render_size=cfg["render_size"],
-                  t_max=saved.get("corrupt_t_max", 200), n_stack=arch.video_n_stack(cfg))
+                  t_max=saved.get("corrupt_t_max", 200), n_stack=arch.video_n_stack(cfg),
+                  snr=saved.get("corrupt_snr"))
 
     # video frames come off one env in this process, so it forces a single in-process env
     num_envs = args_cli.num_envs

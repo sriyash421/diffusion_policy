@@ -438,7 +438,7 @@ def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
         return DELTA_SCALE_FALLBACK
 
 
-def aug_spaces(inner, feature_dim=None, t_max=None, crop_span=None):
+def aug_spaces(inner, feature_dim=None, t_min=0, t_max=None, crop_span=None):
     """The observation space with the draw's keys added. A Box is nested under STATE_KEY."""
     spaces_map = dict(inner.spaces) if isinstance(inner, spaces.Dict) else {STATE_KEY: inner}
     if feature_dim is not None:
@@ -451,13 +451,13 @@ def aug_spaces(inner, feature_dim=None, t_max=None, crop_span=None):
     return spaces.Dict(spaces_map)
 
 
-def aug_draw(rng, feature_dim=None, t_max=None, crop_span=None, n=None):
+def aug_draw(rng, feature_dim=None, t_min=0, t_max=None, crop_span=None, n=None):
     """One draw, or a batch of `n` when called for a vectorised env."""
     shape = (lambda *d: d) if n is None else (lambda *d: (n,) + d)
     out = {}
     if feature_dim is not None:
         out[AUG_NOISE_KEY] = rng.standard_normal(shape(feature_dim)).astype(np.float32)
-        out[AUG_T_KEY] = rng.integers(0, t_max, size=shape(1)).astype(np.float32)
+        out[AUG_T_KEY] = rng.integers(t_min, t_max, size=shape(1)).astype(np.float32)
     if crop_span is not None:
         # [0, span), matching CropRandomizer's own sampler exactly -- it scales rand() by
         # (image - crop) and truncates, so the last offset it can draw is span - 1.
@@ -475,16 +475,17 @@ class VecAugmentationDraw(VecEnvWrapper):
     what a DDPM level means in ST's flat arm.
     """
 
-    def __init__(self, venv, feature_dim=None, t_max=None, crop_span=None, seed=0):
+    def __init__(self, venv, feature_dim=None, t_min=0, t_max=None, crop_span=None, seed=0):
         super().__init__(venv, observation_space=aug_spaces(venv.observation_space, feature_dim,
-                                                            t_max, crop_span))
-        self.feature_dim, self.t_max, self.crop_span = feature_dim, t_max, crop_span
+                                                            t_min, t_max, crop_span))
+        self.feature_dim, self.t_min, self.t_max = feature_dim, t_min, t_max
+        self.crop_span = crop_span
         self.rng = np.random.default_rng(seed)
 
     def _add(self, obs):
         out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
-        out.update(aug_draw(self.rng, self.feature_dim, self.t_max, self.crop_span,
-                            n=self.num_envs))
+        out.update(aug_draw(self.rng, self.feature_dim, self.t_min, self.t_max,
+                            self.crop_span, n=self.num_envs))
         return out
 
     def reset(self):
@@ -519,14 +520,17 @@ class AugmentationDraw(gymnasium.ObservationWrapper):
     `render_size - crop`), so they are passed in rather than inferred.
     """
 
-    def __init__(self, env, feature_dim=None, t_max=None, crop_span=None):
+    def __init__(self, env, feature_dim=None, t_min=0, t_max=None, crop_span=None):
         super().__init__(env)
-        self.feature_dim, self.t_max, self.crop_span = feature_dim, t_max, crop_span
-        self.observation_space = aug_spaces(env.observation_space, feature_dim, t_max, crop_span)
+        self.feature_dim, self.t_min, self.t_max = feature_dim, t_min, t_max
+        self.crop_span = crop_span
+        self.observation_space = aug_spaces(env.observation_space, feature_dim, t_min,
+                                           t_max, crop_span)
 
     def observation(self, obs):
         out = dict(obs) if isinstance(obs, dict) else {STATE_KEY: obs}
-        out.update(aug_draw(self.np_random, self.feature_dim, self.t_max, self.crop_span))
+        out.update(aug_draw(self.np_random, self.feature_dim, self.t_min, self.t_max,
+                            self.crop_span))
         return out
 
 

@@ -92,6 +92,9 @@ DEFAULTS = {
     # observation corruption
     "corrupt_obs": False,
     "corrupt_t_max": 200,
+    # a target signal-to-noise ratio pins ONE corruption level instead of drawing from
+    # U[0, corrupt_t_max). None keeps the draw.
+    "corrupt_snr": None,
     # agent
     "total_timesteps": 2_000_000,
     "n_steps": 128,
@@ -151,7 +154,7 @@ KEYPOINT_ONLY_KEYS = ("keypoint_visible_rate", "occlusion", "occlusion_persisten
 # What changes what a checkpoint IS, as opposed to how a run is driven. Resuming with any of
 # these altered would continue one experiment under another's name.
 IDENTITY_KEYS = (
-    "obs", "corrupt_obs", "corrupt_t_max", "reward", "shaping_coef", "shaping_potential", "progress_coef", "success_bonus",
+    "obs", "corrupt_obs", "corrupt_snr", "corrupt_t_max", "reward", "shaping_coef", "shaping_potential", "progress_coef", "success_bonus",
     "block_zero_coverage",
     "max_episode_steps", "render_size", "keypoint_visible_rate",
     "occlusion", "occlusion_persistence", "action_mode", "delta_scale",
