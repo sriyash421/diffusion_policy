@@ -71,7 +71,7 @@ DEFAULTS = {
     "keypoint_visible_rate": 1.0,
     "occlusion": "iid",
     "occlusion_persistence": 20.0,
-    "reward": "dense",
+    "reward": "delta",
     "shaping_coef": 10.0,
     "progress_coef": 30.0,
     "success_bonus": 10.0,

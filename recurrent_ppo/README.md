@@ -122,7 +122,13 @@ corruption (`--corrupt-obs`) applies to all three, since it acts on the encoded 
 
 ## The reward, and why termination is tied to it
 
-`--reward dense` (default) pays `coverage / 0.95` every step and **never terminates** — the
+`--reward delta` (default) pays for CHANGE rather than level: `progress_coef` times the
+per-step reduction in the T's distance from the goal pose, plus `success_bonus` once on the
+first solve. Summed over an episode it telescopes to total progress, so it cannot be farmed by
+loitering — which is why it is the default. Under a level-valued reward a lucky reset paid a
+do-nothing policy 92.7, more than any policy earned by acting.
+
+`--reward dense` pays `coverage / 0.95` every step and **never terminates** — the
 episode always runs to `--max-episode-steps` and truncates, so it bootstraps. `--reward sparse`
 pays `+1` on the first solve and terminates there.
 
