@@ -43,7 +43,6 @@ def _build_agent(cfg, env, log_dir, demo_offsets):
     return ChunkSAC(
         policy, env,
         obs_type=cfg["obs"], tau_ladder=cfg["tau_ladder"], demo_chunks=demo_offsets,
-        chunk_action_mode=cfg["chunk_action_mode"], chunk_scale=cfg["chunk_scale"],
         mix=cfg["mix"], smooth_scale=cfg["smooth_scale"], bon_n_critics=cfg["n_critics"],
         gamma=cfg["gamma"], learning_rate=cfg["learning_rate"], batch_size=cfg["batch_size"],
         learning_starts=cfg["learning_starts"], train_freq=cfg["train_freq"],
@@ -91,9 +90,8 @@ def train(args_cli):
     # THE INVERTIBILITY PROOF, before anything depends on it: a Q cannot score a chunk it
     # cannot express, and ST's candidates are absolute targets from this distribution.
     A, P = demo_chunks(DEMO_ZARR)
-    err = assert_roundtrip(A, P, mode=cfg["chunk_action_mode"], scale=cfg["chunk_scale"])
-    print(f"[INFO] chunk codec {cfg['chunk_action_mode']!r}: round-trips the demonstrations to "
-          f"{err:.2e} px")
+    err = assert_roundtrip(A)
+    print(f"[INFO] chunk codec round-trips the demonstrations to {err:.2e} px")
     demo_offsets = A - P[:, None, :]          # chunk SHAPES, re-anchorable anywhere
 
     env_kwargs = env_kwargs_from(cfg, cfg["obs"])
@@ -113,8 +111,7 @@ def train(args_cli):
     else:
         agent = _build_agent(cfg, env, log_dir, demo_offsets)
         if cfg["demo_seed_frac"] > 0:
-            tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], mode=cfg["chunk_action_mode"],
-                                  scale=cfg["chunk_scale"], gamma=cfg["gamma"],
+            tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], gamma=cfg["gamma"],
                                   tau_ladder=cfg["tau_ladder"], frac=cfg["demo_seed_frac"])
             print(summarise(tr))
             preload_demos(agent.replay_buffer, tr)

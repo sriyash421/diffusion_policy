@@ -27,8 +27,7 @@ RESET_TRIES = 20
 class ChunkPushTEnv(PushTGymEnv):
     """PushTGymEnv whose action is a whole chunk of `chunk` absolute targets."""
 
-    def __init__(self, chunk=CHUNK, chunk_action_mode=D["chunk_action_mode"],
-                 chunk_scale=D["chunk_scale"], gamma=D["gamma"], tau_ladder=TAU_LADDER,
+    def __init__(self, chunk=CHUNK, gamma=D["gamma"], tau_ladder=TAU_LADDER,
                  max_episode_steps=D["max_episode_steps"],
                  max_reset_coverage=D["max_reset_coverage"], **kwargs):
         assert max_episode_steps % chunk == 0, (
@@ -39,8 +38,6 @@ class ChunkPushTEnv(PushTGymEnv):
         kwargs.setdefault("reward_mode", D["reward"])
         super().__init__(max_episode_steps=max_episode_steps, **kwargs)
         self.chunk = int(chunk)
-        self.chunk_action_mode = chunk_action_mode
-        self.chunk_scale = float(chunk_scale)
         self.gamma_base = gamma_base(gamma, chunk)
         self.tau_ladder = tuple(float(t) for t in tau_ladder)
         self.max_reset_coverage = float(max_reset_coverage)
@@ -84,8 +81,7 @@ class ChunkPushTEnv(PushTGymEnv):
 
     def step(self, action):
         """One chunk: `chunk` base steps, discounted-summed, stopping early on episode end."""
-        targets = decode(action, np.asarray(self.env.agent.position), mode=self.chunk_action_mode,
-                         scale=self.chunk_scale, chunk=self.chunk)
+        targets = decode(action, chunk=self.chunk)
         total, discount = 0.0, 1.0
         terminated = truncated = False
         info = {}
@@ -155,7 +151,7 @@ def env_kwargs_from(cfg, obs_type):
     kwargs = {k: cfg[k] for k in ENV_KEYS}
     kwargs["reward_mode"] = cfg["reward"]
     kwargs["block_zero_coverage"] = cfg["block_zero_coverage"]
-    for key in ("chunk_action_mode", "chunk_scale", "gamma", "tau_ladder"):
+    for key in ("gamma", "tau_ladder"):
         kwargs[key] = cfg[key]
     if obs_type == "keypoint":
         kwargs.update({k: cfg[k] for k in KEYPOINT_ONLY_KEYS})

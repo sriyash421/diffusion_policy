@@ -87,15 +87,11 @@ def _obs_from_zarr(root, idx, obs_type):
             "image": np.moveaxis(np.asarray(root["data/img"])[idx], -1, 1).astype(np.uint8),
             "agent_pos": _normalise(np.asarray(root["data/agent_pos"])[idx]),
         }
-    if obs_type == "state":
-        s = np.asarray(root["data/state"])[idx]
-        return np.concatenate([_normalise(s[:, :4]),
-                               np.stack([np.cos(s[:, 4]), np.sin(s[:, 4])], -1)], -1).astype(np.float32)
     raise ValueError(f"unknown obs_type {obs_type!r}")
 
 
 def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stride=1,
-                     mode="absolute", scale=64.0, gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0):
+                     gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0):
     """Chunk transitions with a per-tau (reward, done, live) triple.
 
     Returns a dict with `obs`, `action`, `next_obs`, `reward` (N, n_tau), `done` (N, n_tau),
@@ -105,7 +101,6 @@ def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stri
 
     root = zarr.open(str(zarr_path), "r")
     action = np.asarray(root["data/action"], dtype=np.float64)
-    agent = np.asarray(root["data/agent_pos"], dtype=np.float64)
     ends = np.asarray(root["meta/episode_ends"])
     starts = np.concatenate([[0], ends[:-1]])
     cov = frame_coverage(zarr_path)
@@ -145,7 +140,7 @@ def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stri
     return {
         "obs": _obs_from_zarr(root, t0, obs_type),
         "next_obs": _obs_from_zarr(root, t0 + chunk, obs_type),
-        "action": encode(chunks, agent[t0], mode=mode, scale=scale, chunk=chunk).astype(np.float32),
+        "action": encode(chunks, chunk=chunk).astype(np.float32),
         "reward": np.asarray(rew, np.float32),
         "done": np.asarray(done, bool),
         "live": np.asarray(live, bool),

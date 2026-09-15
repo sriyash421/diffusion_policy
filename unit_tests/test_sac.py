@@ -31,21 +31,29 @@ def test_absolute_codec_expresses_every_demo_chunk_exactly(demos):
     loses demo chunks loses candidates too -- and the loss is silent, because a clipped action
     still produces a number.
     """
-    A, P = demos
-    chunks, comps = cc.representable(A, P, mode="absolute")
-    assert chunks == 1.0 and comps == 1.0
-    assert cc.assert_roundtrip(A, P, mode="absolute") == 0.0
+    A, _ = demos
+    u = cc.encode(A)
+    assert u.shape == (len(A), 2 * CHUNK)
+    assert (np.abs(u) <= 1.0 + 1e-9).all(), "a demo chunk falls outside the action space"
+    assert cc.assert_roundtrip(A) == 0.0
 
 
-def test_increment_codec_loses_chunks_and_the_scale_says_how_many(demos):
-    """The documented reason `absolute` is the default rather than `increment`."""
+def test_an_increment_chain_would_lose_a_quarter_of_the_expert_chunks(demos):
+    """Why `absolute` is the only codec, computed rather than asserted from a comment.
+
+    An increment chain anchors each target on the previous one, which buys translation
+    equivariance -- a real argument, and the reason the mode existed. It is measured here
+    instead of implemented: at recurrent_ppo's own delta_scale it cannot express a QUARTER of
+    what the expert actually did, and a verifier that silently clips the chunk it was asked
+    about is worse than one that is merely coarse.
+    """
     A, P = demos
-    at33, _ = cc.representable(A, P, mode="increment", scale=33.0)
-    at64, _ = cc.representable(A, P, mode="increment", scale=64.0)
-    # recurrent_ppo's measured delta_scale loses a quarter of real expert chunks
-    assert at33 == pytest.approx(0.74, abs=0.02)
-    assert at64 == pytest.approx(0.978, abs=0.005)
-    assert at33 < at64 < 1.0
+    anchors = np.concatenate([P[:, None, :], A[:, :-1, :]], axis=1)
+    steps = np.abs(A - anchors)                                   # per-step target displacement
+    lost = {R: float((steps > R).any(axis=(1, 2)).mean()) for R in (33.0, 64.0)}
+    assert lost[33.0] == pytest.approx(0.26, abs=0.02)
+    assert lost[64.0] == pytest.approx(0.022, abs=0.005)
+    # absolute, by contrast, expresses every one of them (test above)
 
 
 def test_codec_ignores_differences_outside_the_arena():
@@ -54,15 +62,12 @@ def test_codec_ignores_differences_outside_the_arena():
     p = np.array([256.0, 256.0])
     a = np.full((CHUNK, 2), 600.0)
     b = np.full((CHUNK, 2), 900.0)
-    assert np.allclose(cc.encode(a, p), cc.encode(b, p))
+    assert np.allclose(cc.encode(a), cc.encode(b))
 
 
-@pytest.mark.parametrize("mode,scale", [("absolute", 1.0), ("increment", 64.0)])
-def test_decode_stays_inside_the_arena(mode, scale):
+def test_decode_stays_inside_the_arena():
     rng = np.random.default_rng(0)
-    u = rng.uniform(-1, 1, size=(500, 2 * CHUNK))
-    p = rng.uniform(0, WS, size=(500, 2))
-    out = cc.decode(u, p, mode=mode, scale=scale)
+    out = cc.decode(rng.uniform(-1, 1, size=(500, 2 * CHUNK)))
     assert out.shape == (500, CHUNK, 2)
     assert (out >= 0.0).all() and (out <= WS).all()
 
@@ -83,7 +88,7 @@ def test_episode_is_a_whole_number_of_chunks():
 
 def test_max_episode_steps_must_be_a_multiple_of_chunk():
     with pytest.raises(AssertionError, match="not a multiple of chunk"):
-        ChunkPushTEnv(obs_type="state", max_episode_steps=300)
+        ChunkPushTEnv(obs_type="keypoint", max_episode_steps=300)
 
 
 def test_chunk_return_equals_the_base_env_discounted_sum():
@@ -93,13 +98,13 @@ def test_chunk_return_equals_the_base_env_discounted_sum():
     inherited PushTGymEnv.step, and compares. If this drifts, `gamma_chunk = gamma_base**CHUNK`
     is a lie and every Q value sits on a different scale from the one documented.
     """
-    kwargs = dict(obs_type="state", block_zero_coverage=False, reward_mode="dense",
+    kwargs = dict(obs_type="keypoint", block_zero_coverage=False, reward_mode="dense",
                   block_near_goal_prob=1.0, block_goal_offset=[8.0, 0.06])
     u = np.linspace(-0.6, 0.6, 2 * CHUNK)
 
     chunked = ChunkPushTEnv(**kwargs)
     chunked.reset(seed=7)
-    targets = cc.decode(u, np.asarray(chunked.env.agent.position), mode="absolute")
+    targets = cc.decode(u)
     _, got, _, _, _ = chunked.step(u)
 
     stepwise = ChunkPushTEnv(**kwargs)
@@ -121,7 +126,7 @@ def test_gamma_base_powers_up_to_the_quoted_chunk_discount():
 # ---------------------------------------------------------------- the sparse reward
 def test_sparse_reward_fires_at_most_once():
     """Sparse pays on the FIRST crossing and terminates; it must never pay twice."""
-    env = ChunkPushTEnv(obs_type="state", reward_mode="sparse", block_zero_coverage=False,
+    env = ChunkPushTEnv(obs_type="keypoint", reward_mode="sparse", block_zero_coverage=False,
                         block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
     paid = 0
     for ep in range(20):
@@ -143,7 +148,7 @@ def test_an_episode_never_begins_solved():
     Measured before this rule: at offset [3, 0.02] a third of draws started above 0.95 and a
     do-nothing policy returned 0.349 -- most of the available reward, for free.
     """
-    env = ChunkPushTEnv(obs_type="state", block_zero_coverage=False,
+    env = ChunkPushTEnv(obs_type="keypoint", block_zero_coverage=False,
                         block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
     cov = np.array([(env.reset(seed=i), env._block_coverage())[1] for i in range(40)])
     assert cov.max() < SUCCESS_THRESHOLD
@@ -152,7 +157,7 @@ def test_an_episode_never_begins_solved():
 
 def test_a_rung_the_episode_starts_above_is_not_live():
     """There is no achievement to credit there, and crediting it is the same free lunch."""
-    env = ChunkPushTEnv(obs_type="state", block_zero_coverage=False,
+    env = ChunkPushTEnv(obs_type="keypoint", block_zero_coverage=False,
                         block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
     env.reset(seed=0)
     start = env._block_coverage()
@@ -163,7 +168,7 @@ def test_a_rung_the_episode_starts_above_is_not_live():
 
 def test_tau_ladder_is_ordered_and_reported():
     """The lower rungs exist because NO demo reaches 0.95; they must be monotone in tau."""
-    env = ChunkPushTEnv(obs_type="state", block_zero_coverage=False,
+    env = ChunkPushTEnv(obs_type="keypoint", block_zero_coverage=False,
                         block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
     env.reset(seed=1)
     _, _, _, _, info = env.step(np.zeros(2 * CHUNK, dtype=np.float32))
@@ -177,7 +182,7 @@ def test_the_near_goal_curriculum_actually_reaches_the_threshold():
     """recurrent_ppo's default offset [30, 0.25] sits at coverage ~0.48 and NEVER crosses 0.95,
     so the curriculum as inherited cannot produce the reward it exists to produce."""
     def mean_coverage(offset):
-        env = ChunkPushTEnv(obs_type="state", block_zero_coverage=False,
+        env = ChunkPushTEnv(obs_type="keypoint", block_zero_coverage=False,
                             block_near_goal_prob=1.0, block_goal_offset=offset)
         return np.mean([(env.reset(seed=i), env._block_coverage())[1] for i in range(25)])
 
@@ -280,7 +285,7 @@ def test_mixture_weights_actually_route():
         agent.mix = np.asarray(mix, dtype=float)
         u = np.stack([agent._mixture_actions(env.num_envs) for _ in range(30)]).reshape(-1, 2 * CHUNK)
         pos = np.tile((agent._last_obs[:, 18:20] + 1.0) * (WS / 2), (30, 1))
-        return float(np.median(np.abs(np.diff(decode(u, pos), axis=1))))
+        return float(np.median(np.abs(np.diff(decode(u), axis=1))))
 
     # a uniform chunk teleports the target across the arena between steps; a demo-shaped one
     # moves it a few pixels. If these coincide, the `which == 2` branch never fired.
@@ -301,7 +306,7 @@ def test_demo_arm_proposes_demo_shaped_chunks():
     agent.mix = np.array([0.0, 0.0, 1.0, 0.0])
     u = agent._mixture_actions(env.num_envs)
     pos = (agent._last_obs[:, 18:20] + 1.0) * (WS / 2)
-    steps = np.abs(np.diff(decode(u, pos), axis=1))
+    steps = np.abs(np.diff(decode(u), axis=1))
     # a demo-shaped chunk moves the target a few px per step, not half the arena
     assert np.median(steps) < 40.0
 
@@ -492,7 +497,7 @@ def test_the_smooth_arm_moves_the_target_a_demo_scale_step():
     agent.mix = np.array([0.0, 0.0, 0.0, 1.0])                      # all smooth
     u = np.stack([agent._mixture_actions(env.num_envs) for _ in range(30)]).reshape(-1, 2 * CHUNK)
     pos = np.tile((agent._last_obs[:, 18:20] + 1.0) * (WS / 2), (30, 1))
-    step = float(np.median(np.abs(np.diff(decode(u, pos), axis=1))))
+    step = float(np.median(np.abs(np.diff(decode(u), axis=1))))
     assert 1.0 < step < 30.0, f"smooth arm moves the target {step:.1f} px/step (demos: 4, uniform: 171)"
 
 
@@ -584,7 +589,7 @@ def test_score_agrees_with_the_agent_it_loaded(obs_dict):
         via_shim = q.get_value(obs, th.tensor(chunks, dtype=th.float32)).cpu().numpy()
         state = state_from_obs(obs)
         via_agent = q.agent.q_values(obs_for_arm(obs, "keypoint"),
-                                     encode(chunks, state[:, :2]).astype(np.float32)).cpu().numpy()
+                                     encode(chunks).astype(np.float32)).cpu().numpy()
     assert np.allclose(via_shim, via_agent, atol=1e-6)
 
 

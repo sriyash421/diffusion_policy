@@ -7,14 +7,15 @@ drifts between them and nothing detects it.
 
 import argparse
 
-from sac.config import CHUNK_ACTION_MODES, DEFAULTS as D
+from sac.config import DEFAULTS as D
 
 
 def add_common_args(parser):
     # environment
-    parser.add_argument("--obs", type=str, default=D["obs"], choices=["keypoint", "image", "state"],
-                        help="Observation arm. The two Q functions are `keypoint` and `image`; "
-                             "`state` exists for fast tests.")
+    parser.add_argument("--obs", type=str, default=D["obs"], choices=["keypoint", "image"],
+                        help="Which Q to learn. Two arms, and only two: `keypoint` (9 block "
+                             "keypoints + agent xy + a visibility mask) and `image` (ST's own "
+                             "96x96 frames through its own encoder).")
     parser.add_argument("--num-envs", type=int, default=D["num_envs"], help="Parallel environments.")
     parser.add_argument("--max-episode-steps", type=int, default=D["max_episode_steps"],
                         help="Base-step budget. MUST be a multiple of the chunk, or the final "
@@ -30,14 +31,6 @@ def add_common_args(parser):
                              "pre-contact signal is earned by the TD backup rather than handed "
                              "over by a shaping term. The others are diagnostic arms and must "
                              "never be reported as the headline Q.")
-    parser.add_argument("--chunk-action-mode", type=str, default=D["chunk_action_mode"],
-                        choices=list(CHUNK_ACTION_MODES),
-                        help="How 16 numbers become 8 pixel targets. `absolute` represents "
-                             "100%% of demo chunks exactly; `increment` at 64px misses 2.2%% "
-                             "and at 33px misses 26%%. A Q cannot score a chunk it cannot "
-                             "express, so this is the one choice the verifier use-case forces.")
-    parser.add_argument("--chunk-scale", type=float, default=D["chunk_scale"],
-                        help="Pixels per unit under --chunk-action-mode increment.")
     parser.add_argument("--tau-ladder", type=float, nargs="+", default=D["tau_ladder"],
                         help="Success thresholds to learn heads for. 0.95 is PushT's own and "
                              "the deliverable; the lower rungs exist because NO demonstration "
@@ -139,7 +132,7 @@ def add_common_args(parser):
 
 def add_play_args(parser):
     """play.py flags default to None so the runner can tell `not given` from `overridden`."""
-    parser.add_argument("--obs", type=str, default=None, choices=["keypoint", "image", "state"])
+    parser.add_argument("--obs", type=str, default=None, choices=["keypoint", "image"])
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--n-episodes", type=int, default=50)

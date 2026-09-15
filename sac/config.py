@@ -17,26 +17,13 @@ from recurrent_ppo.config import (AGENT_BOUNDS, AGENT_RADIUS, CONTROL_HZ, DEMO_Z
 
 __all__ = ["AGENT_BOUNDS", "AGENT_RADIUS", "CONTROL_HZ", "DEMO_ZARR", "GOAL_POSE", "NEAR_TRIES",
            "SPAWN_TRIES", "SUCCESS_THRESHOLD", "WALL_INNER", "WS", "CHUNK", "TAU_LADDER",
-           "CHUNK_ACTION_MODES", "DEFAULTS", "ENV_KEYS", "IDENTITY_KEYS"]
+           "DEFAULTS", "ENV_KEYS", "IDENTITY_KEYS"]
 
 # ------------------------------------------------------------------ the chunk
 # One agent decision is the action chunk ST/BC actually execute: n_action_steps=8 in
 # pusht_base.yaml. Q(s, chunk) is then a drop-in for PushTVerifier.get_value, which receives
 # exactly this window (pusht_search_mixin._verifier_inputs slices action[To-1 : To-1+Ta]).
 CHUNK = 8
-
-# How a 16-d action in [-1, 1] becomes 8 absolute pixel targets. INVERTIBILITY IS THE
-# REQUIREMENT, not a nicety: a verifier that cannot express the chunk it is handed is not a
-# verifier, and ST's candidates are absolute targets drawn from the demo distribution.
-# Measured over all 24,208 eight-step demo windows -- fraction NOT representable exactly:
-#     absolute over [0, WS]          0.00%     <- the default, exact
-#     absolute over AGENT_BOUNDS     1.16%
-#     increment chain at R=64 px     2.20%
-#     increment chain at R=33 px    26.01%     <- recurrent_ppo's delta_scale
-# `increment` is kept because it buys translation equivariance (Q need not relearn "push left"
-# at every arena location), which is a real argument for sample efficiency -- but it is not
-# the default, because it is the one that can fail to represent a real candidate.
-CHUNK_ACTION_MODES = ("absolute", "increment")
 
 # The success threshold ladder. 0.95 is PushTEnv's own and the one BON is scored on; it is the
 # deliverable. The lower rungs exist because NO demonstration ever reaches 0.95 -- measured max
@@ -67,8 +54,6 @@ DEFAULTS = {
     # pre-contact signal is earned by the TD backup and cannot be dismissed as a re-encoded
     # distance heuristic. `delta` is a diagnostic arm only and must never be the headline Q.
     "reward": "sparse",
-    "chunk_action_mode": "absolute",
-    "chunk_scale": 64.0,                # px per unit, `increment` mode only
     "tau_ladder": list(TAU_LADDER),
     # The demos span agent [50, 449] and block x [66, 440] / y [116, 486] -- all 206 starts lie
     # inside these, where PushTEnv's own [100, 400] block box excludes 49 of them (23.8%). Wider
@@ -173,7 +158,7 @@ KEYPOINT_ONLY_KEYS = ("keypoint_visible_rate", "occlusion", "occlusion_persisten
 # these altered would continue one experiment under another's name.
 IDENTITY_KEYS = (
     "obs", "reward", "gamma", "max_episode_steps", "render_size", "keypoint_visible_rate",
-    "occlusion", "occlusion_persistence", "chunk_action_mode", "chunk_scale", "tau_ladder",
+    "occlusion", "occlusion_persistence", "tau_ladder",
     "agent_start_range", "block_start_range", "agent_near_block_prob", "agent_block_gap",
     "block_near_goal_prob", "block_near_goal_prob_final", "block_goal_offset",
     "block_goal_offset_final", "max_reset_coverage",

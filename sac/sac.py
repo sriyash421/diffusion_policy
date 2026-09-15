@@ -35,10 +35,8 @@ def agent_pos_from_obs(obs, obs_type):
     """
     if obs_type == "image":
         norm = np.asarray(obs["agent_pos"])
-    elif obs_type == "keypoint":
-        norm = np.asarray(obs)[..., 18:20]      # [9 block kps (18), agent xy (2)] then the mask
     else:
-        norm = np.asarray(obs)[..., 0:2]        # state: [agent xy, block xy, cos, sin]
+        norm = np.asarray(obs)[..., 18:20]      # [9 block kps (18), agent xy (2)] then the mask
     return (norm + 1.0) * (WS / 2)
 
 
@@ -46,14 +44,14 @@ class ChunkSAC(SAC):
     """SAC whose action is a chunk, plus the hard max-over-candidates verifier head."""
 
     def __init__(self, *args, obs_type="keypoint", tau_ladder=(0.95,), demo_chunks=None,
-                 chunk_action_mode="absolute", chunk_scale=64.0, chunk=8,
+                 chunk=8,
                  mix=(0.40, 0.10, 0.25, 0.25), smooth_scale=12.0,
                  bon_net_arch=(256, 256), bon_n_critics=2,
                  bon_lr=3e-4, bon_candidates=8, **kwargs):
         # set BEFORE super().__init__(), which calls _setup_model() and therefore needs them
         self.obs_type = obs_type
         self.tau_ladder = tuple(float(t) for t in tau_ladder)
-        self.chunk_action_mode, self.chunk_scale, self.chunk = chunk_action_mode, float(chunk_scale), int(chunk)
+        self.chunk = int(chunk)
         self.mix = np.asarray(mix, dtype=np.float64) / np.sum(mix)
         self.bon_candidates = int(bon_candidates)
         self.smooth_scale = float(smooth_scale)
@@ -94,8 +92,7 @@ class ChunkSAC(SAC):
         if demo.any() and self.demo_offsets is not None:
             pick = np.random.randint(0, len(self.demo_offsets), size=int(demo.sum()))
             targets = pos[demo][:, None, :] + self.demo_offsets[pick]      # re-anchored shape
-            out[demo] = encode(targets, pos[demo], mode=self.chunk_action_mode,
-                               scale=self.chunk_scale, chunk=self.chunk)
+            out[demo] = encode(targets, chunk=self.chunk)
 
         smooth = which == 3
         if smooth.any():
@@ -119,8 +116,7 @@ class ChunkSAC(SAC):
         """
         step = np.random.normal(0.0, self.smooth_scale, size=(len(pos), self.chunk, 2))
         targets = np.clip(pos[:, None, :] + np.cumsum(step, axis=1), 0.0, WS)
-        return encode(targets, pos, mode=self.chunk_action_mode, scale=self.chunk_scale,
-                      chunk=self.chunk)
+        return encode(targets, chunk=self.chunk)
 
     def _sample_action(self, learning_starts, action_noise=None, n_envs=1):
         from gymnasium import spaces

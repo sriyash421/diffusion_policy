@@ -67,10 +67,6 @@ def obs_for_arm(obs_dict, obs_type):
             pose_map={"block": tuple(s[2:5])}, is_obj=False)["block"] for s in state])
         flat = _normalise(np.concatenate([kps.reshape(len(state), -1), state[:, :2]], axis=-1))
         return np.concatenate([flat, np.ones_like(flat)], axis=-1)     # mask half, all visible
-    if obs_type == "state":
-        return np.concatenate([_normalise(state[:, :4]),
-                               np.stack([np.cos(state[:, 4]), np.sin(state[:, 4])], -1)],
-                              -1).astype(np.float32)
     if obs_type == "image":
         image = obs_dict.get("image")
         if image is None:
@@ -98,8 +94,7 @@ class PushTQVerifier:
     AGENT_DIM = 2
     STATE_DIM = 18
 
-    def __init__(self, checkpoint, obs_type=None, chunk_action_mode=None, chunk_scale=None,
-                 rung=-1, device="auto", value_fn="q"):
+    def __init__(self, checkpoint, obs_type=None, rung=-1, device="auto", value_fn="q"):
         from recurrent_ppo.run_io import load_args
         from sac.config import DEFAULTS
         from sac.sac import ChunkSAC
@@ -110,14 +105,12 @@ class PushTQVerifier:
         saved = load_args(os.path.dirname(os.path.abspath(checkpoint))) or {}
         cfg = dict(DEFAULTS, **saved)
         self.obs_type = obs_type or cfg["obs"]
-        self.chunk_action_mode = chunk_action_mode or cfg["chunk_action_mode"]
-        self.chunk_scale = float(chunk_scale if chunk_scale is not None else cfg["chunk_scale"])
         self.rung = rung
         self.tau_ladder = tuple(cfg["tau_ladder"])
         self.agent = ChunkSAC.load(checkpoint, device=device)
         self.agent.policy.set_training_mode(False)
         self.value_fn = "q"
-        print(f"[INFO] PushTQVerifier: {self.obs_type} arm, codec {self.chunk_action_mode!r}, "
+        print(f"[INFO] PushTQVerifier: {self.obs_type} arm, "
               f"ranking on tau={self.tau_ladder[self.rung]:.2f}")
 
     @th.no_grad()
@@ -139,8 +132,7 @@ class PushTQVerifier:
         a = action.detach().cpu().numpy() if th.is_tensor(action) else np.asarray(action)
         a = a.astype(np.float64)
         state = state_from_obs(obs_dict)
-        u = encode(a, state[:, :2], mode=self.chunk_action_mode, scale=self.chunk_scale,
-                   chunk=a.shape[1]).astype(np.float32)
+        u = encode(a, chunk=a.shape[1]).astype(np.float32)
         obs = obs_for_arm(obs_dict, self.obs_type)
         value = self.agent.q_values(obs, u, rung=self.rung)
 
@@ -167,9 +159,7 @@ class PushTQVerifier:
         from sac.chunk_codec import encode
 
         a = action.detach().cpu().numpy() if th.is_tensor(action) else np.asarray(action)
-        state = state_from_obs(obs_dict)
-        u = encode(a.astype(np.float64), state[:, :2], mode=self.chunk_action_mode,
-                   scale=self.chunk_scale, chunk=a.shape[1]).astype(np.float32)
+        u = encode(a.astype(np.float64), chunk=a.shape[1]).astype(np.float32)
         obs_t, _ = self.agent.policy.obs_to_tensor(obs_for_arm(obs_dict, self.obs_type))
         feats = self.agent._features(obs_t)
         u_t = th.as_tensor(u, device=self.agent.device)

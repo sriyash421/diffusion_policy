@@ -169,8 +169,7 @@ class FixedEval(BaseCallback):
 
 def arm_tags(cfg):
     """The labels describing what a run IS, derived from the config rather than typed."""
-    tags = [f"obs-{cfg['obs']}", f"reward-{cfg['reward']}", f"chunk-{cfg['chunk_action_mode']}",
-            f"gamma-{cfg['gamma']}", "algo-sac"]
+    tags = [f"obs-{cfg['obs']}", f"reward-{cfg['reward']}", f"gamma-{cfg['gamma']}", "algo-sac"]
     if cfg["block_near_goal_prob"] > 0:
         tags.append("init-near-goal")
     if cfg["demo_seed_frac"] > 0:
