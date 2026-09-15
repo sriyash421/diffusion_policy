@@ -6,6 +6,8 @@ does not match the agent's, a reward that fires twice -- none of these raise, th
 the numbers mean something other than what they are labelled.
 """
 
+import os
+
 import numpy as np
 import pytest
 
@@ -359,3 +361,315 @@ def test_q_verifier_refuses_a_value_it_does_not_implement():
         from sac.score import PushTQVerifier
 
         PushTQVerifier.__init__(object.__new__(PushTQVerifier), "x", value_fn="armTn")
+
+
+# ---------------------------------------------------------------- the buffer and the backup
+def test_sample_chunk_pairs_each_transition_with_its_own_tau_labels():
+    """The desync `_draw` exists to prevent, asserted rather than assumed.
+
+    `ReplayBuffer._get_samples` picks `env_indices` itself with a fresh `np.random.randint`, so
+    calling `sample()` and then `tau_batch()` would pair each transition with ANOTHER
+    transition's rung labels. Nothing raises: the Q is simply regressed on shuffled targets,
+    which looks exactly like slow learning.
+
+    Each transition is stamped with its own index in BOTH the observation and the rung reward,
+    so a desync shows up as the two disagreeing.
+    """
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    from sac.buffers import ChunkReplayBuffer
+    from sac.chunk_env import make_chunk_env
+
+    n_envs, n = 4, 50
+    env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)] * n_envs)
+    buf = ChunkReplayBuffer(n, env.observation_space, env.action_space, n_envs=n_envs, n_tau=4)
+    for i in range(n):
+        stamp = np.arange(n_envs) + i * n_envs                      # unique per (step, env)
+        obs = np.zeros((n_envs,) + env.observation_space.shape, dtype=np.float32)
+        obs[:, 0] = stamp
+        infos = [{"tau_reward": np.full(4, stamp[e], dtype=np.float32),
+                  "tau_done": np.zeros(4, bool), "tau_live": np.ones(4, bool)}
+                 for e in range(n_envs)]
+        buf.add(obs, obs.copy(), np.zeros((n_envs, 2 * CHUNK), np.float32),
+                np.zeros(n_envs, np.float32), np.zeros(n_envs, np.float32), infos)
+
+    data, (r_tau, _, _) = buf.sample_chunk(64)
+    assert np.allclose(data.observations[:, 0].cpu().numpy(), r_tau[:, 0].cpu().numpy()), \
+        "the tau labels belong to different transitions than the observations"
+
+
+def test_the_head_backup_is_a_hard_max_over_candidates():
+    """`r + gamma * (1-d) * max_M`, not the actor's expectation.
+
+    Taking the mean over candidates would learn Q^pi -- the value of the actor's stochastic
+    policy -- which is not what best-of-N evaluates. With a stub target head whose value is a
+    known function of the action, the two are numerically distinguishable.
+    """
+    import torch as th
+
+    agent, env = _tiny_agent()
+    agent.learn(total_timesteps=64)
+    obs = agent.policy.obs_to_tensor(env.reset())[0]
+    b, n_tau = env.num_envs, len(TAU_LADDER)
+
+    known = th.arange(agent.bon_candidates, dtype=th.float32)
+    calls = {"i": 0}
+
+    class _Stub(th.nn.Module):
+        def forward(self, features, actions):
+            v = known[calls["i"] % len(known)]
+            calls["i"] += 1
+            return th.full((2, features.shape[0], n_tau), float(v))
+
+    agent.policy.bon_head_target = _Stub()
+    r = th.zeros(b, n_tau)
+    d = th.zeros(b, n_tau)
+    target = agent.bon_target(obs, r, d)
+    assert th.allclose(target, th.full_like(target, agent.gamma * float(known.max()))), \
+        "the backup is not a hard max over the candidate set"
+
+    # and the terminal flag must switch the bootstrap off entirely
+    assert th.allclose(agent.bon_target(obs, r + 1.0, th.ones(b, n_tau)), th.ones(b, n_tau))
+
+
+def test_a_batch_with_nothing_live_contributes_no_gradient():
+    """The live mask at the UPDATE level, not just in the env.
+
+    A rung that keeps training past its own threshold is learning a different MDP from the one
+    its label claims. If every transition is dead for every rung, the loss is exactly zero and
+    no gradient reaches the head.
+
+    Asserted on the GRADIENT, not on the parameters: Adam carries momentum from earlier steps,
+    so `optimizer.step()` still moves weights when the gradient is exactly zero. Checking
+    parameters would fail for a reason that has nothing to do with masking.
+    """
+    import torch as th
+
+    agent, _ = _tiny_agent()
+    agent.learn(total_timesteps=128)
+    agent.replay_buffer.tau_live[:] = 0.0
+    agent._train_bon_head(gradient_steps=3, batch_size=16)
+
+    assert float(agent.logger.name_to_value["bon/head_loss"]) == 0.0
+    for p in agent.policy.bon_head.parameters():
+        assert p.grad is not None and th.count_nonzero(p.grad) == 0, "a dead rung produced gradient"
+
+
+def test_demo_transitions_round_trip_through_the_buffer():
+    """What preload_demos puts in comes back out unchanged, through the same `add` collected
+    transitions use -- the demo path and the collected path must be indistinguishable."""
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    from sac.buffers import ChunkReplayBuffer, preload_demos
+    from sac.chunk_env import make_chunk_env
+    from sac.demo_buffer import demo_transitions
+
+    env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)])
+    tr = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=64)
+    buf = ChunkReplayBuffer(len(tr["action"]) + 8, env.observation_space, env.action_space, n_tau=4)
+    n = preload_demos(buf, tr, verbose=False)
+
+    assert np.allclose(buf.observations[:n, 0], tr["obs"][:n])
+    assert np.allclose(buf.actions[:n, 0], tr["action"][:n])
+    assert np.allclose(buf.tau_reward[:n, 0], tr["reward"][:n])
+    assert np.array_equal(buf.tau_done[:n, 0].astype(bool), tr["done"][:n])
+    assert np.array_equal(buf.tau_live[:n, 0].astype(bool), tr["live"][:n])
+
+
+# ---------------------------------------------------------------- exploration and curriculum
+def test_the_smooth_arm_moves_the_target_a_demo_scale_step():
+    """Measured at 9.3 px against uniform's 171 and the demonstrations' 4 px median.
+
+    If this regresses toward uniform, the agent slams across the table eight times per chunk,
+    scatters the block, and the top rung silently stops collecting terminals -- the failure
+    that produced ONE tau=0.95 terminal in 50k steps.
+    """
+    from sac.chunk_codec import decode
+
+    agent, env = _tiny_agent()
+    agent.learn(total_timesteps=64)
+    agent._last_obs = env.reset()
+    agent.mix = np.array([0.0, 0.0, 0.0, 1.0])                      # all smooth
+    u = np.stack([agent._mixture_actions(env.num_envs) for _ in range(30)]).reshape(-1, 2 * CHUNK)
+    pos = np.tile((agent._last_obs[:, 18:20] + 1.0) * (WS / 2), (30, 1))
+    step = float(np.median(np.abs(np.diff(decode(u, pos), axis=1))))
+    assert 1.0 < step < 30.0, f"smooth arm moves the target {step:.1f} px/step (demos: 4, uniform: 171)"
+
+
+def test_curriculum_anneal_actually_moves_the_env():
+    """`set_attr` does nothing detectable if the attribute name is wrong, so assert the env's
+    own values, and that they move monotonically from the tight end to the wide one."""
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    from sac.callbacks import CurriculumAnneal
+    from sac.chunk_env import make_chunk_env
+
+    env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)])
+    cb = CurriculumAnneal([3.0, 0.02], [20.0, 0.15], total_timesteps=1000, frac=1.0,
+                          prob_start=0.6, prob_final=0.1)
+    # BOTH `logger` and `training_env` are read-only properties on BaseCallback, resolving to
+    # `self.model.logger` and `self.model.get_env()`. So the stub is a model, not a callback.
+    class _Model:
+        logger = type("L", (), {"record": lambda *a, **k: None})()
+
+        @staticmethod
+        def get_env():
+            return env
+
+    cb.model = _Model()
+
+    seen = []
+    for t in (0, 250, 500, 750, 1000):
+        cb.num_timesteps = t
+        cb._on_step()
+        seen.append((env.get_attr("block_goal_offset")[0][0], env.get_attr("block_near_goal_prob")[0]))
+    offsets = [o for o, _ in seen]
+    probs = [p for _, p in seen]
+    assert offsets == sorted(offsets) and offsets[0] == pytest.approx(3.0) and offsets[-1] == pytest.approx(20.0)
+    assert probs == sorted(probs, reverse=True) and probs[-1] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------- training and deployment agree
+def test_q_values_survive_save_and_load():
+    """The bug this guards actually happened: `attach_bon_head` had to move into `_setup_model`
+    because SB3's `load` constructs with `_init_setup_model=False`, so `__init__` has no policy.
+
+    A silently re-initialised head scores garbage at deployment while every training metric
+    still looks healthy, which is why this compares NUMBERS rather than checking the attribute
+    exists.
+    """
+    import tempfile
+
+    from sac.sac import ChunkSAC
+
+    agent, env = _tiny_agent()
+    agent.learn(total_timesteps=128)
+    obs = env.reset()
+    rng = np.random.default_rng(0)
+    actions = rng.uniform(-1, 1, size=(env.num_envs, 2 * CHUNK)).astype(np.float32)
+    before = agent.q_values(obs, actions).cpu().numpy()
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "model.zip")
+        agent.save(path)
+        reloaded = ChunkSAC.load(path, device="cpu")
+        after = reloaded.q_values(obs, actions).cpu().numpy()
+    assert np.allclose(before, after, atol=1e-6), "the verifier head did not survive save/load"
+
+
+def test_score_agrees_with_the_agent_it_loaded(obs_dict):
+    """`PushTQVerifier.get_value` and `ChunkSAC.q_values` are two paths to one quantity.
+
+    If they disagree, training and deployment disagree about what the Q is -- and the BON
+    numbers would be measuring a function that was never trained.
+    """
+    import tempfile
+
+    import torch as th
+    import zarr
+
+    from sac.chunk_codec import encode
+    from sac.score import PushTQVerifier, obs_for_arm, state_from_obs
+
+    obs, _ = obs_dict
+    agent, _ = _tiny_agent()
+    agent.learn(total_timesteps=64)
+    chunks = np.asarray(zarr.open(DEMO_ZARR, "r")["data/action"])[1000:1000 + 4 * CHUNK]
+    chunks = chunks.reshape(4, CHUNK, 2).astype(np.float64)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "model.zip")
+        agent.save(path)
+        q = PushTQVerifier(path, obs_type="keypoint", device="cpu")
+        via_shim = q.get_value(obs, th.tensor(chunks, dtype=th.float32)).cpu().numpy()
+        state = state_from_obs(obs)
+        via_agent = q.agent.q_values(obs_for_arm(obs, "keypoint"),
+                                     encode(chunks, state[:, :2]).astype(np.float32)).cpu().numpy()
+    assert np.allclose(via_shim, via_agent, atol=1e-6)
+
+
+@pytest.mark.slow
+def test_training_collects_terminals_and_keeps_q_non_degenerate():
+    """The only test that says the whole loop LEARNS rather than merely runs.
+
+    Two acceptance signals, both of which the tree already produces: the top rung collects
+    terminals at all (it collected ONE in 50k steps before the exploration prior was fixed),
+    and Q never scores every candidate identically -- the degeneracy of the heuristic being
+    replaced, restated in Q coordinates.
+    """
+    from sac.buffers import buffer_class_for
+    from sac.chunk_env import build_chunk_vec_env
+    from sac.sac import ChunkSAC
+
+    env = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, block_zero_coverage=False,
+                              block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
+    agent = ChunkSAC("MlpPolicy", env, obs_type="keypoint", tau_ladder=TAU_LADDER, gamma=0.95,
+                     learning_starts=500, batch_size=64, gradient_steps=2, buffer_size=20000,
+                     replay_buffer_class=buffer_class_for("keypoint"),
+                     replay_buffer_kwargs={"n_tau": len(TAU_LADDER)}, device="cpu", verbose=0)
+    agent.learn(total_timesteps=6000)
+
+    top = agent.replay_buffer.tau_done[:agent.replay_buffer.pos, :, -1].sum()
+    assert top > 0, "the tightest curriculum collected no tau=0.95 terminal at all"
+
+    obs = env.reset()
+    rng = np.random.default_rng(0)
+    q = agent.q_values(np.repeat(obs[:1], 16, axis=0),
+                       rng.uniform(-1, 1, size=(16, 2 * CHUNK)).astype(np.float32)).cpu().numpy()
+    assert q.std() > 1e-9, "Q scores every candidate identically -- the heuristic's own failure"
+
+
+def test_demo_rewards_encode_the_discounted_time_to_cross():
+    """Q's UNITS, asserted on the data that defines them.
+
+    `Q*` here is meant to be `gamma**(chunks to solve)`, and that only holds if a rung's reward
+    is `gamma_base**j` for the within-chunk step j at which it crossed -- so that crossing
+    earlier is worth strictly more, exactly as the env pays it. Every paid demo reward must
+    therefore be one of the CHUNK powers of gamma_base and nothing else.
+    """
+    from sac.demo_buffer import demo_transitions
+
+    tr = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=8, gamma=0.95)
+    paid = tr["reward"][tr["done"]]
+    assert len(paid) > 0, "no rung was ever crossed in the demonstrations"
+    allowed = gamma_base(0.95) ** np.arange(CHUNK)
+    assert np.isclose(paid[:, None], allowed[None, :], atol=1e-6).any(axis=1).all()
+    # and a reward is paid if and only if that rung terminated on that chunk
+    assert np.array_equal(tr["reward"] > 0, tr["done"])
+
+
+@pytest.mark.slow
+def test_q_is_higher_closer_to_the_goal():
+    """Calibration, directionally: `Q ~ gamma**(chunks to solve)` implies a state one push from
+    the goal must score above one far from it.
+
+    Directional rather than exact on purpose -- pinning `Q` to `gamma**k` needs a converged
+    critic, and a unit test's budget cannot produce one. What it CAN catch is a Q whose ordering
+    is backwards or flat, which is the failure that would make it useless as a verifier.
+    """
+    from sac.buffers import buffer_class_for
+    from sac.chunk_env import build_chunk_vec_env
+    from sac.demo_buffer import demo_transitions
+    from sac.buffers import preload_demos
+    from sac.sac import ChunkSAC
+
+    env = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, block_zero_coverage=False,
+                              block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
+    agent = ChunkSAC("MlpPolicy", env, obs_type="keypoint", tau_ladder=TAU_LADDER, gamma=0.95,
+                     learning_starts=500, batch_size=128, gradient_steps=4, buffer_size=40000,
+                     replay_buffer_class=buffer_class_for("keypoint"),
+                     replay_buffer_kwargs={"n_tau": len(TAU_LADDER)}, device="cpu", verbose=0)
+    preload_demos(agent.replay_buffer, demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=4),
+                  verbose=False)
+    agent.learn(total_timesteps=8000)
+
+    near = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, seed=1,
+                               block_zero_coverage=False, block_near_goal_prob=1.0,
+                               block_goal_offset=[4.0, 0.03])
+    far = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, seed=1,
+                              block_zero_coverage=False, block_near_goal_prob=0.0)
+    rng = np.random.default_rng(0)
+    a = rng.uniform(-1, 1, size=(8, 2 * CHUNK)).astype(np.float32)
+    q_near = float(agent.q_values(near.reset(), a).mean())
+    q_far = float(agent.q_values(far.reset(), a).mean())
+    assert q_near > q_far, f"Q is not higher near the goal ({q_near:.4f} vs {q_far:.4f})"

@@ -160,6 +160,22 @@ class ChunkSAC(SAC):
             rest = [self.policy.actor(obs, deterministic=False) for _ in range(m - 1)]
         return th.stack([best] + rest, dim=0)
 
+    @th.no_grad()
+    def bon_target(self, next_obs, r_tau, d_tau):
+        """`r + gamma * (1-d) * max over candidates` -- the operation BON itself performs.
+
+        A separate method so it can be asserted directly. Ensemble-MEAN inside the max, because
+        that is the estimator the deployment ranks on; the `min` that controls overestimation
+        belongs to algorithms whose backup is over a single next action, not over a best-of-M.
+        Taking the actor's expectation here instead would learn Q^pi, which is not what
+        best-of-N evaluates.
+        """
+        nxt = self._features(next_obs)
+        cand = self._candidate_actions(next_obs, self.bon_candidates)
+        q_next = th.stack([self.policy.bon_head_target(nxt, cand[m]).mean(0)
+                           for m in range(cand.shape[0])], dim=0)             # (M, B, n_tau)
+        return r_tau + self.gamma * (1.0 - d_tau) * q_next.max(0).values
+
     def _train_bon_head(self, gradient_steps, batch_size):
         buf = self.replay_buffer
         if not hasattr(buf, "sample_chunk"):
@@ -167,14 +183,7 @@ class ChunkSAC(SAC):
         losses, live_fracs = [], []
         for _ in range(gradient_steps):
             data, (r_tau, d_tau, live) = buf.sample_chunk(batch_size, env=self._vec_normalize_env)
-            with th.no_grad():
-                nxt = self._features(data.next_observations)
-                cand = self._candidate_actions(data.next_observations, self.bon_candidates)
-                # HARD max over candidates -- the operation BON itself performs. Ensemble-mean
-                # inside the max, because that is the estimator the deployment ranks on.
-                q_next = th.stack([self.policy.bon_head_target(nxt, cand[m]).mean(0)
-                                   for m in range(cand.shape[0])], dim=0)     # (M, B, n_tau)
-                target = r_tau + self.gamma * (1.0 - d_tau) * q_next.max(0).values
+            target = self.bon_target(data.next_observations, r_tau, d_tau)
             q = self.policy.bon_head(self._features(data.observations), data.actions)  # (E,B,T)
             # masked per RUNG: a transition past its rung's threshold is in an episode that has
             # already terminated for that rung, and training on it with done=False is a lie.
