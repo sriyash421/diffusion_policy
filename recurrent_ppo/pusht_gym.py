@@ -513,6 +513,9 @@ class VecAugmentationDraw(VecEnvWrapper):
         # observation reaches the extractor too and needs the draw. Dense-reward episodes always
         # truncate, so without this every corrupted run dies at the first episode boundary. Its
         # draw is fresh: it is a different observation, and it is never stored, so nothing replays.
+        # list(), because SubprocVecEnv builds infos with zip(*results) and hands back a TUPLE
+        # while DummyVecEnv hands back a list -- so this is only assignable after a copy
+        infos = list(infos)
         for i, done in enumerate(dones):
             if done and "terminal_observation" in infos[i]:
                 infos[i] = dict(infos[i])

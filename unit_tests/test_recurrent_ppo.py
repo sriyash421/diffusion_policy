@@ -639,3 +639,84 @@ def test_the_terminal_observation_carries_the_draw(n_stack):
                     venv.observation_space[AUG_NOISE_KEY].shape
     assert saw_terminal, "the horizon should have truncated at least one episode"
     venv.close()
+
+
+def test_the_draw_tolerates_a_tuple_infos():
+    """SubprocVecEnv hands back infos as a TUPLE; DummyVecEnv hands back a list.
+
+    The terminal-observation fix assigned into infos[i] directly, which works under
+    DummyVecEnv and raises TypeError under SubprocVecEnv -- so the test that covered the
+    logic passed while every real run (which uses subprocesses) died. A stub is used rather
+    than a real SubprocVecEnv because the container type is the whole point and forkserver
+    startup is not.
+    """
+    from stable_baselines3.common.vec_env.base_vec_env import VecEnv
+
+    from recurrent_ppo.pusht_gym import VecAugmentationDraw
+
+    dim = 8
+
+    class TupleInfosVecEnv(VecEnv):
+        def __init__(self):
+            super().__init__(2, gym.spaces.Box(-1, 1, (dim,)), gym.spaces.Box(-1, 1, (2,)))
+        def reset(self):
+            return np.zeros((2, dim), dtype=np.float32)
+        def step_async(self, actions):
+            pass
+        def step_wait(self):
+            # a tuple, and a terminal_observation on the env that just finished
+            infos = ({"terminal_observation": np.ones(dim, dtype=np.float32)}, {})
+            return (np.zeros((2, dim), dtype=np.float32), np.zeros(2),
+                    np.array([True, False]), infos)
+        def close(self): pass
+        def get_attr(self, name, indices=None): return [None, None]  # VecEnv.__init__ reads render_mode
+        def set_attr(self, name, value, indices=None): pass
+        def env_method(self, name, *a, indices=None, **k): return []
+        def env_is_wrapped(self, cls, indices=None): return [False, False]
+
+    env = VecAugmentationDraw(TupleInfosVecEnv(), feature_dim=dim, t_min=200, t_max=201, seed=0)
+    obs, _, dones, infos = env.step(np.zeros((2, 2), dtype=np.float32))
+    assert set(obs) == {STATE_KEY, AUG_NOISE_KEY, AUG_T_KEY}
+    term = infos[0]["terminal_observation"]
+    assert set(term) == {STATE_KEY, AUG_NOISE_KEY, AUG_T_KEY}
+    assert term[AUG_NOISE_KEY].shape == (dim,) and int(term[AUG_T_KEY][0]) == 200
+
+
+@pytest.mark.parametrize("mode", ["train", "eval"])
+def test_the_image_arm_is_scored_on_its_stored_crop_in_both_modes(mode):
+    """The evaluation is true to training: the stored random crop, never a centre crop.
+
+    CropRandomizer switches on self.training by itself and would centre-crop at eval. This arm
+    overrides that in both directions, so the policy is scored on exactly the transform it
+    learned under. The property is easy to lose by accident -- deleting one `_forced_offsets`
+    line restores CropRandomizer's default and silently changes what every image-arm number
+    means -- and nothing else would fail if it did.
+    """
+    from recurrent_ppo.corrupt_policy import ST_CROP, STResNetExtractor
+
+    space = gym.spaces.Dict({
+        "image": gym.spaces.Box(0, 255, (3, 96, 96), np.uint8),
+        "agent_pos": gym.spaces.Box(-1, 1, (2,), np.float32),
+        AUG_CROP_KEY: gym.spaces.Box(0.0, float(96 - ST_CROP - 1), (2,), np.float32),
+    })
+    extractor = STResNetExtractor(space)
+    assert extractor.replay_crop
+    extractor.train(mode == "train")
+
+    th.manual_seed(0)
+    img = th.rand(1, 3, 96, 96)
+    obs = {"image": img, "agent_pos": th.zeros(1, 2),
+           AUG_CROP_KEY: th.tensor([[3.0, 11.0]])}
+    got = extractor._crop(img, obs)
+
+    # the crop the stored offset names, computed independently of CropRandomizer
+    expected = img[:, :, 3:3 + ST_CROP, 11:11 + ST_CROP]
+    assert th.equal(got, expected), f"{mode}: not the stored offset"
+
+    # and it is genuinely NOT the centre crop, which is what would come back on a regression
+    lo = (96 - ST_CROP) // 2
+    assert not th.equal(got, img[:, :, lo:lo + ST_CROP, lo:lo + ST_CROP])
+
+    # a different stored offset must give a different crop -- i.e. the offset is really read
+    other = dict(obs, **{AUG_CROP_KEY: th.tensor([[0.0, 0.0]])})
+    assert not th.equal(extractor._crop(img, other), got)

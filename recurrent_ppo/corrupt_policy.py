@@ -29,7 +29,6 @@ TWO THINGS THAT DIFFER FROM ST'S FLAT ARM, both deliberate and both measured:
 import numpy as np
 import torch as th
 import torch.nn as nn
-import torchvision
 from gymnasium import spaces
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from sb3_contrib.common.recurrent.policies import (
@@ -119,11 +118,12 @@ class STResNetExtractor(BaseFeaturesExtractor):
         if image_space.shape[0] != 3:
             _widen_conv1(resnet, image_space.shape[0])
         self.resnet = resnet
-        # CropRandomizer already switches on self.training itself (random crop in train, centre
-        # crop in eval), so there is no ternary here; what we override is WHICH random crop.
+        # CropRandomizer switches on self.training by itself -- random crop in train, CENTRE crop
+        # in eval. We override that in both directions: `_crop` pins the stored offset whenever
+        # the observation carries one, which it always does on this arm. So this policy is
+        # evaluated on a random crop, deliberately. See _crop.
         self.cropper = CropRandomizer(input_shape=image_space.shape, crop_height=crop,
                                       crop_width=crop, num_crops=1, pos_enc=False)
-        self.centre_crop = torchvision.transforms.CenterCrop(size=(crop, crop))
 
     def _crop(self, img, obs):
         """The stored crop if the observation carries one, else CropRandomizer's own choice.
@@ -131,6 +131,16 @@ class STResNetExtractor(BaseFeaturesExtractor):
         Pinning the stored offset is what keeps PPO's ratio a policy ratio on the image arm:
         without it the crop is redrawn on every epoch, so the update scores an action against
         a different view of the observation than the one it was chosen from.
+
+        IT IS PINNED AT EVALUATION TOO, and that is a protocol choice rather than a side effect.
+        `aug_for` emits `crop_span` for the image arm whether or not it is corrupted, so the key
+        is always present and CropRandomizer's own eval branch -- a centre crop -- never runs.
+        The evaluation is therefore true to training: the policy is scored on exactly the
+        transform it learned under, not on a sharper view it never saw. Centre-cropping at eval
+        would measure a different input distribution from the one the weights were fitted to,
+        and the gap between the two would show up as an unexplained eval/train discrepancy.
+        The eval env is re-seeded before each evaluation, so the crops are a FIXED set: every
+        checkpoint sees the same ones, and the comparison between checkpoints is still paired.
         """
         if not self.replay_crop:
             return self.cropper(img)
