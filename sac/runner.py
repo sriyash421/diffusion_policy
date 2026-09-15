@@ -44,7 +44,7 @@ def _build_agent(cfg, env, log_dir, demo_offsets):
         policy, env,
         obs_type=cfg["obs"], tau_ladder=cfg["tau_ladder"], demo_chunks=demo_offsets,
         chunk_action_mode=cfg["chunk_action_mode"], chunk_scale=cfg["chunk_scale"],
-        mix=cfg["mix"], bon_n_critics=cfg["n_critics"],
+        mix=cfg["mix"], smooth_scale=cfg["smooth_scale"], bon_n_critics=cfg["n_critics"],
         gamma=cfg["gamma"], learning_rate=cfg["learning_rate"], batch_size=cfg["batch_size"],
         learning_starts=cfg["learning_starts"], train_freq=cfg["train_freq"],
         gradient_steps=cfg["gradient_steps"], tau=cfg["tau"], ent_coef=cfg["ent_coef"],
@@ -125,7 +125,8 @@ def train(args_cli):
         LogEveryNTimesteps(n_steps=cfg["log_interval"]),
         LadderStats(cfg["tau_ladder"], freq=cfg["log_interval"]),
         CurriculumAnneal(cfg["block_goal_offset"], cfg["block_goal_offset_final"],
-                         cfg["total_timesteps"], cfg["curriculum_anneal_frac"]),
+                         cfg["total_timesteps"], cfg["curriculum_anneal_frac"],
+                         cfg["block_near_goal_prob"], cfg["block_near_goal_prob_final"]),
         FixedEval(eval_env, cfg["eval_freq"], cfg["n_eval_episodes"], cfg["seed"] + 10_000),
         QSpreadProbe(eval_env, freq=cfg["bon_probe_freq"], seed=cfg["seed"] + 20_000),
     ]

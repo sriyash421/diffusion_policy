@@ -52,6 +52,10 @@ def add_common_args(parser):
     parser.add_argument("--block-near-goal-prob", type=float, default=D["block_near_goal_prob"],
                         help="The ONLY mechanism producing a tau=0.95 terminal, since the "
                              "demonstrations never do.")
+    parser.add_argument("--block-near-goal-prob-final", type=float,
+                        default=D["block_near_goal_prob_final"],
+                        help="Where the near-goal PROBABILITY anneals to. Annealing the offset "
+                             "alone left the top rung with one terminal in 50k steps.")
     parser.add_argument("--block-goal-offset", type=float, nargs=2, default=D["block_goal_offset"],
                         help="Near-goal reset spread (px, rad) at the START of the anneal. "
                              "recurrent_ppo's [30, 0.25] sits at coverage 0.48 and NEVER crosses "
@@ -101,11 +105,16 @@ def add_common_args(parser):
                              "target) and pays three forward passes per gradient step.")
     # the behaviour mixture -- the off-distribution coverage BON needs
     parser.add_argument("--mix", type=float, nargs=4,
-                        default=[D["mix_actor"], D["mix_uniform"], D["mix_demo"], D["mix_wide"]],
-                        metavar=("ACTOR", "UNIFORM", "DEMO", "WIDE"),
+                        default=[D["mix_actor"], D["mix_uniform"], D["mix_demo"], D["mix_smooth"]],
+                        metavar=("ACTOR", "UNIFORM", "DEMO", "SMOOTH"),
                         help="Behaviour mixture weights. Q is asked to rank DIFFUSION-POLICY "
                              "candidates, which the actor never proposes, so a buffer fed only "
-                             "by the actor is sharp exactly where it is not needed.")
+                             "by the actor is sharp exactly where it is not needed. UNIFORM is "
+                             "small on purpose: in absolute coordinates it jumps the target "
+                             "~171px per step against the demos' 4px, and it scatters the block "
+                             "before the sparse reward can ever be found.")
+    parser.add_argument("--smooth-scale", type=float, default=D["smooth_scale"],
+                        help="Per-step std (px) of the smooth random-walk exploration arm.")
     parser.add_argument("--demo-seed-frac", type=float, default=D["demo_seed_frac"],
                         help="Fraction of the ~24k demo chunk transitions preloaded.")
     # bookkeeping

@@ -47,7 +47,8 @@ class ChunkSAC(SAC):
 
     def __init__(self, *args, obs_type="keypoint", tau_ladder=(0.95,), demo_chunks=None,
                  chunk_action_mode="absolute", chunk_scale=64.0, chunk=8,
-                 mix=(0.55, 0.20, 0.20, 0.05), bon_net_arch=(256, 256), bon_n_critics=2,
+                 mix=(0.40, 0.10, 0.25, 0.25), smooth_scale=12.0,
+                 bon_net_arch=(256, 256), bon_n_critics=2,
                  bon_lr=3e-4, bon_candidates=8, **kwargs):
         # set BEFORE super().__init__(), which calls _setup_model() and therefore needs them
         self.obs_type = obs_type
@@ -55,6 +56,7 @@ class ChunkSAC(SAC):
         self.chunk_action_mode, self.chunk_scale, self.chunk = chunk_action_mode, float(chunk_scale), int(chunk)
         self.mix = np.asarray(mix, dtype=np.float64) / np.sum(mix)
         self.bon_candidates = int(bon_candidates)
+        self.smooth_scale = float(smooth_scale)
         self.bon_net_arch, self.bon_n_critics, self.bon_lr = tuple(bon_net_arch), int(bon_n_critics), float(bon_lr)
         # demo chunks as SHAPES (targets minus their own start agent position), so a chunk the
         # expert performed in one corner is a usable proposal anywhere. Under `absolute` the raw
@@ -95,17 +97,47 @@ class ChunkSAC(SAC):
             out[demo] = encode(targets, pos[demo], mode=self.chunk_action_mode,
                                scale=self.chunk_scale, chunk=self.chunk)
 
-        wide = which == 3
-        if wide.any():
-            # the near-but-not-on-policy shell: the actor's own proposal, roughened
-            out[wide] = out[wide] + np.random.normal(0, 0.3, size=out[wide].shape)
+        smooth = which == 3
+        if smooth.any():
+            out[smooth] = self._smooth_chunks(pos[smooth])
         return np.clip(out, -1.0, 1.0).astype(np.float32)
+
+    def _smooth_chunks(self, pos):
+        """A random walk at demo scale, anchored at the agent -- a plausible TRAJECTORY.
+
+        Uniform over the 16-d cube is a uniform prior over target SEQUENCES, which is NOT a
+        uniform prior over behaviours: it jumps the commanded target a mean 171 px per step
+        against the demonstrations' 4 px median, so the agent slams across the table eight
+        times per chunk and scatters the block. Measured at the tightest curriculum, uniform
+        chunks solve 0/40 where demo-shaped chunks solve 3/40 -- so under a sparse reward the
+        uniform arm does not merely explore inefficiently, it destroys the near-goal states the
+        curriculum exists to create, and the top rung collects no terminals at all.
+
+        The action SPACE stays absolute, because invertibility is what makes the Q a verifier.
+        Only the exploration PRIOR over it changes. A small uniform arm is kept: Q does need to
+        learn that the absurd chunks are bad.
+        """
+        step = np.random.normal(0.0, self.smooth_scale, size=(len(pos), self.chunk, 2))
+        targets = np.clip(pos[:, None, :] + np.cumsum(step, axis=1), 0.0, WS)
+        return encode(targets, pos, mode=self.chunk_action_mode, scale=self.chunk_scale,
+                      chunk=self.chunk)
 
     def _sample_action(self, learning_starts, action_noise=None, n_envs=1):
         from gymnasium import spaces
 
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
-            unscaled = np.array([self.action_space.sample() for _ in range(n_envs)])
+            # NOT `action_space.sample()`, which SB3 uses by default: that is the uniform arm,
+            # and `learning_starts` steps of it is `learning_starts` steps of scattering the
+            # block. The actor's share is redistributed to the two structured arms, since an
+            # untrained actor has nothing to contribute yet.
+            warm = self.mix.copy()
+            warm[2:] += warm[0] / 2.0
+            warm[0] = 0.0
+            saved, self.mix = self.mix, warm / warm.sum()
+            try:
+                unscaled = self._mixture_actions(n_envs)
+            finally:
+                self.mix = saved
         else:
             unscaled = self._mixture_actions(n_envs)
         if isinstance(self.action_space, spaces.Box):

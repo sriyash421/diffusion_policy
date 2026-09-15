@@ -28,9 +28,10 @@ class CurriculumAnneal(BaseCallback):
     real start distribution, not on the curriculum's.
     """
 
-    def __init__(self, start, final, total_timesteps, frac):
+    def __init__(self, start, final, total_timesteps, frac, prob_start=None, prob_final=None):
         super().__init__()
         self.start, self.final = np.asarray(start, float), np.asarray(final, float)
+        self.prob_start, self.prob_final = prob_start, prob_final
         self.horizon = max(1.0, float(total_timesteps) * float(frac))
 
     def _on_step(self):
@@ -38,6 +39,15 @@ class CurriculumAnneal(BaseCallback):
         offset = (1 - t) * self.start + t * self.final
         self.training_env.set_attr("block_goal_offset", tuple(offset))
         self.logger.record("curriculum/block_goal_offset_pos", float(offset[0]))
+        if self.prob_start is not None:
+            # The PROBABILITY anneals too, not just the offset. Annealing the offset alone
+            # leaves only `block_near_goal_prob` of episodes anywhere near the threshold from
+            # the first step, and measured over a 50k-step run that collected ONE tau=0.95
+            # terminal in total -- the top rung had nothing to learn from. Start with most
+            # episodes near the goal and hand the distribution back as the agent improves.
+            prob = (1 - t) * self.prob_start + t * self.prob_final
+            self.training_env.set_attr("block_near_goal_prob", float(prob))
+            self.logger.record("curriculum/block_near_goal_prob", float(prob))
         return True
 
 

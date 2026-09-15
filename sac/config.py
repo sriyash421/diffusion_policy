@@ -83,10 +83,11 @@ DEFAULTS = {
     # recurrent_ppo's default and cannot produce the reward it exists to produce. [3, 0.02] ->
     # mean 0.94 and 33% above 0.95. Annealed outward over training so the final Q is on the
     # real start distribution.
-    "block_near_goal_prob": 0.15,
+    "block_near_goal_prob": 0.60,
+    "block_near_goal_prob_final": 0.10,
     "block_goal_offset": [3.0, 0.02],
     "block_goal_offset_final": [20.0, 0.15],
-    "curriculum_anneal_frac": 0.4,      # fraction of training over which the offset widens
+    "curriculum_anneal_frac": 0.7,      # fraction of training over which the offset widens
     # MUST be False here. PushTGymEnv.reset rejects any draw with coverage > 0, which is every
     # near-goal draw: it burns all 20 SPAWN_TRIES, warns, and falls through to the last draw
     # anyway. The states still arrive, but at the cost of 20 wasted resets and warning spam.
@@ -122,10 +123,16 @@ DEFAULTS = {
     # behaviour mixture for the replay buffer -- the off-distribution coverage BON needs. Q is
     # asked to rank DIFFUSION-POLICY candidates, which the actor never proposes, so a buffer
     # fed only by the actor yields a Q that is accurate exactly where it is not needed.
-    "mix_actor": 0.55,
-    "mix_uniform": 0.20,
-    "mix_demo": 0.20,
-    "mix_wide": 0.05,
+    # actor / uniform / demo-shape / smooth-random-walk. Uniform is DELIBERATELY small: in
+    # absolute coordinates a uniform chunk jumps the target ~171 px per step against the demos'
+    # 4 px median, and measured at the tightest curriculum it solves 0/40 where a demo-shaped
+    # chunk solves 3/40 -- it destroys the near-goal states the curriculum exists to create.
+    # It is kept at all because Q has to learn those chunks are bad.
+    "mix_actor": 0.40,
+    "mix_uniform": 0.10,
+    "mix_demo": 0.25,
+    "mix_smooth": 0.25,
+    "smooth_scale": 12.0,
     "demo_seed_frac": 1.0,              # fraction of the 24,208 demo chunks preloaded
     "reset_from_demos": 0.0,
     # bookkeeping
@@ -168,9 +175,10 @@ IDENTITY_KEYS = (
     "obs", "reward", "gamma", "max_episode_steps", "render_size", "keypoint_visible_rate",
     "occlusion", "occlusion_persistence", "chunk_action_mode", "chunk_scale", "tau_ladder",
     "agent_start_range", "block_start_range", "agent_near_block_prob", "agent_block_gap",
-    "block_near_goal_prob", "block_goal_offset", "block_goal_offset_final", "max_reset_coverage",
+    "block_near_goal_prob", "block_near_goal_prob_final", "block_goal_offset",
+    "block_goal_offset_final", "max_reset_coverage",
     "curriculum_anneal_frac", "block_zero_coverage", "net_arch", "n_critics",
-    "target_entropy", "mix_actor", "mix_uniform", "mix_demo", "mix_wide", "demo_seed_frac",
+    "target_entropy", "mix_actor", "mix_uniform", "mix_demo", "mix_smooth", "smooth_scale", "demo_seed_frac",
 )
 
 
