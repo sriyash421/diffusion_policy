@@ -97,7 +97,7 @@ class PushTQVerifier:
     def __init__(self, checkpoint, obs_type=None, rung=-1, device="auto", value_fn="q"):
         from recurrent_ppo.run_io import load_args
         from sac.config import DEFAULTS
-        from sac.sac import ChunkSAC
+        from sac.agent import ChunkSAC
 
         assert value_fn == "q", f"PushTQVerifier has one value, 'q'; got {value_fn!r}"
         import os
@@ -127,7 +127,7 @@ class PushTQVerifier:
         that need the subgoal (search_context in {subgoal, subgoal_value}) must keep the sim
         verifier -- see the module docstring.
         """
-        from sac.chunk_codec import encode
+        from sac.env import encode
 
         a = action.detach().cpu().numpy() if th.is_tensor(action) else np.asarray(action)
         a = a.astype(np.float64)
@@ -156,7 +156,7 @@ class PushTQVerifier:
         question it is being asked and a deployed BON should fall back to n=1 rather than rank
         on noise.
         """
-        from sac.chunk_codec import encode
+        from sac.env import encode
 
         a = action.detach().cpu().numpy() if th.is_tensor(action) else np.asarray(action)
         u = encode(a.astype(np.float64), chunk=a.shape[1]).astype(np.float32)

@@ -12,15 +12,15 @@ import numpy as np
 import pytest
 
 from recurrent_ppo.pusht_gym import PushTGymEnv
-from sac import chunk_codec as cc
-from sac.chunk_env import ChunkPushTEnv
+from sac import env as sac_env
+from sac.env import ChunkPushTEnv
 from sac.config import (CHUNK, DEFAULTS as D, DEMO_ZARR, SUCCESS_THRESHOLD,
                         TAU_LADDER, WS, gamma_base)
 
 
 @pytest.fixture(scope="module")
 def demos():
-    return cc.demo_chunks(DEMO_ZARR)
+    return sac_env.demo_chunks(DEMO_ZARR)
 
 
 # ---------------------------------------------------------------- the codec
@@ -32,10 +32,10 @@ def test_absolute_codec_expresses_every_demo_chunk_exactly(demos):
     still produces a number.
     """
     A, _ = demos
-    u = cc.encode(A)
+    u = sac_env.encode(A)
     assert u.shape == (len(A), 2 * CHUNK)
     assert (np.abs(u) <= 1.0 + 1e-9).all(), "a demo chunk falls outside the action space"
-    assert cc.assert_roundtrip(A) == 0.0
+    assert sac_env.assert_roundtrip(A) == 0.0
 
 
 def test_an_increment_chain_would_lose_a_quarter_of_the_expert_chunks(demos):
@@ -62,12 +62,12 @@ def test_codec_ignores_differences_outside_the_arena():
     p = np.array([256.0, 256.0])
     a = np.full((CHUNK, 2), 600.0)
     b = np.full((CHUNK, 2), 900.0)
-    assert np.allclose(cc.encode(a), cc.encode(b))
+    assert np.allclose(sac_env.encode(a), sac_env.encode(b))
 
 
 def test_decode_stays_inside_the_arena():
     rng = np.random.default_rng(0)
-    out = cc.decode(rng.uniform(-1, 1, size=(500, 2 * CHUNK)))
+    out = sac_env.decode(rng.uniform(-1, 1, size=(500, 2 * CHUNK)))
     assert out.shape == (500, CHUNK, 2)
     assert (out >= 0.0).all() and (out <= WS).all()
 
@@ -104,7 +104,7 @@ def test_chunk_return_equals_the_base_env_discounted_sum():
 
     chunked = ChunkPushTEnv(**kwargs)
     chunked.reset(seed=7)
-    targets = cc.decode(u)
+    targets = sac_env.decode(u)
     _, got, _, _, _ = chunked.step(u)
 
     stepwise = ChunkPushTEnv(**kwargs)
@@ -192,9 +192,9 @@ def test_the_near_goal_curriculum_actually_reaches_the_threshold():
 
 # ---------------------------------------------------------------- the agent
 def _tiny_agent(n_envs=2, **kw):
-    from sac.buffers import buffer_class_for
-    from sac.chunk_env import build_chunk_vec_env
-    from sac.sac import ChunkSAC
+    from sac.agent import buffer_class_for
+    from sac.env import build_chunk_vec_env
+    from sac.agent import ChunkSAC
 
     env = build_chunk_vec_env("keypoint", n_envs=n_envs, use_subproc=False,
                               block_zero_coverage=False, block_near_goal_prob=1.0,
@@ -273,7 +273,7 @@ def test_uniform_arm_is_uniform_and_ignores_the_observation():
 
 def test_mixture_weights_actually_route():
     """All-uniform and all-demo must not produce the same thing, or the mixture is decorative."""
-    from sac.chunk_codec import decode, demo_chunks
+    from sac.env import decode, demo_chunks
 
     A, P = demo_chunks(DEMO_ZARR, stride=64)
     agent, env = _tiny_agent()
@@ -296,7 +296,7 @@ def test_demo_arm_proposes_demo_shaped_chunks():
     """The demo arm re-anchors a recorded chunk SHAPE at the current agent position, so a push
     the expert performed in one corner is a usable proposal anywhere. Injecting the raw encoding
     instead would only ever teach Q about the places the demos happened to visit."""
-    from sac.chunk_codec import decode, demo_chunks
+    from sac.env import decode, demo_chunks
 
     A, P = demo_chunks(DEMO_ZARR, stride=64)
     agent, env = _tiny_agent()
@@ -382,8 +382,8 @@ def test_sample_chunk_pairs_each_transition_with_its_own_tau_labels():
     """
     from stable_baselines3.common.vec_env import DummyVecEnv
 
-    from sac.buffers import ChunkReplayBuffer
-    from sac.chunk_env import make_chunk_env
+    from sac.agent import ChunkReplayBuffer
+    from sac.env import make_chunk_env
 
     n_envs, n = 4, 50
     env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)] * n_envs)
@@ -465,9 +465,9 @@ def test_demo_transitions_round_trip_through_the_buffer():
     transitions use -- the demo path and the collected path must be indistinguishable."""
     from stable_baselines3.common.vec_env import DummyVecEnv
 
-    from sac.buffers import ChunkReplayBuffer, preload_demos
-    from sac.chunk_env import make_chunk_env
-    from sac.demo_buffer import demo_transitions
+    from sac.agent import ChunkReplayBuffer, preload_demos
+    from sac.env import make_chunk_env
+    from sac.env import demo_transitions
 
     env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)])
     tr = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=64)
@@ -489,7 +489,7 @@ def test_the_smooth_arm_moves_the_target_a_demo_scale_step():
     scatters the block, and the top rung silently stops collecting terminals -- the failure
     that produced ONE tau=0.95 terminal in 50k steps.
     """
-    from sac.chunk_codec import decode
+    from sac.env import decode
 
     agent, env = _tiny_agent()
     agent.learn(total_timesteps=64)
@@ -506,8 +506,8 @@ def test_curriculum_anneal_actually_moves_the_env():
     own values, and that they move monotonically from the tight end to the wide one."""
     from stable_baselines3.common.vec_env import DummyVecEnv
 
-    from sac.callbacks import CurriculumAnneal
-    from sac.chunk_env import make_chunk_env
+    from sac.runner import CurriculumAnneal
+    from sac.env import make_chunk_env
 
     env = DummyVecEnv([make_chunk_env("keypoint", block_zero_coverage=False)])
     cb = CurriculumAnneal([3.0, 0.02], [20.0, 0.15], total_timesteps=1000, frac=1.0,
@@ -545,7 +545,7 @@ def test_q_values_survive_save_and_load():
     """
     import tempfile
 
-    from sac.sac import ChunkSAC
+    from sac.agent import ChunkSAC
 
     agent, env = _tiny_agent()
     agent.learn(total_timesteps=128)
@@ -573,7 +573,7 @@ def test_score_agrees_with_the_agent_it_loaded(obs_dict):
     import torch as th
     import zarr
 
-    from sac.chunk_codec import encode
+    from sac.env import encode
     from sac.score import PushTQVerifier, obs_for_arm, state_from_obs
 
     obs, _ = obs_dict
@@ -602,9 +602,9 @@ def test_training_collects_terminals_and_keeps_q_non_degenerate():
     and Q never scores every candidate identically -- the degeneracy of the heuristic being
     replaced, restated in Q coordinates.
     """
-    from sac.buffers import buffer_class_for
-    from sac.chunk_env import build_chunk_vec_env
-    from sac.sac import ChunkSAC
+    from sac.agent import buffer_class_for
+    from sac.env import build_chunk_vec_env
+    from sac.agent import ChunkSAC
 
     env = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, block_zero_coverage=False,
                               block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])
@@ -632,7 +632,7 @@ def test_demo_rewards_encode_the_discounted_time_to_cross():
     earlier is worth strictly more, exactly as the env pays it. Every paid demo reward must
     therefore be one of the CHUNK powers of gamma_base and nothing else.
     """
-    from sac.demo_buffer import demo_transitions
+    from sac.env import demo_transitions
 
     tr = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=8, gamma=0.95)
     paid = tr["reward"][tr["done"]]
@@ -652,11 +652,11 @@ def test_q_is_higher_closer_to_the_goal():
     critic, and a unit test's budget cannot produce one. What it CAN catch is a Q whose ordering
     is backwards or flat, which is the failure that would make it useless as a verifier.
     """
-    from sac.buffers import buffer_class_for
-    from sac.chunk_env import build_chunk_vec_env
-    from sac.demo_buffer import demo_transitions
-    from sac.buffers import preload_demos
-    from sac.sac import ChunkSAC
+    from sac.agent import buffer_class_for
+    from sac.env import build_chunk_vec_env
+    from sac.env import demo_transitions
+    from sac.agent import preload_demos
+    from sac.agent import ChunkSAC
 
     env = build_chunk_vec_env("keypoint", n_envs=8, use_subproc=False, block_zero_coverage=False,
                               block_near_goal_prob=1.0, block_goal_offset=[3.0, 0.02])

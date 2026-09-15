@@ -21,31 +21,30 @@ and no assumption that "closer to the T" means "better". Whether that holds in p
 experiment.
 
 ```
-config.py        every default, and the arena facts re-exported from recurrent_ppo
-cli.py           every flag; the help text is the ARGUMENT for the value
-chunk_codec.py   between ST's absolute (8,2) chunks and Q's 16-d action. No gym/SB3 import.
-chunk_env.py     ChunkPushTEnv(PushTGymEnv): one decision = the 8 steps ST/BC execute
-demo_buffer.py   206 demonstrations -> 24k chunk transitions, per rung of the tau ladder
-buffers.py       replay buffers carrying the tau triple SB3 has no slot for
-policies.py      BONHead: the hard, max-over-candidates verifier critic
-sac.py           ChunkSAC: the behaviour mixture, and the head's update
-callbacks.py     curriculum anneal, ladder stats, the q-spread probe, fixed-set eval
-runner.py        train/play, run-directory bookkeeping (shared with recurrent_ppo)
-score.py         PushTQVerifier -- PushTVerifier's signature, backed by the learned Q
+config.py   every default, and the flag that sets it
+env.py      the task: the action codec, the chunked MDP, the demos as transitions
+agent.py    the learner: ChunkSAC, the BON verifier head, the tau-carrying buffers
+runner.py   running one: the loop, its diagnostics, and the entry point
+score.py    the deployment shim -- PushTVerifier's signature, backed by the learned Q
+eval.py     the evaluations, as subcommands
 ```
 
-`sac/` imports `recurrent_ppo.pusht_gym`, `.run_io` and `.corrupt_policy` and defines its own
-`config.py`/`cli.py`. One env definition, so the PPO and SAC arms measure the same task; but
-separate defaults, because `reward`, `gamma`, `max_episode_steps` and `block_zero_coverage` all
-mean something different here and sharing them would silently give this package the wrong task.
+Six files, one subject each. An earlier layout had eighteen, several of them holding a single
+class; the seams that survived are the ones where two halves must NOT drift -- `env.py` keeps
+the codec beside the env and the demo loader because all three define what a transition IS, and
+`agent.py` is separate from `env.py` because the learner and the task are genuinely independent.
+
+`sac/` imports `recurrent_ppo.pusht_gym`, `.run_io` and `.corrupt_policy`, and keeps its own
+defaults. One env definition, so the PPO and SAC arms measure the same task; but separate
+defaults, because `reward`, `gamma`, `max_episode_steps` and `block_zero_coverage` all mean
+something different here and sharing them would silently give this package the wrong task.
 
 ## Running
 
 ```bash
-python sac/train.py --obs keypoint
-python sac/train.py --obs image --num-envs 8
-python sac/train.py --obs keypoint --tau-ladder 0.95     # the single-head version
-python sac/play.py  --n-episodes 50
+python sac/runner.py --obs keypoint
+python sac/runner.py --obs image --num-envs 8
+python sac/runner.py --obs keypoint --tau-ladder 0.95    # the single-head version
 ```
 
 Runs land in `logs/sac/<obs>/<timestamp>/`, claimed exclusively, with `params/args.yaml`
@@ -72,9 +71,12 @@ representable exactly:
 | increment chain at 33 px (`recurrent_ppo`'s measured `delta_scale`) | **26.01%** |
 
 At the PPO default a quarter of real expert chunks could not be written down in Q's
-coordinates. `--chunk-action-mode increment` is kept because anchoring on the previous target
-makes the action a *shape* rather than a location, which buys translation equivariance -- but
-it is not the default, because it is the one that can fail to represent a candidate.
+coordinates. An increment chain anchors each target on the previous one, which makes the action
+a *shape* rather than a location and buys translation equivariance -- a real argument, and the
+reason it was implemented. It was then removed: at any scale small enough to be a useful
+exploration prior it cannot express what the expert did, and a verifier that silently clips the
+chunk it was asked about is worse than one that is merely coarse. Because absolute needs no
+anchor, `encode`/`decode` are pure per-element maps -- no agent position, no mode, no scale.
 
 Two deliberate divergences from `recurrent_ppo`, both forced by ST-compatibility: the clip is to
 the **arena** `[0, 512]`, not `AGENT_BOUNDS` (demo targets reach 511 px and the ST eval path does
@@ -252,16 +254,16 @@ its checksum validation and `splits.json` cross-check. Not seeded env resets: `r
 
 ```bash
 # 2. where the expert action a* ranks, under BOTH verifiers on the SAME decisions
-python sac/scripts/rank_expert.py -c <st_or_bc.ckpt> --q logs/sac/keypoint/<run>/model.zip
+python sac/eval.py rank-expert -c <st_or_bc.ckpt> --q logs/sac/keypoint/<run>/model.zip
 
 # 3. what the verifiers say while the arm is NOT touching the T
-python sac/scripts/value_over_episode.py -c <ckpt> --q <sac.zip> --frames 50
+python sac/eval.py frames -c <ckpt> --q <sac.zip> --frames 50
 
 # 4. the headline: best-of-N by ranker
-python sac/scripts/bon_sweep.py -c <ckpt> --q <sac.zip> --rankers q,t_goal,armTn --max-n 16
+python sac/eval.py bon-sweep -c <ckpt> --q <sac.zip> --rankers q,t_goal,armTn --max-n 16
 ```
 
-`rank_expert.py` reuses `scripts/verifier_ranks_expert.py`'s `sample_points`, `build_batch`,
+`rank-expert` reuses `scripts/verifier_ranks_expert.py`'s `sample_points`, `build_batch`,
 `classify` and `_stats` rather than reimplementing them -- including its mid-rank tie handling,
 which matters here more than anywhere: on a blind decision a* ties all n candidates, and scoring
 that with a strict `>` records the verifier's *absence of preference* as a* losing to
@@ -269,7 +271,7 @@ everything. The result is split by the existing blind/partial/informative classe
 **blind column is the headline** -- a Q that only matches the heuristic overall but ranks a*
 well where the heuristic is silent is already the win.
 
-`bon_sweep.py` monkeypatches `_score_candidates` **on the policy instance**, so nothing ST and
+`bon-sweep` monkeypatches `_score_candidates` **on the policy instance**, so nothing ST and
 BC are trained and evaluated with changes on disk and an ordinary run stays bit-for-bit what it
 was.
 
