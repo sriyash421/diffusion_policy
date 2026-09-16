@@ -519,10 +519,78 @@ SUBMIT=1 bash scripts/run_vae_nopos_30demo.sh     # ...and sbatch
 | UNet BC (the standard diffusion-policy baseline) | `train_pusht_unet_bc` | — |
 | ST k=1 | `train_pusht_diffusion_search_single` | `n_candidates=1` |
 | ST k=16 | `train_pusht_diffusion_search` | `n_candidates=16` |
+| LSTM BC (image) | `train_pusht_lstm_bc` | — |
+| LSTM BC (keypoint) | `train_pusht_lstm_bc_keypoint` | — |
 
 `n_candidates=1` is **load-bearing**: `..._single` pins the single-step *trainer*, not width
 one, and inherits `n_candidates: 16`. "BC" means the diffusion UNet and nothing else; the
 width-1 transformer is ST k=1.
+
+### The LSTM BC arms
+
+Behaviour cloning with `recurrent_ppo`'s architecture: a features extractor into
+`nn.LSTM(128, 1 layer)`, an MLP `[128,128]` with Tanh, and a Gaussian head with a
+**state-independent** `log_std` initialised to -1.0 — SB3's `DiagGaussianDistribution`, pinned
+against `recurrent_ppo.config.DEFAULTS` in `unit_tests/test_lstm_bc.py` so the two cannot drift.
+PPO's critic, value head and Q head are dropped; they have no role in BC.
+
+```bash
+python train.py --config-name=train_pusht_lstm_bc          n_demos=30 training.seed=42
+python train.py --config-name=train_pusht_lstm_bc_keypoint n_demos=30 training.seed=42
+```
+
+What is held fixed against the other arms, and why the arm exists: the **split manifest** (so
+`<run_dir>/splits.json`'s checksum matches the UNet BC run's byte for byte) and the **rollout
+set** (the manifest's 30 val + 50 test episodes, reset to their recorded initial states, 300
+steps). The image arm additionally shares the `${obs_encoder}` block, so against UNet BC only
+the architecture varies. What is **not** held fixed is the optimisation: batch size, budget and
+LR schedule are tuned for the LSTM's own best result rather than matched, because matching them
+would measure the LSTM under UNet BC's hyperparameters rather than at its best.
+
+Three things about these arms differ structurally from every other PushT arm:
+
+- **Whole episodes, not windows.** `return_sequences: True`, so one sample is one demonstration
+  (60–188 steps on the 30-demo train split) and `sampler.collate_fn` pads the batch and emits
+  the `attention_mask` the loss masks with. The train split is therefore **30 samples**, not
+  ~3,800 windows, and one batch of 8 supervises ~1,000 action chunks against UNet BC's 32 — so
+  these arms are nothing like UNet BC *per gradient step*, and `max_gradient_steps` is 20k
+  rather than 100k. `decay_then_constant` is a pure function of the step index, so extending
+  the budget (and `decay_steps` with it) resumes cleanly if val is still improving.
+  This is also why `num_epochs` is 2e6: an epoch is 4 batches here, so pusht_base's 100000
+  would bind at exactly the same point as the step budget and silently become the real limit.
+- **`task.dataset.horizon` is not the chunk length.** In sequence mode `SequenceSampler`
+  replaces it with each episode's own length; it is set to 300 only to clear the `>= 100`
+  assert. The action chunk is the **top-level** `horizon` (16), which `policy.horizon` reads.
+  Two different numbers that happen to share a name — do not "fix" one to match the other.
+- **`n_obs_steps: 8` is frames ingested per call, not a concatenation width.**
+  `MultiStepWrapper` returns the `n_action_steps` frames it just stepped and the policy ticks
+  the LSTM once per frame, so the hidden state advances once per env step exactly as it does per
+  sequence index in training. The one exception is the first call after `reset()`, which
+  `MultiStepWrapper` pads to `n_obs_steps` copies of frame 0; the policy ingests one frame
+  there. `test_rollout_state_matches_teacher_forced_state` is what pins this correspondence, and
+  it is the only thing that would catch an off-by-one — a wrong offset still trains, still rolls
+  out, and only shows up as a disappointing success rate.
+
+`verifier_tag: null` on both masters: there is no verifier, so `check_verifier_value` is turned
+off at its own documented escape hatch rather than lied to. The consequence is that the
+inherited `logging.tags` carries `verifier-None`, which is accurate. Best-of-n is undefined for
+these arms and `n_search_actions` is asserted to be 1.
+
+The keypoint arm has its own task (`task/pusht_keypoint_manifest`), dataset
+(`PushTKeypointDataset`) and runner (`PushTSearchKeypointsRunner`), all siblings of the image
+ones that reuse the same manifest helpers. It needs them because `pusht_lowdim` derives its
+split from `val_ratio` and evaluates on procedurally generated env seeds
+(`test_start_seed: 100000`) — a different set of episodes from the ones every image arm is
+scored on. Its observation is the 20-d `keypoint` + `agent_pos` vector with **no visibility
+mask**: recurrent PPO's 40-d keypoint arm carries one because it studies occlusion, but these
+arms are clean in every observation mode, so it would be 20 constant dims.
+
+One protocol note. Resetting onto a recorded state runs `PushTEnv._set_state`, which ends with
+`self.space.step(1/sim_hz)` ("Run physics to take effect"). For 184 of the 206 episodes the
+block starts at rest and the observation reproduces the zarr exactly; for the ~22 whose first
+frame has it in contact it settles by up to ~2px. **The image arms reset through the same
+`_set_state`**, so their rendered first frame carries the identical offset — it is a property of
+the shared eval protocol, not of the keypoint arm, and does not affect comparability.
 
 ### The obs-corruption ladder (`slot_obs_noise`)
 

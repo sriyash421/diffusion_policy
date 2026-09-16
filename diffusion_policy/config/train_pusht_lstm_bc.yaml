@@ -1,0 +1,145 @@
+# PushT LSTM BC (IMAGE) -- recurrent PPO's architecture, trained by behaviour cloning on the
+# UNet BC arm's data and scored on the UNet BC arm's episodes.
+#
+# The fourth offline master. Scaffolding from pusht_base; this file is the LSTM policy plus the
+# handful of keys that a non-search, whole-episode arm has to change. A child sets ONLY what it
+# changes -- restating an inherited value silently detaches it from pusht_base, which is the
+# bug class the split exists to prevent.
+#
+# WHAT IS HELD FIXED AGAINST THE OTHER ARMS, and it is the reason this arm exists:
+#   * the split manifest (${n_demos} -> splits/pusht_seed42_train30.json), so it trains on the
+#     same 30 episodes. <run_dir>/splits.json records it and its checksum must match theirs.
+#   * the rollout set: PushTSearchImageRunner on the manifest's 30 val + 50 test episodes,
+#     reset to their recorded initial states, 300 steps.
+#   * the observation: image-only, and the SHARED ${obs_encoder} block -- same ResNet18,
+#     same 76px crop, same group norm. The comparison varies the architecture, nothing else.
+# WHAT IS FREE: batch size, budget, LR schedule. This arm is tuned for its own best result
+# rather than matched to UNet BC's optimisation; see `training` below.
+defaults:
+  - pusht_base
+  - _self_
+
+name: train_pusht_lstm_bc
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+
+trainer: lstm_bc
+family_tag: lstm-bc
+
+# NO `arm:` KEY, deliberately. TrainMLPImageWorkspace._check_arm_label asserts a declared `arm`
+# against (search_context, selection) and would resolve this to the 'value' search arm. The
+# literal goes in run_name instead, exactly as train_pusht_unet_bc puts `unetbc` there.
+#
+# NO VERIFIER. check_verifier_value requires policy.verifier_value whenever verifier_tag is
+# set, and rightly so -- a run directory that claims `ver-t_goal` while the policy scores
+# nothing would be a lie. null turns the guard off at its own documented escape hatch. The
+# cost is that logging.tags (inherited, and NOT overridden -- replacing that list is how arms
+# lost their encoder labels) carries `verifier-None`, which is accurate: there is no verifier.
+verifier_tag: null
+
+# ${enc_suffix} is load-bearing for the same reason as on the UNet BC arm: without it a run on
+# a different vision backbone resolves to this directory and `training.resume: True` continues
+# it under different weights.
+run_name: lstmbc${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+logging:
+  # pusht_base's template ends in `ver-${verifier_tag}`, which reads `ver-None` here.
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+# FRAMES THE LSTM INGESTS PER CALL, not a concatenation width -- the distinction matters.
+# MultiStepWrapper returns the n_action_steps frames it just stepped, and the policy ticks the
+# LSTM once per frame so the hidden state advances once per env step, as it does per sequence
+# index in training. It must therefore be >= n_action_steps-1 (asserted in the policy), and
+# `task.env_runner.n_obs_steps` interpolates this key, so the env is sized from here.
+n_obs_steps: 8
+
+task:
+  dataset:
+    # WHOLE EPISODES: one sample per episode, variable length, padded by sampler.collate_fn
+    # which also emits the attention_mask the loss masks with. The LSTM's state then spans a
+    # whole demonstration, which is what makes it a recurrent arm rather than a 2-frame MLP.
+    return_sequences: True
+    # A FLOOR FOR AN ASSERT, NOT THE CHUNK LENGTH. In sequence mode SequenceSampler replaces
+    # it with each episode's own length (max 188 on the train split); the assert only demands
+    # >= 100. The action-chunk length is the TOP-LEVEL `horizon` (16), which policy.horizon
+    # reads -- raising this key would not lengthen the chunk, and raising that one to 300 would
+    # make the chunk head 300x2. They are different numbers that happen to share a name.
+    horizon: 300
+    # required by return_sequences: a padded window is not a whole episode
+    pad_before: 0
+    pad_after: 0
+  env_runner:
+    # pusht_base's task block has `n_search_actions: ${n_candidates}`, and n_candidates exists
+    # only in the search masters -- unresolved, it fails at instantiate. 1 is also the truth:
+    # this policy has no verifier. n_obs_steps/n_action_steps are left interpolating from the
+    # top level so the env and the policy cannot disagree.
+    n_search_actions: 1
+
+policy:
+  _target_: diffusion_policy.policy.lstm_bc_policy.LSTMBCPolicy
+  shape_meta: ${shape_meta}
+  # The SHARED block from pusht_base, not a private copy -- the ST/BC/LSTM comparison is only
+  # meaningful if all three see the same observation.
+  obs_encoder: ${obs_encoder}
+  # THE ACTION CHUNK (16), matching UNet BC's prediction horizon.
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  # recurrent PPO's, key for key (recurrent_ppo/config.py). Asserted against its DEFAULTS in
+  # unit_tests/test_lstm_bc.py so the two can never drift apart unnoticed.
+  lstm_hidden_size: 128
+  n_lstm_layers: 1
+  net_arch: [128, 128]
+  log_std_init: -1.0
+  # Policy-owned crop, one offset per EPISODE shared by all its frames. Left to the encoder,
+  # CropRandomizer draws per IMAGE -- ~130 independent shifts inside one episode at train time
+  # against a single centre crop at eval, i.e. the LSTM would learn to integrate a jittering
+  # camera and be scored on a still one. ${crop_shape} is the key the encoder reads too.
+  crop_shape: ${crop_shape}
+  random_crop: True
+
+# One episode is ~127 frames, so a batch of 8 is ~1500 ResNet forwards (~5 GB of activations)
+# and supervises ~1000 action chunks -- against UNet BC's 32 per batch. The arm is therefore
+# nothing like UNet BC per step, and its knobs are set for its own best result, not for parity.
+dataloader:
+  batch_size: 8
+  num_workers: 4
+val_dataloader:
+  batch_size: 8
+  num_workers: 4
+
+training:
+  gradient_accumulate_every: 4     # effective 32 ~= the whole 30-episode train split
+  # SAFETY BOUND ONLY -- max_gradient_steps ends the run. An epoch here is 4 batches, so one
+  # optimizer step per epoch: at pusht_base's 100000 this key would bind at exactly the same
+  # point as the step budget and silently become the real limit.
+  num_epochs: 2000000
+  # 50k, raised from 20k on 2026-09-16. The first 20k of both arms is already on disk and
+  # this budget RESUMES it in place -- every step_*.ckpt is retained (see pusht_base's
+  # `checkpoint` block), so the 20k trajectory is not reinterpreted, only continued.
+  #
+  # Read the 20k result before adding to it: val_loss bottomed at step 6000 on the image arm
+  # and rose from the very first rollout on the keypoint arm, while train_loss kept falling
+  # on both. So this is NOT the "val is still improving" case the note below describes; it
+  # buys trajectory past the turn, not a better model, and the extra 30k is expected to
+  # deepen the overfit rather than reverse it.
+  max_gradient_steps: 50000
+  lr_warmup_steps: 600
+  # DELIBERATELY NOT STRETCHED with max_gradient_steps. `decay_then_constant` is a pure
+  # function of the step index, so leaving the floor at 16k means the resumed steps continue
+  # at exactly the lr they left off at (0.1x peak) and steps 0-20k keep the schedule they
+  # were actually trained under. Raising decay_steps to re-centre the decay on 50k would
+  # instead make the lr JUMP BACK UP at the resume point and would describe steps 0-20k with
+  # a schedule that never applied to them.
+  lr_scheduler_kwargs:
+    decay_steps: 15400             # 600 + 15400 puts the lr floor at exactly 16k
+    min_lr_ratio: 0.1
+  # 10 checkpoints and 10 rollouts over the run; rollout_every_steps stays a multiple of
+  # checkpoint_every so every success number belongs to weights that were saved.
+  checkpoint_every: 2000
+  rollout_every_steps: 2000
+  val_every_steps: 500
+  # OFF. The workspace's sample block slices gt_action at [To-1 : To-1+Ta], which is the
+  # window-policy convention; against a chunk emitted from the final hidden state of a
+  # ~130-step episode that metric is shape-compatible and meaningless. Disabled rather than
+  # repaired -- val_loss and the rollout are what this arm is read on.
+  sample_every_steps: 1000000000
