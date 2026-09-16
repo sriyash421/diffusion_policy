@@ -43,12 +43,12 @@ CACHE_DIR = os.path.expanduser("~/.cache/sac_pusht")
 # rather than a location and buys translation equivariance. It was implemented, measured and
 # dropped: at any scale small enough to be a useful exploration prior it cannot express a quarter
 # of what the expert actually did, and a verifier that silently clips the chunk it was asked about
-# is worse than one that is merely coarse. `tests/test_sac.py` keeps the measurement, so that
+# is worse than one that is merely coarse. `unit_tests/test_sac.py` keeps the measurement, so that
 # number stays an executable fact rather than a claim in a comment.
 #
 # Because absolute needs no anchor, `encode` and `decode` are pure per-element maps -- no agent
 # position, no mode, no scale. The anchor the demo-shape and smooth-walk samplers use is the
-# sampler's business (see `sac/sac.py`), not the codec's.
+# sampler's business (see `sac/agent.py`), not the codec's.
 #
 # Clipping is part of the codec on BOTH sides, so `encode` is defined on `clip(a, 0, WS)`: two
 # candidates differing only outside the arena drive byte-identical trajectories and must

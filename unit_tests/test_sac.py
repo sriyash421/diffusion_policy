@@ -1,6 +1,6 @@
 """What the SAC arm must not silently break.
 
-The theme is the same as tests/test_recurrent_ppo.py: every test here guards a property that
+The theme is the same as unit_tests/test_recurrent_ppo.py: every test here guards a property that
 is invisible when it fails. A codec that cannot express a candidate, a chunk whose discount
 does not match the agent's, a reward that fires twice -- none of these raise, they just make
 the numbers mean something other than what they are labelled.

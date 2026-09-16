@@ -84,8 +84,8 @@ policy:
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
-  # recurrent PPO's, key for key (recurrent_ppo/config.py). Asserted against its DEFAULTS in
-  # unit_tests/test_lstm_bc.py so the two can never drift apart unnoticed.
+  # recurrent PPO's, key for key: these four must equal `recurrent_ppo.config.DEFAULTS`, which
+  # is the source of truth. Change them there first, or the two arms stop being comparable.
   lstm_hidden_size: 128
   n_lstm_layers: 1
   net_arch: [128, 128]

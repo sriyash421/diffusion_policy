@@ -3,10 +3,10 @@
 THE POINT OF THIS ARM. The repo has a recurrent policy (`recurrent_ppo`, sb3-contrib's
 RecurrentPPO) and an offline one (the UNet BC arm), and no overlap: nothing measures what
 recurrence buys when the data is fixed demonstrations rather than on-policy rollouts. So the
-architecture here is PPO's, pinned key for key against `recurrent_ppo.config.DEFAULTS`
-(asserted in unit_tests/test_lstm_bc.py), while the data, the split manifest and the rollout
-episodes are the UNet BC arm's. What varies between this arm and UNet BC is the architecture;
-what varies between this arm and the PPO LSTM is the learning signal.
+architecture here is PPO's, pinned key for key against `recurrent_ppo.config.DEFAULTS` -- that
+module is the source of truth for every one of these values -- while the data, the split
+manifest and the rollout episodes are the UNet BC arm's. What varies between this arm and UNet
+BC is the architecture; what varies between this arm and the PPO LSTM is the learning signal.
 
 WHAT IS PPO'S AND WHAT IS NOT:
 

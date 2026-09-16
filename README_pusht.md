@@ -531,7 +531,7 @@ width-1 transformer is ST k=1.
 Behaviour cloning with `recurrent_ppo`'s architecture: a features extractor into
 `nn.LSTM(128, 1 layer)`, an MLP `[128,128]` with Tanh, and a Gaussian head with a
 **state-independent** `log_std` initialised to -1.0 — SB3's `DiagGaussianDistribution`, pinned
-against `recurrent_ppo.config.DEFAULTS` in `unit_tests/test_lstm_bc.py` so the two cannot drift.
+key for key against `recurrent_ppo.config.DEFAULTS`, which is the source of truth for all four.
 PPO's critic, value head and Q head are dropped; they have no role in BC.
 
 ```bash
