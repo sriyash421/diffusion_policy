@@ -1,0 +1,71 @@
+# PushT KEYPOINT observations, partitioned by the split MANIFEST.
+#
+# The distinction from `pusht_lowdim` is the whole reason this file exists, and it is in the
+# name: pusht_lowdim derives its split from `val_ratio: 0.02` + `max_train_episodes: 90` and
+# evaluates on procedurally generated env seeds (`test_start_seed: 100000`), so its episodes are
+# a different set from the ones every image arm is measured on. This task reads the SAME
+# manifest the image task reads and resets to the SAME recorded episode initial states, so a
+# keypoint number can be put beside a UNet BC number.
+#
+# `task_name` is a hydra.run.dir component, so runs from here land under
+# .../pusht_keypoint_manifest/ and cannot collide with the image tree.
+name: pusht_keypoint_manifest
+
+# 9 block-T keypoints + agent xy = 20 after FlattenObsEncoder. NO visibility mask: recurrent
+# PPO's 40-d keypoint arm carries one because it studies occlusion, but the demonstrations are
+# fully visible, so on a BC arm those 20 dims would be a constant +1. This arm is clean in
+# every observation mode.
+shape_meta:
+  obs:
+    keypoint:
+      shape: [9, 2]
+      type: low_dim
+    agent_pos:
+      shape: [2]
+      type: low_dim
+  action:
+    shape: [2]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.pusht_search_keypoints_runner.PushTSearchKeypointsRunner
+  # rollouts reset to the initial states of the held-out val + test episodes.
+  # zarr_path/seed/n_*_episodes/split_file all interpolate from task.dataset so the rollout
+  # split provably cannot drift from the training split.
+  zarr_path: ${task.dataset.zarr_path}
+  seed: ${task.dataset.seed}
+  n_test_episodes: ${task.dataset.n_test_episodes}
+  n_val_episodes: ${task.dataset.n_val_episodes}
+  n_train_episodes: ${task.dataset.n_train_episodes}
+  split_file: ${task.dataset.split_file}
+  # first 5 episodes per split are tiled into a side-by-side eval video
+  n_vis: 5
+  # no verifier on this arm, so there is nothing to search over
+  n_search_actions: 1
+  # must be False to reset exactly onto recorded states
+  legacy: False
+  max_steps: 300
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  # 1.0 and False: the observation the dataset emits has no mask channel and no agent
+  # keypoints, so the env must not produce them either.
+  keypoint_visible_rate: ${keypoint_visible_rate}
+  agent_keypoints: False
+  fps: 10
+  past_action: ${past_action_visible}
+  n_envs: null
+
+dataset:
+  _target_: diffusion_policy.dataset.pusht_keypoint_dataset.PushTKeypointDataset
+  zarr_path: data/pusht_cchi_v7_replay.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  # THE SAME MANIFEST THE IMAGE ARMS READ, selected by the same top-level n_demos, so the
+  # budget, the manifest and the run directory can never disagree. The dataset raises without
+  # it; the counts below are VALIDATED against it and generate nothing.
+  split_file: diffusion_policy/config/splits/pusht_seed42_train${n_demos}.json
+  n_test_episodes: 50
+  n_val_episodes: 30
+  n_train_episodes: ${n_demos}
+  split: train
