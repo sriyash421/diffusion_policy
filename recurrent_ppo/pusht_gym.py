@@ -14,7 +14,9 @@ Three observation variants:
     state     PushTEnv's own observation -- agent xy, block xy, block angle -- with the
               angle as (cos, sin) rather than a scalar. 6 numbers. The smallest sufficient
               description of the task; see _convert_obs for why the angle is split.
-    image     PushTImageEnv's {image (3, 96, 96), agent_pos (2)}.
+    image     PushTImageEnv's rendered frame alone, {image (3, 96, 96)}. IMAGE ONLY: agent_pos
+              is not in it, matching task/pusht_image_search_imgonly.yaml, so this arm and
+              the diffusion-policy arms see the same observation.
 
 EVERYTHING THE POLICY SEES IS IN [-1, 1]. Positions are scaled against the arena's known
 bounds, the visibility mask is mapped to {-1, +1} rather than left at {0, 1}, and the image
@@ -134,9 +136,14 @@ class PushTGymEnv(gymnasium.Env):
             self.observation_space = spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
         else:
             self.env = PushTImageEnv(legacy=legacy, render_size=render_size)
+            # IMAGE ONLY -- agent_pos is deliberately absent. PushTImageEnv emits it and the
+            # arm used to concatenate it onto the encoder's 512 features, which made this a
+            # strictly stronger observation than the one every diffusion-policy PushT arm
+            # sees (task/pusht_image_search_imgonly.yaml is image-only by construction) and
+            # so made the two families' success rates non-comparable. Still a Dict rather
+            # than a bare Box because AugmentationDraw always adds `aug_crop` here.
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(0, 255, shape=(3, render_size, render_size), dtype=np.uint8),
-                "agent_pos": spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32),
             })
 
         self.action_space = spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
@@ -389,9 +396,9 @@ class PushTGymEnv(gymnasium.Env):
                                    np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)])
         return {
             # PushTImageEnv hands back float32 in [0, 1]; SB3 normalises uint8 itself and the
-            # rollout buffer is 4x smaller for it.
+            # rollout buffer is 4x smaller for it. `agent_pos` is dropped rather than
+            # normalised -- see the observation space above.
             "image": (obs["image"] * 255).astype(np.uint8),
-            "agent_pos": self._normalise(obs["agent_pos"]),
         }
 
     @staticmethod

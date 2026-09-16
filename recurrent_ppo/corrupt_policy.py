@@ -96,6 +96,8 @@ def _widen_conv1(resnet, in_channels):
 class STResNetExtractor(BaseFeaturesExtractor):
     """ST's image encoder: ResNet18 / IMAGENET1K_V1 / GroupNorm / 76px crop, trained end to end.
 
+    IMAGE ONLY, 512-d: see __init__.
+
     Matches `obs_encoder` in diffusion_policy/config/pusht_base.yaml rather than SB3's
     NatureCNN, so the image arm learns from the same representation the diffusion-policy
     arms do. Not the frozen SD VAE: that
@@ -105,7 +107,11 @@ class STResNetExtractor(BaseFeaturesExtractor):
 
     def __init__(self, observation_space, crop=ST_CROP, use_group_norm=True):
         image_space = observation_space["image"]
-        super().__init__(observation_space, features_dim=512 + observation_space["agent_pos"].shape[0])
+        # 512, the ResNet's own width: IMAGE ONLY. agent_pos used to be concatenated here,
+        # which handed this arm the arm's exact position in closed form -- a strictly stronger
+        # observation than task/pusht_image_search_imgonly.yaml gives the diffusion-policy
+        # arms, and enough to make the two families' numbers non-comparable.
+        super().__init__(observation_space, features_dim=512)
         # the crop offset arrives with the observation when AugmentationDraw is in the stack
         self.replay_crop = AUG_CROP_KEY in observation_space.spaces
         resnet = get_resnet("resnet18", weights="IMAGENET1K_V1")
@@ -155,7 +161,7 @@ class STResNetExtractor(BaseFeaturesExtractor):
     def forward(self, obs):
         # SB3 has already divided the uint8 image by 255; ST's normalizer then maps [0,1] -> [-1,1]
         img = obs["image"] * 2.0 - 1.0
-        return th.cat([self.resnet(self._crop(img, obs)), obs["agent_pos"]], dim=-1)
+        return self.resnet(self._crop(img, obs))
 
 
 class KeypointExtractor(BaseFeaturesExtractor):
@@ -369,11 +375,12 @@ def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T
         # The draw is applied AFTER frame stacking, so it has to match the width the extractor
         # actually produces from a stacked observation -- and the two arms widen differently.
         # A flat observation is concatenated whole, so its width scales with the stack. The
-        # image arm does NOT: VecFrameStack stacks the frames on the CHANNEL axis, the ResNet
-        # consumes all of them and still emits 512, and only agent_pos is concatenated. Scaling
-        # the image arm by n_stack gave a 2056-wide noise for a 520-wide feature.
+        # image arm does NOT scale at all: VecFrameStack stacks the frames on the CHANNEL axis,
+        # the ResNet consumes all of them and still emits 512, and since the arm went image-only
+        # there is nothing concatenated alongside. Scaling it by n_stack gave a 2048-wide noise
+        # for a 512-wide feature.
         stack = max(1, n_stack)
-        aug["feature_dim"] = (512 + 2 * stack) if obs_type == "image" else OBS_DIMS[obs_type] * stack
+        aug["feature_dim"] = 512 if obs_type == "image" else OBS_DIMS[obs_type] * stack
         # a target SNR pins ONE level; without it the level is drawn from U[0, t_max)
         t = snr_to_timestep(snr) if snr is not None else None
         aug["t_min"], aug["t_max"] = (t, t + 1) if t is not None else (0, t_max)

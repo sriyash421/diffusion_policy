@@ -555,16 +555,17 @@ def test_the_scheduler_still_matches_the_config_it_copies():
 @pytest.mark.parametrize("obs_type,n_stack,expected", [
     ("state", 1, 6), ("state", 4, 24),
     ("keypoint", 1, 40), ("keypoint", 4, 160),
-    ("image", 1, 514), ("image", 4, 520),
+    ("image", 1, 512), ("image", 4, 512),
 ])
 def test_the_draw_is_as_wide_as_the_features_it_corrupts(obs_type, n_stack, expected):
     """The noise vector must match what the extractor produces from a STACKED observation.
 
     The two arms widen differently and it is easy to get wrong: a flat observation is
-    concatenated whole, so n_stack scales it, but the image arm stacks on the channel axis --
-    the ResNet still emits 512 and only agent_pos grows. Computing the image width as
-    (512 + 2) * n_stack gave a 2056-wide draw for a 520-wide feature, which crashes at the
-    first forward, i.e. only once a run is already on a GPU.
+    concatenated whole, so n_stack scales it, but the image arm does not widen AT ALL --
+    VecFrameStack stacks on the channel axis, the ResNet consumes all of the frames and still
+    emits 512, and since the arm went image-only there is nothing concatenated alongside.
+    Scaling the image arm by n_stack gave a 2048-wide draw for a 512-wide feature, which
+    crashes at the first forward, i.e. only once a run is already on a GPU.
     """
     from recurrent_ppo.arch import ARCHS
     from recurrent_ppo.config import DEFAULTS
@@ -720,3 +721,37 @@ def test_the_image_arm_is_scored_on_its_stored_crop_in_both_modes(mode):
     # a different stored offset must give a different crop -- i.e. the offset is really read
     other = dict(obs, **{AUG_CROP_KEY: th.tensor([[0.0, 0.0]])})
     assert not th.equal(extractor._crop(img, other), got)
+
+
+# ------------------------------------------------------------------ the image arm is image only
+def test_the_image_arm_observation_carries_no_agent_pos():
+    """agent_pos is absent from the image arm, in all three places that used to encode its width.
+
+    Keeping it made this a 514-d observation: the ResNet's 512 features plus the arm's exact
+    position in closed form. `task/pusht_image_search_imgonly.yaml` forbids exactly that for the
+    diffusion-policy arms -- they assert no low_dim key is declared, because handing the policy
+    the pose analytically is a strictly stronger observation than the standard PushT-image
+    setup. An RL arm with the privilege could not be compared against an offline arm without it,
+    which defeats the point of mirroring ST's encoder in the first place.
+    """
+    from recurrent_ppo.config import DEFAULTS
+    from recurrent_ppo.pusht_gym import PushTGymEnv
+
+    env = PushTGymEnv(obs_type="image", render_size=96)
+    try:
+        assert set(env.observation_space.spaces) == {"image"}, \
+            f"image arm observation space is {sorted(env.observation_space.spaces)}"
+        obs, _ = env.reset(seed=0)
+        assert set(obs) == {"image"}, f"_convert_obs emitted {sorted(obs)}"
+        assert obs["image"].dtype == np.uint8
+    finally:
+        env.close()
+
+    # the extractor's width, and the noise drawn to match it, agree at every stack depth
+    kw = features_extractor_kwargs("image", False)
+    ext = kw["features_extractor_class"](env.observation_space,
+                                        **kw["features_extractor_kwargs"])
+    assert ext.features_dim == 512
+    for n_stack in (1, DEFAULTS["n_stack"]):
+        aug = aug_for("image", True, render_size=96, n_stack=n_stack, snr=1.92)
+        assert aug["feature_dim"] == 512, f"n_stack={n_stack}"

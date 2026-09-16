@@ -107,7 +107,7 @@ there for a legible video.
 |---|---|---|
 | `keypoint` (default) | 9 block-T keypoints + agent xy, then their visibility mask as {-1,+1} | 40 |
 | `state` | agent xy, block xy, block angle as (cos, sin) | 6 |
-| `image` | `{image (3,96,96) uint8, agent_pos (2)}` | dict |
+| `image` | `{image (3,96,96) uint8}` -- **image only**, see below | dict |
 
 `state` is `PushTEnv`'s own `_get_obs` with one change: the angle arrives as `block.angle % 2*pi`,
 so a scalar encoding breaks at the wrap -- 0.01 and 6.27 rad are the same pose but land at
@@ -119,6 +119,22 @@ lowdim task uses them.
 Occlusion (`--keypoint-visible-rate`, `--occlusion`) applies to the **keypoint arm only** -- it
 is defined per keypoint, and there is no corresponding notion for a 6-d pose. The DDPM
 corruption (`--corrupt-obs`) applies to all three, since it acts on the encoded features.
+
+### The image arm is image only
+
+`agent_pos` used to be concatenated onto the encoder's 512 features, making the image arm
+514-d. It is gone. `task/pusht_image_search_imgonly.yaml` is image-only *by construction* --
+the diffusion-policy arms assert that no low_dim key is declared, because `feedback` is an
+invertible transform of the block pose and handing the policy the T's pose in closed form is a
+strictly stronger observation than the standard PushT-image setup. Keeping `agent_pos` here
+gave the RL arms a privilege the offline arms are forbidden, so the two families' success rates
+could not be compared -- which is the only reason `STResNetExtractor` mirrors that encoder at
+all. Three places encoded the old width and all three changed together:
+`PushTGymEnv.observation_space`, `_convert_obs`, and `aug_for`'s `feature_dim` (now a flat 512
+at every `--n-stack`, since VecFrameStack widens the ResNet's *input* channels and not its
+output). The `logs/grid/*_image_*` runs predate this and are superseded; they had no saved
+checkpoints.
+
 
 ## The reward, and why termination is tied to it
 
