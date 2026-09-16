@@ -123,7 +123,7 @@ DEFAULTS = {
     # bookkeeping
     "wandb": False,
     "wandb_entity": "l2sml",
-    "wandb_project": "sac_pusht",
+    "wandb_project": "sac",
     "wandb_group": None,
     "wandb_tags": [],
     "log_dir": None,

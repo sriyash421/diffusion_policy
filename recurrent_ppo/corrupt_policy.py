@@ -73,7 +73,16 @@ class STResNetExtractor(BaseFeaturesExtractor):
 
     def __init__(self, observation_space, crop=ST_CROP, use_group_norm=True):
         image_space = observation_space["image"]
-        super().__init__(observation_space, features_dim=512 + observation_space["agent_pos"].shape[0])
+        # VecFrameStack concatenates the stack on the CHANNEL axis, so a 4-stack arrives as
+        # (B, 12, H, W) and this pretrained conv1 takes 3. Encode per frame through the one
+        # shared encoder instead, exactly as ST does for its n_obs_steps
+        # (diffusion_unet_hybrid_image_policy.py:239 reshapes (B, To, C, H, W) to (B*To, C, H, W),
+        # runs the shared encoder once, and concatenates: global_cond_dim = obs_feature_dim * To).
+        channels = image_space.shape[0]
+        assert channels % 3 == 0, f"image channels {channels} is not a multiple of 3 (RGB)"
+        self.n_frames = channels // 3
+        super().__init__(observation_space,
+                         features_dim=512 * (channels // 3) + observation_space["agent_pos"].shape[0])
         # the crop offset arrives with the observation when AugmentationDraw is in the stack
         self.replay_crop = AUG_CROP_KEY in observation_space.spaces
         resnet = get_resnet("resnet18", weights="IMAGENET1K_V1")
@@ -86,8 +95,9 @@ class STResNetExtractor(BaseFeaturesExtractor):
         self.resnet = resnet
         # CropRandomizer already switches on self.training itself (random crop in train, centre
         # crop in eval), so there is no ternary here; what we override is WHICH random crop.
-        self.cropper = CropRandomizer(input_shape=image_space.shape, crop_height=crop,
-                                      crop_width=crop, num_crops=1, pos_enc=False)
+        # the cropper sees ONE frame at a time, so its input shape is 3 channels, not 3*n
+        self.cropper = CropRandomizer(input_shape=(3,) + tuple(image_space.shape[1:]),
+                                      crop_height=crop, crop_width=crop, num_crops=1, pos_enc=False)
         self.centre_crop = torchvision.transforms.CenterCrop(size=(crop, crop))
 
     def _crop(self, img, obs):
@@ -99,7 +109,11 @@ class STResNetExtractor(BaseFeaturesExtractor):
         """
         if not self.replay_crop:
             return self.cropper(img)
-        offsets = obs[AUG_CROP_KEY].long()
+        # ONE offset per transition, shared by every frame of the stack. The draw is per
+        # stacked observation (VecAugmentationDraw sits outside arch.wrap and stores a single
+        # (2,) offset), so repeating it is what keeps the replay exact: a per-frame offset would
+        # need the draw itself to widen to (n_frames, 2), changing the observation space.
+        offsets = obs[AUG_CROP_KEY].long().repeat_interleave(self.n_frames, dim=0)
         # _forced_offsets is CropRandomizer's own extension point for exactly this
         self.cropper._forced_offsets = offsets
         try:
@@ -110,7 +124,11 @@ class STResNetExtractor(BaseFeaturesExtractor):
     def forward(self, obs):
         # SB3 has already divided the uint8 image by 255; ST's normalizer then maps [0,1] -> [-1,1]
         img = obs["image"] * 2.0 - 1.0
-        return th.cat([self.resnet(self._crop(img, obs)), obs["agent_pos"]], dim=-1)
+        batch = img.shape[0]
+        # (B, 3*n, H, W) -> (B*n, 3, H, W); the stack is oldest-first and reshape preserves it
+        img = img.reshape(batch * self.n_frames, 3, *img.shape[-2:])
+        features = self.resnet(self._crop(img, obs)).reshape(batch, 512 * self.n_frames)
+        return th.cat([features, obs["agent_pos"]], dim=-1)
 
 
 class KeypointExtractor(BaseFeaturesExtractor):
@@ -255,27 +273,64 @@ class _FeedForwardQHeadMixin(_QHeadMixin):
         return self.q_values(data.observations, data.actions), data.returns
 
 
+def carries_pretrained_weights(policy_kwargs):
+    """Does this policy's features extractor hold weights that must NOT be re-initialised?
+
+    Keyed on the EXTRACTOR, not on the policy class: corruption makes the keypoint arm
+    Dict-spaced too, so `MultiInput` does not mean `image`, and the keypoint arm has no
+    pretrained weights to protect. `CorruptingExtractor` wraps the real one, so its
+    `inner_class` is checked as well.
+    """
+    if policy_kwargs.get("features_extractor_class") is STResNetExtractor:
+        return True
+    inner = (policy_kwargs.get("features_extractor_kwargs") or {}).get("inner_class")
+    return inner is STResNetExtractor
+
+
+def _protect_pretrained(kwargs):
+    """Turn SB3's orthogonal init off when the extractor is the pretrained ResNet.
+
+    SB3 applies orthogonal init to the WHOLE features extractor. Over ResNet18/IMAGENET1K_V1
+    that is destructive and slow in two separate ways, both measured:
+
+      * conv1 does not survive it -- |w| 0.0762 -> 0.0936 -- so the image arm would train from
+        orthogonal noise rather than the pretrained encoder that is the only reason it matches
+        ST's.
+      * `torch.nn.init.orthogonal_` runs a QR per layer and DEADLOCKS under multi-threaded BLAS.
+        Policy construction takes 0.40s at one thread and has not returned after 120s at eight
+        or at twenty-four. It is the reason `test_evaluate_actions_reproduces_the_collected_log_prob`
+        could not run at all above one thread.
+
+    This lives on the policy rather than in `arch._shared_policy_kwargs` so that it travels with
+    the CLASS: anything constructing a policy directly -- the tests, a notebook, a future caller
+    -- is covered, not just the training path. An explicit `ortho_init` from the caller still wins.
+    """
+    if "ortho_init" not in kwargs and carries_pretrained_weights(kwargs):
+        kwargs["ortho_init"] = False
+    return kwargs
+
+
 class QHeadRecurrentPolicy(_RecurrentQHeadMixin, RecurrentActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadRecurrentMultiInputPolicy(_RecurrentQHeadMixin, RecurrentMultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadPolicy(_FeedForwardQHeadMixin, ActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadMultiInputPolicy(_FeedForwardQHeadMixin, MultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
