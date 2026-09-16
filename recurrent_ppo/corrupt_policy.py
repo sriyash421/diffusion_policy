@@ -51,7 +51,7 @@ DEFAULT_T_MAX = 200
 ST_CROP = 76
 # 9 block keypoints x2 + agent xy, then the same again as a visibility mask
 # flat observation widths, by arm; the image arm's is its encoder's output instead
-OBS_DIMS = {"keypoint": 40, "state": 6}        # crop_shape in diffusion_policy/config/pusht_base.yaml
+OBS_DIMS = {"keypoint": 40, "state": 6, "image": 512}   # 512 is the ResNet's own width, per frame
 
 
 def snr_to_timestep(snr):
@@ -71,32 +71,10 @@ def make_obs_noise_scheduler():
                          beta_schedule="linear", prediction_type="epsilon")
 
 
-def _widen_conv1(resnet, in_channels):
-    """Let the pretrained stem read a stack of frames, not just one.
-
-    VecFrameStack concatenates frames on the channel axis, so `--n-stack 4` hands the encoder
-    12 channels and resnet18's 3-channel conv1 rejects them. The pretrained filters are worth
-    keeping, so conv1 is rebuilt at the new width and its weights TILED across the stack and
-    divided by the repeat count. That makes the stem's response to a static scene -- every
-    frame identical, which is what the first steps of an episode and any motionless moment
-    look like -- exactly what the 3-channel net would have produced.
-    """
-    old = resnet.conv1
-    reps, remainder = divmod(in_channels, old.in_channels)
-    assert remainder == 0, f"{in_channels} channels is not a whole number of {old.in_channels}-channel frames"
-    conv = nn.Conv2d(in_channels, old.out_channels, kernel_size=old.kernel_size,
-                     stride=old.stride, padding=old.padding, bias=old.bias is not None)
-    with th.no_grad():
-        conv.weight.copy_(old.weight.repeat(1, reps, 1, 1) / reps)
-        if old.bias is not None:
-            conv.bias.copy_(old.bias)
-    resnet.conv1 = conv
-
-
 class STResNetExtractor(BaseFeaturesExtractor):
     """ST's image encoder: ResNet18 / IMAGENET1K_V1 / GroupNorm / 76px crop, trained end to end.
 
-    IMAGE ONLY, 512-d: see __init__.
+    IMAGE ONLY, 512-d per stacked frame: see __init__.
 
     Matches `obs_encoder` in diffusion_policy/config/pusht_base.yaml rather than SB3's
     NatureCNN, so the image arm learns from the same representation the diffusion-policy
@@ -107,11 +85,19 @@ class STResNetExtractor(BaseFeaturesExtractor):
 
     def __init__(self, observation_space, crop=ST_CROP, use_group_norm=True):
         image_space = observation_space["image"]
-        # 512, the ResNet's own width: IMAGE ONLY. agent_pos used to be concatenated here,
-        # which handed this arm the arm's exact position in closed form -- a strictly stronger
-        # observation than task/pusht_image_search_imgonly.yaml gives the diffusion-policy
-        # arms, and enough to make the two families' numbers non-comparable.
-        super().__init__(observation_space, features_dim=512)
+        # VecFrameStack concatenates the stack on the CHANNEL axis, so a 4-stack arrives as
+        # (B, 12, H, W) and this pretrained conv1 takes 3. Encode per frame through the one
+        # shared encoder instead, exactly as ST does for its n_obs_steps
+        # (diffusion_unet_hybrid_image_policy.py:239 reshapes (B, To, C, H, W) to (B*To, C, H, W),
+        # runs the shared encoder once, and concatenates: global_cond_dim = obs_feature_dim * To).
+        channels = image_space.shape[0]
+        assert channels % 3 == 0, f"image channels {channels} is not a multiple of 3 (RGB)"
+        self.n_frames = channels // 3
+        # 512 per frame, the ResNet's own width: IMAGE ONLY. agent_pos used to be concatenated
+        # here, which handed this arm the arm's exact position in closed form -- a strictly
+        # stronger observation than task/pusht_image_search_imgonly.yaml gives the
+        # diffusion-policy arms, and enough to make the two families' numbers non-comparable.
+        super().__init__(observation_space, features_dim=512 * self.n_frames)
         # the crop offset arrives with the observation when AugmentationDraw is in the stack
         self.replay_crop = AUG_CROP_KEY in observation_space.spaces
         resnet = get_resnet("resnet18", weights="IMAGENET1K_V1")
@@ -121,15 +107,14 @@ class STResNetExtractor(BaseFeaturesExtractor):
                 root_module=resnet,
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features))
-        if image_space.shape[0] != 3:
-            _widen_conv1(resnet, image_space.shape[0])
         self.resnet = resnet
         # CropRandomizer switches on self.training by itself -- random crop in train, CENTRE crop
         # in eval. We override that in both directions: `_crop` pins the stored offset whenever
         # the observation carries one, which it always does on this arm. So this policy is
         # evaluated on a random crop, deliberately. See _crop.
-        self.cropper = CropRandomizer(input_shape=image_space.shape, crop_height=crop,
-                                      crop_width=crop, num_crops=1, pos_enc=False)
+        # the cropper sees ONE frame at a time, so its input shape is 3 channels, not 3*n
+        self.cropper = CropRandomizer(input_shape=(3,) + tuple(image_space.shape[1:]),
+                                      crop_height=crop, crop_width=crop, num_crops=1, pos_enc=False)
 
     def _crop(self, img, obs):
         """The stored crop if the observation carries one, else CropRandomizer's own choice.
@@ -150,7 +135,11 @@ class STResNetExtractor(BaseFeaturesExtractor):
         """
         if not self.replay_crop:
             return self.cropper(img)
-        offsets = obs[AUG_CROP_KEY].long()
+        # ONE offset per transition, shared by every frame of the stack. The draw is per
+        # stacked observation (VecAugmentationDraw sits outside arch.wrap and stores a single
+        # (2,) offset), so repeating it is what keeps the replay exact: a per-frame offset would
+        # need the draw itself to widen to (n_frames, 2), changing the observation space.
+        offsets = obs[AUG_CROP_KEY].long().repeat_interleave(self.n_frames, dim=0)
         # _forced_offsets is CropRandomizer's own extension point for exactly this
         self.cropper._forced_offsets = offsets
         try:
@@ -161,7 +150,10 @@ class STResNetExtractor(BaseFeaturesExtractor):
     def forward(self, obs):
         # SB3 has already divided the uint8 image by 255; ST's normalizer then maps [0,1] -> [-1,1]
         img = obs["image"] * 2.0 - 1.0
-        return self.resnet(self._crop(img, obs))
+        batch = img.shape[0]
+        # (B, 3*n, H, W) -> (B*n, 3, H, W); the stack is oldest-first and reshape preserves it
+        img = img.reshape(batch * self.n_frames, 3, *img.shape[-2:])
+        return self.resnet(self._crop(img, obs)).reshape(batch, 512 * self.n_frames)
 
 
 class KeypointExtractor(BaseFeaturesExtractor):
@@ -312,27 +304,64 @@ class _FeedForwardQHeadMixin(_QHeadMixin):
         return self.q_values(data.observations, data.actions), data.returns
 
 
+def carries_pretrained_weights(policy_kwargs):
+    """Does this policy's features extractor hold weights that must NOT be re-initialised?
+
+    Keyed on the EXTRACTOR, not on the policy class: corruption makes the keypoint arm
+    Dict-spaced too, so `MultiInput` does not mean `image`, and the keypoint arm has no
+    pretrained weights to protect. `CorruptingExtractor` wraps the real one, so its
+    `inner_class` is checked as well.
+    """
+    if policy_kwargs.get("features_extractor_class") is STResNetExtractor:
+        return True
+    inner = (policy_kwargs.get("features_extractor_kwargs") or {}).get("inner_class")
+    return inner is STResNetExtractor
+
+
+def _protect_pretrained(kwargs):
+    """Turn SB3's orthogonal init off when the extractor is the pretrained ResNet.
+
+    SB3 applies orthogonal init to the WHOLE features extractor. Over ResNet18/IMAGENET1K_V1
+    that is destructive and slow in two separate ways, both measured:
+
+      * conv1 does not survive it -- |w| 0.0762 -> 0.0936 -- so the image arm would train from
+        orthogonal noise rather than the pretrained encoder that is the only reason it matches
+        ST's.
+      * `torch.nn.init.orthogonal_` runs a QR per layer and DEADLOCKS under multi-threaded BLAS.
+        Policy construction takes 0.40s at one thread and has not returned after 120s at eight
+        or at twenty-four. It is the reason `test_evaluate_actions_reproduces_the_collected_log_prob`
+        could not run at all above one thread.
+
+    This lives on the policy rather than in `arch._shared_policy_kwargs` so that it travels with
+    the CLASS: anything constructing a policy directly -- the tests, a notebook, a future caller
+    -- is covered, not just the training path. An explicit `ortho_init` from the caller still wins.
+    """
+    if "ortho_init" not in kwargs and carries_pretrained_weights(kwargs):
+        kwargs["ortho_init"] = False
+    return kwargs
+
+
 class QHeadRecurrentPolicy(_RecurrentQHeadMixin, RecurrentActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadRecurrentMultiInputPolicy(_RecurrentQHeadMixin, RecurrentMultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadPolicy(_FeedForwardQHeadMixin, ActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
 class QHeadMultiInputPolicy(_FeedForwardQHeadMixin, MultiInputActorCriticPolicy):
     def __init__(self, *args, q_net_arch=(128, 128), q_lr=1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **_protect_pretrained(kwargs))
         self._build_q_head(q_net_arch, q_lr)
 
 
@@ -373,14 +402,11 @@ def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T
     aug = {}
     if corrupt_obs:
         # The draw is applied AFTER frame stacking, so it has to match the width the extractor
-        # actually produces from a stacked observation -- and the two arms widen differently.
-        # A flat observation is concatenated whole, so its width scales with the stack. The
-        # image arm does NOT scale at all: VecFrameStack stacks the frames on the CHANNEL axis,
-        # the ResNet consumes all of them and still emits 512, and since the arm went image-only
-        # there is nothing concatenated alongside. Scaling it by n_stack gave a 2048-wide noise
-        # for a 512-wide feature.
-        stack = max(1, n_stack)
-        aug["feature_dim"] = 512 if obs_type == "image" else OBS_DIMS[obs_type] * stack
+        # actually produces from a stacked observation. Every arm scales with the stack: a flat
+        # observation is concatenated whole, and the image arm encodes each frame through the
+        # one shared ResNet and concatenates the 512-d results. Since that arm went image-only,
+        # there is nothing concatenated alongside.
+        aug["feature_dim"] = OBS_DIMS[obs_type] * max(1, n_stack)
         # a target SNR pins ONE level; without it the level is drawn from U[0, t_max)
         t = snr_to_timestep(snr) if snr is not None else None
         aug["t_min"], aug["t_max"] = (t, t + 1) if t is not None else (0, t_max)

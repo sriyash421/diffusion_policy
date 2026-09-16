@@ -46,6 +46,15 @@ representational one. `--n-stack 1` is therefore the honest plain-PPO baseline, 
 architecture comparison only becomes meaningful once `--keypoint-visible-rate` or
 `--corrupt-obs` is on.
 
+On the image arm the stack is encoded frame by frame, not all at once: `VecFrameStack`
+concatenates on the CHANNEL axis, so a 4-stack arrives as `(B, 12, H, W)` and resnet18's
+pretrained `conv1` takes 3. `STResNetExtractor` reshapes to `(B*4, 3, H, W)`, runs the ONE
+shared encoder, and concatenates the 512-d results, exactly as ST handles its `n_obs_steps`.
+Widening `conv1` to 12 channels instead would discard the pretrained kernel, which is the whole
+reason this encoder matches ST's -- and for the same reason `arch.py` turns SB3's `ortho_init`
+off on this arm. The crop offset is drawn once per transition and repeated across the frames,
+so one observation replays identically.
+
 ## Running
 
 Everything runs from the repo root in the `robodiff` conda env. `sb3_contrib` was added to it
@@ -130,10 +139,10 @@ strictly stronger observation than the standard PushT-image setup. Keeping `agen
 gave the RL arms a privilege the offline arms are forbidden, so the two families' success rates
 could not be compared -- which is the only reason `STResNetExtractor` mirrors that encoder at
 all. Three places encoded the old width and all three changed together:
-`PushTGymEnv.observation_space`, `_convert_obs`, and `aug_for`'s `feature_dim` (now a flat 512
-at every `--n-stack`, since VecFrameStack widens the ResNet's *input* channels and not its
-output). The `logs/grid/*_image_*` runs predate this and are superseded; they had no saved
-checkpoints.
+`PushTGymEnv.observation_space`, `_convert_obs`, and `aug_for`'s `feature_dim` (`512 *
+n_stack`, with nothing concatenated alongside: the stack is encoded frame by frame through the
+one shared ResNet). The `logs/grid/*_image_*` runs predate this and are
+superseded; they had no saved checkpoints.
 
 
 ## The reward, and why termination is tied to it

@@ -50,7 +50,7 @@ def _shared_kwargs(cfg, log_dir):
 
 def _shared_policy_kwargs(cfg):
     net_arch = [int(x) for x in cfg["net_arch"].split(",") if x]
-    return {
+    kwargs = {
         "net_arch": dict(pi=net_arch, vf=net_arch),
         "log_std_init": cfg["log_std_init"],
         "q_net_arch": tuple(int(x) for x in cfg["q_net_arch"].split(",") if x),
@@ -58,6 +58,17 @@ def _shared_policy_kwargs(cfg):
         # corruption arrives as a features extractor, through SB3's own extension point
         **features_extractor_kwargs(cfg["obs"], cfg["corrupt_obs"]),
     }
+    if cfg["obs"] == "image":
+        # SB3 applies orthogonal init to the WHOLE features extractor, which here is a ResNet18
+        # carrying IMAGENET1K_V1 weights. Re-measured against this tree: conv1 does NOT survive
+        # it, |w| 0.0762 -> 0.0936, so the arm would silently train from orthogonal noise rather
+        # than from the pretrained encoder that is the entire reason it matches ST's. The same
+        # call also deadlocks under multi-threaded BLAS -- torch.nn.init.orthogonal_ runs a QR
+        # per layer; policy construction takes 0.40s at one thread and had not returned after
+        # 120s at the default 24. Left ON for keypoint and state, where there are no pretrained
+        # weights to destroy and orthogonal init is SB3's sensible default on a small MLP.
+        kwargs["ortho_init"] = False
+    return kwargs
 
 
 class LstmArch:

@@ -87,8 +87,11 @@ def test_observations_stay_in_the_declared_box(obs_type):
         obs, _ = env.reset()
         for _ in range(40):
             obs, _, term, trunc, _ = env.step(env.action_space.sample())
-            vec = obs["agent_pos"] if obs_type == "image" else obs
-            assert vec.min() >= -1.0 and vec.max() <= 1.0
+            assert env.observation_space.contains(obs)
+            # the flat arms are normalised; the image arm went image-only, so it has no
+            # [-1, 1] vector left to check -- `contains` is the whole claim there
+            if obs_type != "image":
+                assert obs.min() >= -1.0 and obs.max() <= 1.0
             if term or trunc:
                 break
     if obs_type == "image":
@@ -555,16 +558,15 @@ def test_the_scheduler_still_matches_the_config_it_copies():
 @pytest.mark.parametrize("obs_type,n_stack,expected", [
     ("state", 1, 6), ("state", 4, 24),
     ("keypoint", 1, 40), ("keypoint", 4, 160),
-    ("image", 1, 512), ("image", 4, 512),
+    ("image", 1, 512), ("image", 4, 2048),
 ])
 def test_the_draw_is_as_wide_as_the_features_it_corrupts(obs_type, n_stack, expected):
     """The noise vector must match what the extractor produces from a STACKED observation.
 
-    The two arms widen differently and it is easy to get wrong: a flat observation is
-    concatenated whole, so n_stack scales it, but the image arm does not widen AT ALL --
-    VecFrameStack stacks on the channel axis, the ResNet consumes all of the frames and still
-    emits 512, and since the arm went image-only there is nothing concatenated alongside.
-    Scaling the image arm by n_stack gave a 2048-wide draw for a 512-wide feature, which
+    Every arm widens with the stack, but for different reasons and it is easy to get wrong: a
+    flat observation is concatenated whole, while the image arm runs each frame through the one
+    shared ResNet and concatenates the 512-d results. Since that arm went image-only there is
+    nothing concatenated alongside, so it is 512*n_stack and not (512+2)*n_stack. A mismatch
     crashes at the first forward, i.e. only once a run is already on a GPU.
     """
     from recurrent_ppo.arch import ARCHS
@@ -697,7 +699,6 @@ def test_the_image_arm_is_scored_on_its_stored_crop_in_both_modes(mode):
 
     space = gym.spaces.Dict({
         "image": gym.spaces.Box(0, 255, (3, 96, 96), np.uint8),
-        "agent_pos": gym.spaces.Box(-1, 1, (2,), np.float32),
         AUG_CROP_KEY: gym.spaces.Box(0.0, float(96 - ST_CROP - 1), (2,), np.float32),
     })
     extractor = STResNetExtractor(space)
@@ -706,8 +707,7 @@ def test_the_image_arm_is_scored_on_its_stored_crop_in_both_modes(mode):
 
     th.manual_seed(0)
     img = th.rand(1, 3, 96, 96)
-    obs = {"image": img, "agent_pos": th.zeros(1, 2),
-           AUG_CROP_KEY: th.tensor([[3.0, 11.0]])}
+    obs = {"image": img, AUG_CROP_KEY: th.tensor([[3.0, 11.0]])}
     got = extractor._crop(img, obs)
 
     # the crop the stored offset names, computed independently of CropRandomizer
@@ -754,4 +754,74 @@ def test_the_image_arm_observation_carries_no_agent_pos():
     assert ext.features_dim == 512
     for n_stack in (1, DEFAULTS["n_stack"]):
         aug = aug_for("image", True, render_size=96, n_stack=n_stack, snr=1.92)
-        assert aug["feature_dim"] == 512, f"n_stack={n_stack}"
+        assert aug["feature_dim"] == 512 * n_stack, f"n_stack={n_stack}"
+
+# ---------------------------------------------------------------- the image arm, stacked
+@pytest.mark.parametrize("n_stack", [1, 4])
+def test_image_encoder_runs_the_shared_resnet_per_frame(n_stack):
+    """VecFrameStack concatenates on the CHANNEL axis, and the pretrained conv1 takes 3.
+
+    Before this, `--obs image --n-stack 4` handed a 12-channel tensor to a 3-channel kernel and
+    died. ST resolves the same problem the same way for its n_obs_steps: reshape
+    (B, To, C, H, W) to (B*To, C, H, W), run the ONE encoder, concatenate the features. Widening
+    conv1 instead would discard the pretrained kernel, which is the whole reason this encoder
+    matches ST's.
+    """
+    from stable_baselines3.common.vec_env.stacked_observations import StackedObservations
+
+    from recurrent_ppo.corrupt_policy import STResNetExtractor
+
+    base = gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 96, 96), dtype=np.uint8)})
+    space = base if n_stack == 1 else StackedObservations(1, n_stack, base).stacked_observation_space
+    extractor = STResNetExtractor(space).eval()
+
+    assert extractor.resnet.conv1.in_channels == 3, "the pretrained kernel must be used as trained"
+    assert extractor.features_dim == 512 * n_stack, "image-only: no agent_pos alongside"
+    out = extractor({"image": th.rand(2, 3 * n_stack, 96, 96)})
+    assert out.shape == (2, extractor.features_dim)
+
+
+def test_image_stack_keeps_frames_oldest_first():
+    """The reshape must not scramble the stack: frame k of the channel axis becomes row k."""
+    n_stack = 4
+    image = th.zeros(1, 3 * n_stack, 8, 8)
+    for k in range(n_stack):
+        image[0, 3 * k:3 * k + 3] = k                 # frame k is a constant image of value k
+    rows = image.reshape(1 * n_stack, 3, 8, 8)[:, 0, 0, 0]
+    assert rows.tolist() == [0.0, 1.0, 2.0, 3.0], "oldest-first order lost in the reshape"
+
+
+def test_every_frame_of_a_stack_gets_the_SAME_stored_crop():
+    """One offset per transition, shared across the stack -- and replayed exactly.
+
+    The draw is per stacked observation: VecAugmentationDraw sits outside `arch.wrap` and stores
+    a single (2,) offset, which is what makes PPO's ratio a ratio of policies on the image arm.
+    Per-frame encoding turns one observation into n_frames rows, so the offset is repeated
+    rather than redrawn -- a per-frame offset would need the draw itself to widen to
+    (n_frames, 2), changing the observation space the rollout buffer stores.
+    """
+    from stable_baselines3.common.vec_env.stacked_observations import StackedObservations
+
+    from recurrent_ppo.corrupt_policy import STResNetExtractor
+
+    n_stack, crop_span = 4, 96 - 76
+    base = gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 96, 96), dtype=np.uint8)})
+    stacked = StackedObservations(1, n_stack, base).stacked_observation_space
+    space = gym.spaces.Dict({**stacked.spaces,
+                             AUG_CROP_KEY: gym.spaces.Box(0.0, float(crop_span - 1), shape=(2,),
+                                                          dtype=np.float32)})
+    extractor = STResNetExtractor(space)
+    assert extractor.replay_crop, "the stored offset must be picked up when it is present"
+    extractor.train()                          # the mode PPO's update epochs run in
+
+    # every frame of the stack is the SAME image, so if each frame were cropped differently
+    # their features would differ
+    frame = th.rand(1, 3, 96, 96)
+    obs = {"image": frame.repeat(1, n_stack, 1, 1),
+           AUG_CROP_KEY: th.tensor([[3.0, 7.0]])}
+    out = extractor(obs)[0].reshape(n_stack, 512)
+    for k in range(1, n_stack):
+        assert th.allclose(out[0], out[k], atol=1e-5), "frames of one stack were cropped differently"
+
+    # and the whole thing replays: same transition, same features, across epochs
+    assert th.equal(extractor(obs), extractor(obs))
