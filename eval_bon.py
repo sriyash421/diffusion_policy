@@ -4,6 +4,14 @@ For every held-out test reset state, roll the policy out ``--n-samples`` times (
 diffusion sampler is stochastic, the env is not) and report how the result improves
 as you draw more samples:
 
+ALL SPREAD COMES FROM THE POLICY, so ``--n-samples`` above 1 is only meaningful for one that
+samples. `LSTMBCPolicy.predict_action` returns the distribution MEAN by design, so its draws
+are byte-identical and the honest mode for the LSTM BC arms is ``--n-samples 1``, which
+reports the plain test success rate and writes no curve.
+
+Both observation arms are supported: the flat-Box keypoint env is selected automatically when
+the checkpoint's ``shape_meta.obs`` carries a ``keypoint`` entry.
+
   * best-of-n  : mean over resets of ``max(reward_1..reward_n)`` -- x is #samples
   * regret     : mean over resets of ``1 - mean(r_1..r_x)`` -- the gap to the best
                  achievable, since reward and success both max out at 1
@@ -39,7 +47,10 @@ from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.pusht_image_dataset import (
     get_split_masks, get_episode_init_states)
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
+from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
+from diffusion_policy.env_runner.pusht_search_keypoints_runner import (
+    PushTSearchKeypointsRunner)
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 
@@ -63,8 +74,47 @@ def build_envs(n_envs, n_obs_steps, n_action_steps, max_steps, render_size=96):
     return AsyncVectorEnv([env_fn] * n_envs)
 
 
-def run_chunk(env, policy, states, device):
-    """Roll out one state per env; return each env's max reward."""
+def build_keypoint_envs(n_envs, n_obs_steps, n_action_steps, max_steps,
+                        render_size=96, keypoint_visible_rate=1.0,
+                        agent_keypoints=False):
+    """The KEYPOINT arm's env, mirroring PushTSearchKeypointsRunner's `env_fn`.
+
+    Three differences from the image branch above, none of them optional:
+      * NO PushTFeedbackWrapper. It does `dict(self.env.observation_space.spaces)` and this
+        env's observation space is a flat Box, which has no `.spaces`. `obs['feedback']`
+        therefore does not exist on this arm -- and is not needed, since best-of-n reads the
+        env's own `reward` attribute, not the feedback channel.
+      * NO VideoRecordingWrapper, which the runner carries only to tile eval videos.
+      * `genenerate_keypoint_manager_params()` (sic, the upstream spelling) supplies the SAME
+        keypoint definition that generated the zarr's `keypoint` array. Diverge from it and
+        the policy is scored on a different quantity than it was trained on.
+    """
+    kp_kwargs = PushTKeypointsEnv.genenerate_keypoint_manager_params()
+
+    def env_fn():
+        return MultiStepWrapper(
+            PushTKeypointsEnv(
+                legacy=False,
+                render_size=render_size,
+                keypoint_visible_rate=keypoint_visible_rate,
+                agent_keypoints=agent_keypoints,
+                **kp_kwargs
+            ),
+            n_obs_steps=n_obs_steps,
+            n_action_steps=n_action_steps,
+            max_episode_steps=max_steps
+        )
+    return AsyncVectorEnv([env_fn] * n_envs)
+
+
+def run_chunk(env, policy, states, device, obs_to_dict=None):
+    """Roll out one state per env; return each env's max reward.
+
+    `obs_to_dict` converts the env's raw observation into the dict the policy consumes. It
+    is None on the image arm, whose env already yields a dict; the keypoint arm passes
+    PushTSearchKeypointsRunner._obs_to_dict so that training and eval split the flat 40-d
+    Box identically instead of by two independent conventions.
+    """
     def make_init_fn(state):
         state = np.asarray(state, dtype=np.float64)
         def _fn(env):
@@ -79,6 +129,8 @@ def run_chunk(env, policy, states, device):
     policy.reset()
     done = False
     while not done:
+        if obs_to_dict is not None:
+            obs = obs_to_dict(obs)
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         with torch.no_grad():
             action = policy.predict_action(obs_dict)['action'].detach().cpu().numpy()
@@ -249,7 +301,22 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
     print(f'{n_resets} resets x {n_samples} samples = {len(jobs)} rollouts '
           f'on {n_envs} envs ({math.ceil(len(jobs)/n_envs)} chunks)')
 
-    env = build_envs(n_envs, cfg.n_obs_steps, cfg.n_action_steps, max_steps)
+    # WHICH ARM, decided by what the policy actually consumes rather than by config name.
+    # A `keypoint` entry in shape_meta.obs means the flat-Box keypoint env; anything else is
+    # the image env. Getting this wrong is not a crash -- PushTImageEnv would hand an image
+    # arm's observation to a keypoint policy's normalizer and fail there instead.
+    is_keypoint = 'keypoint' in cfg.shape_meta.obs
+    if is_keypoint:
+        er_cfg = cfg.task.env_runner
+        env = build_keypoint_envs(
+            n_envs, cfg.n_obs_steps, cfg.n_action_steps, max_steps,
+            keypoint_visible_rate=er_cfg.get('keypoint_visible_rate', 1.0),
+            agent_keypoints=er_cfg.get('agent_keypoints', False))
+        obs_to_dict = PushTSearchKeypointsRunner._obs_to_dict
+    else:
+        env = build_envs(n_envs, cfg.n_obs_steps, cfg.n_action_steps, max_steps)
+        obs_to_dict = None
+
     rewards = np.full((n_resets, n_samples), np.nan)
     try:
         for start in tqdm.tqdm(range(0, len(jobs), n_envs), desc='best-of-n'):
@@ -259,7 +326,8 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
             pad = n_envs - len(chunk_states)
             if pad > 0:
                 chunk_states = chunk_states + [states[0]] * pad
-            out = run_chunk(env, policy, chunk_states, torch.device(device))
+            out = run_chunk(env, policy, chunk_states, torch.device(device),
+                            obs_to_dict=obs_to_dict)
             for (r, s), value in zip(chunk, out[:len(chunk)]):
                 rewards[r, s] = value
     finally:
@@ -271,7 +339,13 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
     np.savez(os.path.join(output_dir, 'bon_rewards.npz'),
              rewards=rewards, episode_idxs=episode_idxs,
              **{k: v for k, v in curves.items()})
-    plot_curves(curves, rewards, os.path.join(output_dir, 'bon_curves.png'))
+    # NO PLOT AT N=1. Every curve is then a single point and `best_of_n == single_sample` by
+    # construction, so a figure titled "best-of-n" would assert a spread that was never
+    # measured. n=1 is the honest mode for a policy whose predict_action returns the
+    # distribution MEAN (LSTMBCPolicy does, deliberately): the env is deterministic and the
+    # sampler is not stochastic, so repeated draws would be byte-identical rollouts.
+    if n_samples > 1:
+        plot_curves(curves, rewards, os.path.join(output_dir, 'bon_curves.png'))
 
     summary = {
         'checkpoint': checkpoint,
@@ -287,7 +361,11 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
     with open(os.path.join(output_dir, 'bon_summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)
     print(json.dumps(summary, indent=2))
-    print('wrote', os.path.join(output_dir, 'bon_curves.png'))
+    if n_samples > 1:
+        print('wrote', os.path.join(output_dir, 'bon_curves.png'))
+    else:
+        print('n_samples=1: no curve written; '
+              'mean_success_single_sample IS the test success rate')
 
 
 if __name__ == '__main__':
