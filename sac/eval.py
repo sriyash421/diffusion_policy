@@ -40,6 +40,7 @@ from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv          # 
 from eval_search_pusht import (_eval_split_at_n, build_envs, get_split_states,  # noqa: E402
                                load_policy)
 from sac.score import PushTQVerifier                                          # noqa: E402
+from scripts.astar_uniform_walk import expert_moved
 from scripts.verifier_ranks_expert import (BLIND, CLASSES, T_GOAL, _stats,    # noqa: E402
                                            build_batch, classify, sample_points)
 
@@ -142,7 +143,10 @@ def set_sim_value(policy, value_fn):
 
 @cli.command("rank-expert")
 @click.option('-c', '--checkpoint', required=True, help='the ST or BC checkpoint')
-@click.option('--q', 'q_ckpt', required=True, help='the SAC checkpoint holding the learned Q')
+@click.option('--q', 'q_ckpt', default=None, help='the SAC checkpoint holding the learned Q')
+@click.option('--v', 'v_ckpt', default=None,
+              help='a PPO checkpoint; its V is evaluated at the state each chunk reaches. '
+                   'Give --q, --v, or both -- both scores the SAME decisions under each.')
 @click.option('--arm', default='unknown')
 @click.option('--n', 'n_actions', default=16, show_default=True)
 @click.option('--episodes', default=20, show_default=True)
@@ -152,7 +156,8 @@ def set_sim_value(policy, value_fn):
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
 @click.option('--out', default=None, help='write the stats as JSON here')
-def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split, batch, device, seed, out):
+def rank_expert(checkpoint, q_ckpt, v_ckpt, arm, n_actions, episodes, per_episode, split, batch,
+                device, seed, out):
     """Where the EXPERT action ranks among the policy's candidates, under both verifiers.
 
     Best-of-n is only as good as the thing ranking, and the only ground truth for "good action"
@@ -161,8 +166,18 @@ def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split
     is the headline: a Q that only matches the heuristic overall but ranks a* well where the
     heuristic is silent is already the win.
     """
+    if not (q_ckpt or v_ckpt):
+        raise SystemExit('give --q, --v, or both: there is no learned scorer to compare against')
     policy, cfg = load_policy(checkpoint, device)
-    q = PushTQVerifier(q_ckpt, device=device)
+    learned = {}
+    if q_ckpt:
+        learned['q'] = PushTQVerifier(q_ckpt, device=device)
+    if v_ckpt:
+        from recurrent_ppo.value_score import PushTVVerifier
+
+        # the policy's OWN sim verifier, so V is scored on the same reached states the
+        # heuristic column is computed from
+        learned['v'] = PushTVVerifier(v_ckpt, policy.verifier, device=device)
     To, Ta, H = policy.n_obs_steps, policy.n_action_steps, cfg.policy.horizon
 
     run_dir = pathlib.Path(checkpoint).resolve().parent.parent
@@ -173,7 +188,10 @@ def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split
     pts = sample_points(rb, ep_idxs, per_episode, To, H, np.random.default_rng(seed))
     print(f'{arm}: {len(pts)} decision points from {len(ep_idxs)} {split} episodes, n={n_actions}')
 
-    sim_star, sim_cand, q_star, q_cand, t_cand, ep_of, ref_of = [], [], [], [], [], [], []
+    sim_star, sim_cand, t_cand, ep_of, ref_of = [], [], [], [], []
+    learned_star = {k: [] for k in learned}
+    learned_cand = {k: [] for k in learned}
+    pose_of = []                      # block poses over each executed window, for the T-moved split
     torch.manual_seed(seed)
     np.random.seed(seed)
     try:
@@ -181,6 +199,9 @@ def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split
             chunk = pts[b0:b0 + batch]
             obs, star = build_batch(rb, chunk, To, H, torch.device(device))
             ref_of.append(t_goal_distance(obs['feedback'][:, To - 1].cpu().numpy()))
+            # the DEMO's own block poses over the window it executed, for the T-moved split
+            bp = np.asarray(rb['block_pos'])
+            pose_of.extend(bp[i:i + Ta + 1] for _, i in chunk)
             seeder = getattr(policy, 'set_sample_seeds', None)
             if seeder is not None:
                 seeder([seed * 1_000_003 + b0 + k for k in range(len(chunk))])
@@ -195,12 +216,13 @@ def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split
             sim_star.append(out_star[1].float().cpu().numpy())
             sim_cand.append(sc.float().cpu().numpy())
             t_cand.append(tm.float().cpu().numpy())
-            q_star.append(_q_scores(q, obs, star, To, Ta))
-            q_cand.append(_q_scores(q, obs, acts, To, Ta))
+            for name, scorer in learned.items():
+                learned_star[name].append(_q_scores(scorer, obs, star, To, Ta))
+                learned_cand[name].append(_q_scores(scorer, obs, acts, To, Ta))
             ep_of += [e for e, _ in chunk]
             print(f'  {min(b0 + batch, len(pts))}/{len(pts)}', end='\r', flush=True)
     finally:
-        for obj in (policy, q):
+        for obj in (policy, *learned.values()):
             close = getattr(obj, 'close', None)
             if close is not None:
                 try:
@@ -211,34 +233,56 @@ def rank_expert(checkpoint, q_ckpt, arm, n_actions, episodes, per_episode, split
     eps = np.array(ep_of)
     refs = np.concatenate(ref_of)
     cls, n_movers, _ = classify(np.concatenate(t_cand)[:, :, T_GOAL], refs)
-    scores = {'sim': (np.concatenate(sim_star), np.concatenate(sim_cand)),
-              'q': (np.concatenate(q_star), np.concatenate(q_cand))}
+    # TWO SPLITS, SIDE BY SIDE, because they answer different questions and neither subsumes
+    # the other:
+    #   classify       did the CANDIDATES move the T -- i.e. did the heuristic have anything to
+    #                  say. Targets the failure being fixed, but depends on which candidates
+    #                  were drawn, so it differs per arm and per n.
+    #   expert_moved   did the DEMO's own T move over this window. A property of the state, so
+    #                  the split is byte-identical across every arm compared.
+    moved = expert_moved(pose_of, Ta)
+    phase = np.where(moved, 'block_moving', 'block_still')
+    scores = {'sim': (np.concatenate(sim_star), np.concatenate(sim_cand))}
+    for name in learned:
+        scores[name] = (np.concatenate(learned_star[name]),
+                        np.concatenate(learned_cand[name]))
 
-    report = {'checkpoint': checkpoint, 'q': q_ckpt, 'arm': arm, 'n': n_actions,
+    report = {'checkpoint': checkpoint, 'q': q_ckpt, 'v': v_ckpt, 'arm': arm, 'n': n_actions,
               'split': split, 'episodes': len(ep_idxs), 'decisions': int(len(eps)),
-              'class_fractions': {c: float((cls == c).mean()) for c in CLASSES}}
+              'class_fractions': {c: float((cls == c).mean()) for c in CLASSES},
+              'phase_fractions': {p: float((phase == p).mean())
+                                  for p in ('block_still', 'block_moving')}}
     print(f"\ndecisions: {len(eps)}   " + "  ".join(
         f"{c}={float((cls == c).mean()):.1%}" for c in CLASSES))
     print("  (blind = the sim verifier gave EVERY candidate the same score; argmax there is a "
           "tie-break)\n")
 
     hdr = f"{'subset':<14}{'n':>6}  {'verifier':<10}{'p_best':>18}{'mean_rank':>18}"
-    print(hdr)
-    print('-' * len(hdr))
-    for subset in ('all',) + CLASSES:
-        sel = np.ones(len(eps), bool) if subset == 'all' else (cls == subset)
-        if sel.sum() < 2 or len(np.unique(eps[sel])) < 2:
-            continue
-        report.setdefault('by_class', {})[subset] = {}
-        for name in ('sim', 'q'):
-            s, c = scores[name]
-            st = _stats(s[sel], c[sel], higher_is_better=True, ep_ids=eps[sel], seed=seed)
-            report['by_class'][subset][name] = st
-            pb, mr = st['p_best'], st['mean_rank']
-            print(f"{subset:<14}{int(sel.sum()):>6}  {name:<10}"
-                  f"{pb['v']:>8.3f} [{pb['ci'][0]:.2f},{pb['ci'][1]:.2f}]"
-                  f"{mr['v']:>8.2f} [{mr['ci'][0]:.1f},{mr['ci'][1]:.1f}]")
-        print()
+    names = ('sim',) + tuple(learned)
+
+    def table(title, labels, assign, key):
+        print(f"\n== {title} ==")
+        print(hdr)
+        print('-' * len(hdr))
+        for subset in labels:
+            sel = np.ones(len(eps), bool) if subset == 'all' else (assign == subset)
+            if sel.sum() < 2 or len(np.unique(eps[sel])) < 2:
+                continue
+            report.setdefault(key, {})[subset] = {}
+            for name in names:
+                sc, cd = scores[name]
+                st = _stats(sc[sel], cd[sel], higher_is_better=True, ep_ids=eps[sel], seed=seed)
+                report[key][subset][name] = st
+                pb, mr = st['p_best'], st['mean_rank']
+                print(f"{subset:<14}{int(sel.sum()):>6}  {name:<10}"
+                      f"{pb['v']:>8.3f} [{pb['ci'][0]:.2f},{pb['ci'][1]:.2f}]"
+                      f"{mr['v']:>8.2f} [{mr['ci'][0]:.1f},{mr['ci'][1]:.1f}]")
+            print()
+
+    # candidate-dependent: where the heuristic had anything to say
+    table('by candidate informativeness', ('all',) + CLASSES, cls, 'by_class')
+    # state-defined and arm-independent: did the demo's own T move
+    table('by whether the T moved (demo)', ('block_still', 'block_moving'), phase, 'by_phase')
     print(f"mean_rank is out of {n_actions} candidates; 0 means a* beat every one, "
           f"{n_actions / 2:.1f} is the exchangeability null (ties count as half).")
 
