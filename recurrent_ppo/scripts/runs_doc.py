@@ -1,4 +1,4 @@
-"""Regenerate docs/reports/archive/recurrent_ppo_runs_sep11.md from the run directories.
+"""Regenerate docs/reports/ppo/recurrent_ppo_runs.md from the run directories.
 
 Generated, not hand-kept. A hand-kept table of these same facts is precisely what drifted in
 config.LEGACY -- it claimed the action mode was `absolute` and the block start range [100, 400]
@@ -45,19 +45,21 @@ def evals(run_dir):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--logs", default="logs/grid",
-                    help="directory holding the run dirs. logs/grid is where the 18-run grid "
-                         "actually landed; logs/recurrent_ppo and logs/ppo are what arch.py "
-                         "declares and hold only smoke runs.")
+    ap.add_argument("--logs", required=True,
+                    help="directory holding the run dirs. REQUIRED rather than defaulted: the "
+                         "arms write to logs/<arch.log_root>/<obs>_<arm>/<timestamp>/ but a "
+                         "grid launcher may collect them anywhere, and a wrong default silently "
+                         "generates a doc from zero runs.")
     ap.add_argument("--out", default=DOC)
     args = ap.parse_args()
 
     rows = []
-    # BOTH depths. arch.py's log_root nests one level (logs/<root>/<arm>/<timestamp>/), but the
-    # grid that produced the 18 recorded runs is FLAT (logs/grid/<arm>/ holds params/ and
-    # model.zip directly). Globbing only the nested shape silently found nothing there, so a
-    # doc whose header says it is generated could not in fact be regenerated. The
-    # `params/args.yaml` check below makes the extra depth harmless either way.
+    # BOTH depths. arch.py's log_root nests one level (logs/<root>/<arm>/<timestamp>/), but a
+    # hand-collected grid is usually FLAT (<root>/<arm>/ holds params/ and model.zip directly).
+    # Globbing only the nested shape silently finds nothing in a flat tree, so a doc whose
+    # header says it is generated cannot in fact be regenerated -- which is exactly what
+    # happened to the generation deleted on 2026-09-16. The `params/args.yaml` check below
+    # makes the extra depth harmless either way.
     candidates = set(glob.glob(os.path.join(args.logs, "*/")))
     candidates |= set(glob.glob(os.path.join(args.logs, "*", "*/")))
     # `_superseded_*` trees are kept on disk deliberately (each carries a WHY_SUPERSEDED.md)

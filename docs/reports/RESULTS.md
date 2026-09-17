@@ -3,10 +3,10 @@
 One page, every arm the repo supports, measured. Written 2026-09-16.
 
 **Short answer.** The offline arms work and are ordered
-ST k=16 > ST k=1 > BC-UNet > BC-LSTM. The online RL arms do not: recurrent PPO, PPO with
-frame stacking and plain PPO have **never recorded a non-zero evaluation success rate** across
-18 runs to 10M steps. SAC has **never been run** in this tree, and is in any case built as a
-best-of-N *verifier* rather than a policy.
+ST k=16 > ST k=1 > BC-UNet > BC-LSTM. The online RL arms are **being retrained** and have no
+current number: an earlier generation of 18 arms reached 10M steps without one ever recording a
+non-zero evaluation success rate, and was retired on 2026-09-16. SAC has **never been run**, and
+is in any case built as a best-of-N *verifier* rather than a policy.
 
 ---
 
@@ -31,9 +31,8 @@ Nothing in this repo nominates a best checkpoint. Where a single number is quote
 | **BC-UNet** | `train.py --config-name=train_pusht_unet_bc` | image | shared | same | val-selected, test reported | val 0.588 @ 40k → **test 0.555** |
 | **BC-LSTM (image)** | `train.py --config-name=train_pusht_lstm_bc` | image | shared | same | val-selected, test reported | val 0.404 @ **step 4k** → **test 0.250** |
 | **BC-LSTM (keypoint)** | `..._lstm_bc_keypoint` | keypoint 20-d | none (flatten) | `pusht_keypoint_manifest` | val-selected, test reported | val 0.246 @ 28k → **test 0.262** |
-| **recurrent PPO** | `python -m recurrent_ppo.train` | kp / state / image | shared (image) | procedural resets | seeded eval env | **0 success, 18 runs** |
-| **PPO + frame stack** | `python -m recurrent_ppo.ppo.train --n-stack 4` | " | " | " | " | **0 success** |
-| **plain PPO** | `... --n-stack 1` | " | " | " | " | **0 success** |
+| **recurrent PPO** | `python -m recurrent_ppo.train` | keypoint / image | shared (image) | manifest episodes | — | **retraining** |
+| **plain PPO** (`--n-stack 1`) | `python -m recurrent_ppo.ppo.train` | keypoint / image | shared (image) | manifest episodes | — | **retraining** |
 | **SAC** | `python sac/runner.py` | kp / image | shared (image) | procedural (policy) / manifest (verifier) | — | **never run** |
 
 "shared" = ResNet18 / IMAGENET1K_V1 / GroupNorm / 76px crop / 96px input / 512-d per frame,
@@ -52,9 +51,12 @@ through training, and declines for the remaining 96%. Its best *test* number (0.
 step 38k where val has already collapsed, which is why the val-selected 0.250 is the honest
 figure. The keypoint arm peaks later (56%) and lower.
 
-**The PPO zero is a real result, not a missing measurement.** 18 runs across reward shapes
-(dense, shaped, delta), curricula and both architectures; every one recorded zero evaluation
-success. Details in `docs/reports/archive/recurrent_ppo_runs_sep11.md`.
+**The PPO arms are mid-retrain and deliberately have no row.** The previous generation — 18
+runs across reward shapes (dense, shaped, delta), curricula and both architectures — recorded
+zero evaluation success in every one, and was deleted on 2026-09-16 rather than carried
+forward. Its record is in git history. The current generation trains on `delta` only, evaluates
+on the split manifests rather than procedural resets, and exists to supply **V** for the
+verifier study, not to claim a success rate.
 
 **SAC is a verifier.** It learns `Q(s, chunk)` to rank candidates a diffusion policy proposes,
 as a drop-in for the hand-written distance heuristic. "Does SAC solve PushT" is the wrong
@@ -138,7 +140,7 @@ python eval_bon.py -c <ckpt> -o <out> --split test --n-samples 1
 
 # PPO / recurrent PPO, offline over saved checkpoints
 python -m recurrent_ppo.scripts.eval_checkpoints --run <run_dir>
-python -m recurrent_ppo.scripts.runs_doc --logs logs/grid --out docs/reports/ppo/
+python -m recurrent_ppo.scripts.runs_doc --logs <logs root> --out docs/reports/ppo/
 
 # SAC's verifier (the Q as a ranker) -- on ST's own split
 python sac/eval.py bon-sweep -c <ckpt>

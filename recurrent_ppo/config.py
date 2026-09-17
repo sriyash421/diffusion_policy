@@ -19,7 +19,7 @@ Three kinds of thing live here, and the distinction is load-bearing:
 A run that predates a key is NOT covered here. play.py falls back to today's default and says
 so, loudly and per key, because a silent guess is how an evaluation ends up measuring a
 different task from the one that was trained. What each past run actually used is recorded in
-docs/reports/archive/recurrent_ppo_runs_sep11.md, which is generated from the run directories rather than kept by
+docs/reports/ppo/recurrent_ppo_runs.md, which is generated from the run directories rather than kept by
 hand -- a hand-kept table of the same facts is exactly what drifted before.
 """
 

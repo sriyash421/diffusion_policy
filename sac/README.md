@@ -106,8 +106,12 @@ diagnostic arms and must never be reported as the headline Q.
 
 So a buffer seeded with demonstrations and a single 0.95 head carries **zero** positive reward,
 and a Q regressed on it learns `Q = 0` -- the identical "same score for every candidate"
-degeneracy as the heuristic being replaced, reached more expensively. `docs/reports/archive/recurrent_ppo_runs_sep11.md`
-records 18 PPO runs to 10M steps with no run ever recording a non-zero success rate.
+degeneracy as the heuristic being replaced, reached more expensively. That is not hypothetical:
+an earlier PPO generation ran **18 arms to 10M steps and not one ever recorded a non-zero
+evaluation success rate**. Those runs and their write-up were retired on 2026-09-16 when the
+arms were retrained, so the record of them is in git history rather than on disk -- but the
+finding is why this package exists, and it is the bar `bon/q_spread_zero_frac` is watched
+against.
 
 **The tau ladder** is the answer. Heads at {0.80, 0.85, 0.90, 0.95} share a trunk; rung `tau`
 sees the terminate-at-tau MDP exactly -- its own `(reward, done)` and a `live` mask dropping

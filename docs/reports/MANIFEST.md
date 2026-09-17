@@ -30,16 +30,18 @@ Two kinds of thing are excluded, for two different reasons:
 | `ckpts/` | `/gscratch/robotics/harine/diffusion_policy_outputs` | 841G |
 | `modes/` | `/gscratch/robotics/harine/mode_analysis` | 68M |
 | `videos/` | `/gscratch/robotics/harine/repo_offload/videos_moved` | 365M |
-| `logs/` | `(local directory)` | 1.4G |
+| `logs/` | `(local directory)` | 22M |
 | `modes24/` | `(local directory)` | 82M |
 
-## The one irreplaceable thing
+## The PPO grid is gone
 
-`logs/grid/` holds the 18-run recurrent-PPO / PPO grid, and **no script in this repo
-produces `logs/grid/`** -- the launcher that made those runs is gone. The runs can be read
-(`recurrent_ppo/scripts/runs_doc.py`) but not re-launched as configured. That is recorded
-here rather than reconstructed, because a rebuilt launcher would not be the one that
-produced the numbers.
+`logs/grid/` held an 18-run recurrent-PPO / PPO grid, launched by hand -- no script in this
+repo produced it, so it could be read but never re-launched as configured. Every one of those
+runs recorded zero evaluation success, and on **2026-09-16** the tree and its write-ups were
+deleted and the arms retrained. The record survives only in git history.
 
-It is also on local disk rather than `/gscratch`, so it is not covered by whatever backs
-the scratch tree up.
+The lesson is kept: the replacement arms are launched by a script under `scripts/slurm/`, so
+this generation is reproducible in a way the last one was not.
+
+Note that `logs/` is on local disk rather than `/gscratch`, so it is not covered by whatever
+backs the scratch tree up.

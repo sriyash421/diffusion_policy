@@ -141,8 +141,8 @@ could not be compared -- which is the only reason `STResNetExtractor` mirrors th
 all. Three places encoded the old width and all three changed together:
 `PushTGymEnv.observation_space`, `_convert_obs`, and `aug_for`'s `feature_dim` (`512 *
 n_stack`, with nothing concatenated alongside: the stack is encoded frame by frame through the
-one shared ResNet). The `logs/grid/*_image_*` runs predate this and are
-superseded; they had no saved checkpoints.
+one shared ResNet). An earlier image generation predates this and was deleted with the
+rest of that grid on 2026-09-16.
 
 
 ## The reward, and why termination is tied to it
@@ -255,14 +255,17 @@ adapter zeroes the occluded entries and keeps the mask, giving a 40-d observatio
 **5. Delta actions.** The action space is an absolute PD-controller target in `[0, 512]`; the
 useful target is a waypoint near the agent. See the conventions above.
 
-**6. The value and Q readout** (`play.py --report-values`). Both heads are fitted to
-`VecNormalize`-scaled returns, so their outputs are in units of `reward / sqrt(ret_rms.var)` and
-mean nothing until that factor is put back — which is how a working critic looks broken. The
-readout de-normalises through the saved `model_vecnormalize.pkl`, prints the factor, and reports
-each head's explained variance against the realised discounted return, over complete episodes
-only. It threads the critic's LSTM state by hand: `predict` returns only the actor's, so one
-`policy.forward` drives the action, `V` and `Q` together. `Q` is asked about the **clipped**
-action, the one the env actually executed.
+**6. Reading V and Q out.** Both heads are fitted to `VecNormalize`-scaled returns, so their
+outputs are in units of `reward / sqrt(ret_rms.var)` and **mean nothing until that factor is put
+back** — which is how a working critic looks broken. Any readout must de-normalise through the
+saved `model_vecnormalize.pkl`. The critic's LSTM state also has to be threaded by hand:
+`predict` returns only the actor's, so one `policy.forward` has to drive the action and `V`
+together, and `Q` is asked about the **clipped** action, the one the env actually executed.
+
+There was once a `play.py --report-values` flag doing this inline; it was lost in the arm merge
+and is not coming back. V is now needed at *arbitrary* states — the state a candidate chunk
+reaches — rather than along a rollout, so it lives in its own scoring module that the best-of-N
+verifier imports.
 
 **7. Episode metrics.** SB3 logs return and length. `is_success` (task solved) and `max_reward`
 (the repo's episode score: max normalised coverage, as in `pusht_image_runner`) are added to
