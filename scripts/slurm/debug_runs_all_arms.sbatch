@@ -7,9 +7,16 @@
 #SBATCH --mem=64G
 #SBATCH --time=2:00:00
 #SBATCH --output=/gscratch/robotics/harine/slurm_logs/%x-%j.out
-# Short `training.debug=True` run of ALL THREE training arms, to prove each still starts,
-# steps, evaluates, checkpoints and exits 0 after the workspace changes -- and that each
-# writes the run.json / splits.json provenance files.
+# Short run of EVERY arm this repo claims to support, to prove each still starts, steps,
+# evaluates, checkpoints and exits 0 -- and that each hydra arm writes the run.json /
+# splits.json provenance files.
+#
+# Two loops because the arms are launched two different ways: the hydra arms go through
+# train.py with `training.debug=True`, while recurrent PPO, PPO and SAC are plain modules
+# with their own CLIs and take a tiny --total-timesteps instead. Both are checked here
+# because "the repo is set up for these arms" is exactly the claim this script exists to
+# test, and an arm that is never launched is an arm that quietly rots -- which is how
+# train_pusht_st_n1 stayed in this file for weeks after it was deleted.
 #
 # Runs on a compute node, NOT the login node: home there is one shared ~10G cgroup and these
 # get OOM-killed (exit 137) whenever an editor or agent is also resident.
@@ -35,8 +42,10 @@ cd /mmfs1/home/harine/diffusion_policy_standalone
 # label|config|overrides   -- one per arm/workspace
 ARMS="
 outer_inner|train_pusht_diffusion_search|search_context=value arm=value slot_weight_decay=0.9
-offline|train_pusht_st_n1|
-unet|train_pusht_unet_bc|
+st_k1|train_pusht_diffusion_search_single|n_candidates=1
+unet_bc|train_pusht_unet_bc|
+lstm_bc_image|train_pusht_lstm_bc|
+lstm_bc_keypoint|train_pusht_lstm_bc_keypoint|
 "
 
 fail=0
@@ -49,6 +58,36 @@ for spec in $(echo "$ARMS" | tr ' ' '\a'); do
     echo "================================================================"
     # shellcheck disable=SC2086
     if python train.py --config-name="$cfg" training.debug=True training.device=cuda:0 $ovr; then
+        echo "--- $label: EXIT 0"
+    else
+        echo "--- $label: FAILED (exit $?)"
+        fail=1
+    fi
+done
+
+# The non-hydra arms: their own entry points, their own CLIs, a handful of steps each.
+# `--dummy-vec-env` keeps this to one process per arm. The point is that each arm CONSTRUCTS
+# and steps, not that it learns anything -- but SAC gets a small `--learning-starts` on
+# purpose, so the GRADIENT path runs too. That is the path where collection and update can
+# disagree about the image crop, and a smoke run that never reaches it would not notice.
+RL_ARMS="
+recurrent_ppo_keypoint|-m recurrent_ppo.train|--obs keypoint
+ppo_stack4_image|-m recurrent_ppo.ppo.train|--obs image --n-stack 4
+ppo_plain_keypoint|-m recurrent_ppo.ppo.train|--obs keypoint --n-stack 1
+sac_image|sac/runner.py|--obs image --learning-starts 200 --batch-size 32
+sac_keypoint|sac/runner.py|--obs keypoint --learning-starts 200 --batch-size 32
+"
+
+for spec in $(echo "$RL_ARMS" | tr ' ' '\a'); do
+    spec="${spec//$'\a'/ }"
+    [ -z "${spec// /}" ] && continue
+    label="${spec%%|*}"; rest="${spec#*|}"; entry="${rest%%|*}"; ovr="${rest##*|}"
+    echo "================================================================"
+    echo "=== $label ($entry) $ovr"
+    echo "================================================================"
+    # shellcheck disable=SC2086
+    if python $entry $ovr --total-timesteps 2000 --num-envs 2 --dummy-vec-env \
+            --log-dir "$DP_OUTPUT_ROOT/_rl/$label"; then
         echo "--- $label: EXIT 0"
     else
         echo "--- $label: FAILED (exit $?)"

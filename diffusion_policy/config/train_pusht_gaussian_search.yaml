@@ -59,8 +59,10 @@ policy:
   corrupt_obs_eval: ${corrupt_obs_eval}
   search_context: ${search_context}
   selection: ${selection}
-  # policy-owned crop, so the obs and every subgoal share one offset
-  crop_shape: [76, 76]
+  # policy-owned crop, so the obs and every subgoal share one offset. Interpolated, NOT a
+  # literal: the policy draws offsets against this while the encoder crops by ${crop_shape},
+  # so a literal here silently desynchronises the two the moment crop_shape is overridden.
+  crop_shape: ${crop_shape}
   random_crop: True
   max_actions: ${n_candidates}
   verifier_n_envs: 32
@@ -71,5 +73,8 @@ policy:
   # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
   verifier_value: ${verifier_tag}
 
-logging:
-  tags: ["${name}", "${task_name}", "${exp_name}", "gaussian", "demos-${n_demos}"]
+# What marks this arm's runs. Set here rather than overriding logging.tags: that list is
+# defined once in pusht_base.yaml and carries the verifier, encoder and obs-noise labels, so an
+# arm that replaces it wholesale drops them and its runs become unfilterable by the things the
+# comparison turns on.
+family_tag: gaussian
