@@ -980,3 +980,56 @@ def test_manifest_states_match_the_offline_runners_episodes():
     _, _, test_mask = masks_from_manifest(manifest, len(ends))
     assert np.array_equal(idxs, np.nonzero(test_mask)[0])
     assert np.allclose(states, get_episode_init_states(rb, test_mask))
+
+
+# ------------------------------------------------------------------ BC on the PPO policy
+def test_bc_batching_matches_sb3s_sequence_layout():
+    """`_pad_batch` must produce what `_process_sequence` reshapes, or the LSTM sees nonsense.
+
+    SB3 does a plain `features.reshape((n_seq, -1, input_size))`, taking n_seq from the LSTM
+    state's batch dimension. So the flattened order has to be episode-major and every sequence
+    in a batch the same length -- neither of which raises if you get it wrong. The check is that
+    a per-episode forward and a batched forward agree on the valid steps.
+    """
+    from sb3_contrib.common.recurrent.type_aliases import RNNStates
+
+    from recurrent_ppo.arch import ARCHS
+    from recurrent_ppo.bc import _pad_batch
+    from recurrent_ppo.config import DEFAULTS
+    from recurrent_ppo.pusht_gym import build_vec_env, env_kwargs_from
+
+    cfg = dict(DEFAULTS, obs="state", n_stack=1, corrupt_obs=False, num_envs=2, device="cpu")
+    cfg["delta_scale"] = 61.0
+    venv = build_vec_env(obs_type="state", n_envs=2, seed=0, use_subproc=False,
+                         **env_kwargs_from(cfg, "state"))
+    try:
+        agent = ARCHS["lstm"].build(venv, cfg, log_dir=None)
+        policy = agent.policy
+        policy.set_training_mode(False)
+
+        rng = np.random.default_rng(0)
+        d = venv.observation_space.shape[0]
+        seqs = [(rng.standard_normal((7, d)).astype(np.float32),
+                 rng.uniform(-1, 1, (7, 2)).astype(np.float32)),
+                (rng.standard_normal((4, d)).astype(np.float32),     # shorter: gets padded
+                 rng.uniform(-1, 1, (4, 2)).astype(np.float32))]
+
+        obs, act, starts, valid, zeros = _pad_batch(policy, seqs, agent.device)
+        assert obs.shape[0] == 2 * 7 and valid.sum() == 7 + 4, "padding or masking is wrong"
+        with th.no_grad():
+            _, batched, _ = policy.evaluate_actions(obs, act, RNNStates(zeros, zeros), starts)
+
+        # the same two episodes, one at a time, each from its own zero state
+        for i, (o, a) in enumerate(seqs):
+            n = len(a)
+            shape = (policy.lstm_actor.num_layers, 1, policy.lstm_actor.hidden_size)
+            z = lambda: (th.zeros(shape), th.zeros(shape))          # noqa: E731
+            with th.no_grad():
+                _, alone, _ = policy.evaluate_actions(
+                    th.as_tensor(o), th.as_tensor(a), RNNStates(z(), z()),
+                    th.as_tensor(np.r_[1.0, np.zeros(n - 1)], dtype=th.float32))
+            got = batched[i * 7:i * 7 + n]
+            assert th.allclose(got, alone, atol=1e-4), \
+                f"episode {i}: batched log-probs differ from the per-episode forward"
+    finally:
+        venv.close()

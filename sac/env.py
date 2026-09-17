@@ -338,7 +338,7 @@ def frame_coverage(zarr_path=DEMO_ZARR, cache=True):
     return out
 
 
-def _obs_from_zarr(root, idx, obs_type, crop_span=None, rng=None):
+def obs_from_zarr(root, idx, obs_type, crop_span=None, rng=None):
     """The observation PushTGymEnv would emit at these demo frames, without re-simulating.
 
     `crop_span` must be passed whenever the live env is wrapped in VecAugmentationDraw, because
@@ -419,8 +419,8 @@ def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stri
     return {
         # independent draws for obs and next_obs, matching the collected stream: those are two
         # different env steps and the wrapper draws once per step
-        "obs": _obs_from_zarr(root, t0, obs_type, crop_span, np.random.default_rng(0)),
-        "next_obs": _obs_from_zarr(root, t0 + chunk, obs_type, crop_span,
+        "obs": obs_from_zarr(root, t0, obs_type, crop_span, np.random.default_rng(0)),
+        "next_obs": obs_from_zarr(root, t0 + chunk, obs_type, crop_span,
                                    np.random.default_rng(1)),
         "action": encode(chunks, chunk=chunk).astype(np.float32),
         "reward": np.asarray(rew, np.float32),
