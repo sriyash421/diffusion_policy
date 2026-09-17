@@ -51,7 +51,7 @@ DEFAULT_T_MAX = 200
 ST_CROP = 76
 # 9 block keypoints x2 + agent xy, then the same again as a visibility mask
 # flat observation widths, by arm; the image arm's is its encoder's output instead
-OBS_DIMS = {"keypoint": 40, "state": 6, "image": 512}   # 512 is the ResNet's own width, per frame
+OBS_DIMS = {"keypoint": 20, "state": 6, "image": 512}   # 512 is the ResNet's own width, per frame
 
 
 def snr_to_timestep(snr):

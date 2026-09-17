@@ -67,8 +67,11 @@ def obs_for_arm(obs_dict, obs_type):
     if obs_type == "keypoint":
         kps = np.stack([keypoint_manager().get_keypoints_global(
             pose_map={"block": tuple(s[2:5])}, is_obj=False)["block"] for s in state])
-        flat = _normalise(np.concatenate([kps.reshape(len(state), -1), state[:, :2]], axis=-1))
-        return np.concatenate([flat, np.ones_like(flat)], axis=-1)     # mask half, all visible
+        # 20-d, mask APPLIED not appended -- PushTGymEnv stopped carrying the visibility mask
+        # as features, so the trained net's first layer is 20 wide. A 40-d vector here would be
+        # a shape error at best and, if the widths ever coincided, a silently wrong score.
+        # These frames are fully visible, so applying the mask is the identity.
+        return _normalise(np.concatenate([kps.reshape(len(state), -1), state[:, :2]], axis=-1))
     if obs_type == "image":
         image = obs_dict.get("image")
         if image is None:

@@ -141,7 +141,7 @@ class PushTGymEnv(gymnasium.Env):
             self._p_hidden_to_visible, self._p_visible_to_hidden = self._occlusion_rates(
                 float(keypoint_visible_rate), float(occlusion_persistence))
             self._visible = np.ones(self._n_kps, dtype=bool)
-            self.observation_space = spaces.Box(-1.0, 1.0, shape=(2 * self._half,), dtype=np.float32)
+            self.observation_space = spaces.Box(-1.0, 1.0, shape=(self._half,), dtype=np.float32)
         elif obs_type == "state":
             # PushTEnv itself, the base class of the other two -- no keypoints, no rendering in
             # the observation path. Its `_get_obs` is the 5-d state; we re-encode the angle.
@@ -414,13 +414,25 @@ class PushTGymEnv(gymnasium.Env):
     def _convert_obs(self, obs):
         if self.obs_type == "keypoint":
             # normalise FIRST, then mask, so an occluded keypoint reads as 0.0 (the arena
-            # centre) rather than -1.0 (a corner). The mask is what disambiguates it.
+            # centre) rather than -1.0 (a corner).
             norm = self._normalise(obs[: self._half])
             # our mask, not the inner env's -- it is pinned to full visibility. agent_pos is
             # never occluded, matching the convention PushTKeypointsEnv itself uses.
             mask = np.ones(self._half, dtype=np.float32)
             mask[: 2 * self._n_kps] = self._step_occlusion()
-            return np.concatenate([norm * mask, 2.0 * mask - 1.0])
+            # THE MASK IS APPLIED, NOT APPENDED. It used to ride alongside as 20 more features
+            # ({-1,+1} per element), which made this arm 40-d and made its visibility an input
+            # the policy learns to read. Two consequences of dropping it, both intended:
+            #
+            #   * the arm is 20-d, the SAME observation the LSTM BC arm is trained on, which is
+            #     what lets a BC checkpoint warm-start this one at all -- nn.LSTM's input_size
+            #     has to match and BC's is 20.
+            #   * under occlusion a hidden keypoint now reads 0.0 and so is indistinguishable
+            #     from one genuinely at the arena centre. That ambiguity is the honest POMDP: a
+            #     real sensor does not announce its own dropouts, and resolving it from history
+            #     is what the recurrence is for. At keypoint_visible_rate 1.0 the mask is all
+            #     ones and nothing is lost at all.
+            return norm * mask
         if self.obs_type == "state":
             # The angle arrives as `block.angle % 2*pi`, so a scalar encoding has a break at the
             # wrap: 0.01 and 6.27 rad are the SAME pose but land at opposite ends of [-1, 1], the
@@ -464,28 +476,39 @@ class PushTGymEnv(gymnasium.Env):
 
 
 def demo_action_steps(zarr_path=DEMO_ZARR):
-    """Per-axis |target displacement| of every step in the human demonstrations, in pixels.
+    """Per-axis |target - agent_pos| over the human demonstrations, in pixels.
 
-    PushT actions are absolute targets, so differencing them within an episode gives the target
-    displacement -- the same quantity a delta action commands, which is what makes the two
-    comparable. Differenced WITHIN episodes: across an episode boundary the difference is
-    between two unrelated states.
+    THE QUANTITY A DELTA ACTION ACTUALLY COMMANDS. `_convert_action` computes
+    `target = agent.position + a * delta_scale`, so |a| = 1 has to cover the gap between where
+    the agent IS and where the expert put the target -- not the gap between consecutive targets.
+
+    This used to difference the actions instead, on the reasoning that consecutive targets are
+    "the same quantity a delta action commands". They are not, and the difference is not small:
+    PushT's agent chases its target through a PD controller and lags it, so the agent-to-target
+    gap is systematically the larger of the two. Measured over the demonstrations:
+
+        |target - target| per axis      p50  4.0    p90  ~13   p99  33.0
+        |target - agent_pos| per axis   p50 10.8    p90  33.2  p99  61.2
+
+    Calibrating on the first put delta_scale at 33 px, which is only the p90 of the second --
+    so 18.8% of demonstration steps commanded a target the action space could not reach in one
+    step, and any regression onto that target saturates at |a| = 1 on those steps.
     """
     import zarr
 
     root = zarr.open(zarr_path, "r")
     action = np.asarray(root["data/action"])
-    ends = np.asarray(root["meta/episode_ends"])
-    starts = np.concatenate([[0], ends[:-1]])
-    return np.abs(np.concatenate([np.diff(action[s:e], axis=0) for s, e in zip(starts, ends)])).ravel()
+    agent = np.asarray(root["data/agent_pos"])
+    return np.abs(action - agent).ravel()
 
 
 def delta_scale_from_demos(zarr_path=DEMO_ZARR, percentile=99.0):
     """How far |a| = 1 should move the target, measured rather than guessed.
 
     The percentile answers "what counts as a big step for a human here": at p99 the full action
-    range spans essentially everything the demonstrations do (median 4px, p99 33px) without the
-    rare 135px outlier stretching the scale so that ordinary moves live in the first 3% of it.
+    range spans essentially everything the demonstrations do (median 10.8px, p99 61.2px) without
+    the rare 175px outlier stretching the scale so that ordinary moves live in the first few
+    percent of it.
     Falls back to DELTA_SCALE_FALLBACK, loudly, when the dataset is not on disk -- this is a
     convenience for picking a number, not a dependency of training.
     """

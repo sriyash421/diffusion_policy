@@ -353,7 +353,9 @@ def _obs_from_zarr(root, idx, obs_type, crop_span=None, rng=None):
         flat = _normalise(np.concatenate([kps, agent], axis=-1))             # 20, in [-1, 1]
         # the demos are fully visible, so the mask half is all +1 -- the {-1,+1} encoding
         # PushTGymEnv._convert_obs uses, not {0,1}
-        return np.concatenate([flat, np.ones_like(flat)], axis=-1)           # 40
+        # 20-d: the mask is applied by PushTGymEnv, not appended. A demo transition that still
+        # carried the mask half would not match the space it is stored in.
+        return flat
     if obs_type == "image":
         # zarr img is float32 in [0, 255] HWC; the obs is uint8 CHW. Verified identical.
         # IMAGE ONLY: `agent_pos` was removed from this arm so it sees exactly what the offline

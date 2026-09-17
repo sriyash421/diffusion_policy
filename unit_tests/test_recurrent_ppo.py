@@ -135,7 +135,12 @@ def test_occlusion_modes_share_a_marginal_and_differ_in_structure(mode, expected
     visible, runs, current = [], [], 0
     for _ in range(8000):
         obs, _, term, trunc, _ = env.step(np.zeros(2))
-        mask = obs[20:20 + 18:2] > 0
+        # the chain itself, not the observation. The mask used to ride along as 20 extra
+        # features and could be read back out of obs[20:38:2]; it is now APPLIED to the
+        # keypoints instead, so an occluded one is indistinguishable from one at the arena
+        # centre -- which is the property under test everywhere else, and would make this
+        # measurement wrong. `_visible` is what the mask is built from.
+        mask = np.asarray(env._visible, dtype=bool)
         visible.append(mask.mean())
         if not mask[0]:
             current += 1
@@ -250,7 +255,7 @@ def test_feedforward_q_head_cannot_move_the_policy():
 
 
 @pytest.mark.parametrize("space", [
-    gym.spaces.Box(-1, 1, (40,), dtype=np.float32),                       # the keypoint obs
+    gym.spaces.Box(-1, 1, (40,), dtype=np.float32),                       # any flat Box
     gym.spaces.Box(0, 255, (3, 8, 8), dtype=np.uint8),                    # a channels-first image
     gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 8, 8), dtype=np.uint8),
                      "agent_pos": gym.spaces.Box(-1, 1, (2,), dtype=np.float32)}),
@@ -296,7 +301,7 @@ def test_frame_stacker_matches_vec_frame_stack(space):
         assert np.array_equal(flat[-newest.shape[0]:], newest)
 
 
-@pytest.mark.parametrize("n_stack,expected", [(1, 40), (4, 160)])
+@pytest.mark.parametrize("n_stack,expected", [(1, 20), (4, 80)])
 def test_stack_arch_widens_the_observation(n_stack, expected):
     """What the policy is actually handed, through the same wrap() training and play both use."""
     from recurrent_ppo.arch import StackArch
@@ -565,7 +570,7 @@ def test_the_scheduler_still_matches_the_config_it_copies():
 
 @pytest.mark.parametrize("obs_type,n_stack,expected", [
     ("state", 1, 6), ("state", 4, 24),
-    ("keypoint", 1, 40), ("keypoint", 4, 160),
+    ("keypoint", 1, 20), ("keypoint", 4, 80),
     ("image", 1, 512), ("image", 4, 2048),
 ])
 def test_the_draw_is_as_wide_as_the_features_it_corrupts(obs_type, n_stack, expected):

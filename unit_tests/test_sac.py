@@ -354,7 +354,8 @@ def test_keypoint_arm_needs_no_simulation(obs_dict):
 
     obs, truth = obs_dict
     out = obs_for_arm(obs, "keypoint")
-    assert out.shape == (4, 40)
+    # 20-d: the visibility mask is applied by the env, not carried as features
+    assert out.shape == (4, 20)
     assert (np.abs(out) <= 1.0 + 1e-6).all(), "everything the policy sees is in [-1, 1]"
     assert (out[:, 20:] == 1.0).all(), "the demos are fully visible, so the mask half is all +1"
 
