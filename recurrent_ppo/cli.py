@@ -168,6 +168,13 @@ def add_common_args(parser):
                              "actually trained. off: eval/ uses the real uniform distribution. Either way the "
                              "other one is logged too, as eval_real/ or eval_train/ -- the matched number says "
                              "whether the policy improved, the real one says whether it can do the task.")
+    parser.add_argument("--bc-init", type=str, default=None,
+                        help="A bc_best.zip from recurrent_ppo.bc. Its POLICY weights are loaded "
+                             "into a freshly built agent, so PPO's hyperparameters come from "
+                             "this command line rather than from the BC run. Not --checkpoint: "
+                             "that resumes a PPO run, optimiser state and all.")
+    parser.add_argument("--bc-freeze-steps", type=int, default=1_000_000,
+                        help="Hold the BC encoder still for this many steps of fine-tuning.")
     parser.add_argument("--checkpoint", type=str, default=D["checkpoint"], help="Continue training from a checkpoint, in its own run directory.")
     parser.add_argument("--device", type=str, default=D["device"], help="Torch device.")
     return parser

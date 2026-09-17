@@ -1033,3 +1033,49 @@ def test_bc_batching_matches_sb3s_sequence_layout():
                 f"episode {i}: batched log-probs differ from the per-episode forward"
     finally:
         venv.close()
+
+
+def test_bc_init_freezes_and_unfreezes_a_real_encoder():
+    """The freeze must actually hold the image encoder still, then release it.
+
+    On keypoint and state the extractor is `nn.Flatten` and there is nothing to freeze, so the
+    only arm where this does anything is the image one -- which is also the only arm where a
+    warm start has an expensive representation to protect. A freeze that silently did nothing
+    would look identical to a working one in the logs.
+    """
+    from recurrent_ppo.callbacks import UnfreezeEncoder
+    from recurrent_ppo.corrupt_policy import STResNetExtractor
+
+    space = gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 96, 96), np.uint8)})
+    extractor = STResNetExtractor(space)
+
+    class _Stub:
+        features_extractor = extractor
+
+    cb = UnfreezeEncoder(n_steps=100)
+    assert cb.freeze(_Stub()), "an image encoder has parameters; freeze() should report True"
+    assert all(not p.requires_grad for p in extractor.parameters())
+
+    # before the budget: still frozen
+    cb.model = type("M", (), {"policy": _Stub()})()
+    cb.num_timesteps = 50
+    cb._on_step()
+    assert all(not p.requires_grad for p in extractor.parameters())
+
+    # at the budget: released
+    cb.num_timesteps = 100
+    cb._on_step()
+    assert all(p.requires_grad for p in extractor.parameters()), "encoder never unfroze"
+
+
+def test_bc_init_reports_a_parameter_free_encoder_honestly():
+    """On keypoint there is nothing to freeze, and freeze() must say so rather than claim it."""
+    from recurrent_ppo.callbacks import UnfreezeEncoder
+    from recurrent_ppo.corrupt_policy import KeypointExtractor
+
+    space = gym.spaces.Box(-1, 1, (20,), dtype=np.float32)
+
+    class _Stub:
+        features_extractor = KeypointExtractor(space)
+
+    assert UnfreezeEncoder(n_steps=100).freeze(_Stub()) is False

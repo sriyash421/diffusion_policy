@@ -36,6 +36,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback,
 
 from diffusion_policy.common.slot_stats_util import BLIND_EPS
 from recurrent_ppo.corrupt_policy import aug_for
+from recurrent_ppo.eval_episodes import states_from_manifest
 from recurrent_ppo.run_io import check_conflicts, dump_args, load_args
 from recurrent_ppo.runner import _claim
 from sac.agent import ChunkSAC, buffer_class_for, preload_demos
@@ -305,11 +306,19 @@ def train(args_cli):
     else:
         agent = _build_agent(cfg, env, log_dir, demo_offsets)
         if cfg["demo_seed_frac"] > 0:
+            # TRAIN EPISODES ONLY. This used to seed from all 206, which put transitions from
+            # the best-of-N sweep's own eval episodes into the buffer the verifier learns from
+            # -- so any "the learned Q beats the heuristic" would not have been a held-out
+            # claim, while the heuristic it is compared against has no such advantage.
+            _, train_idxs = states_from_manifest(cfg["split_file"], "train")
             # the SAME crop_span the live env draws with, or the demo half of the buffer
-            # would not match the space it is stored in -- see _obs_from_zarr
+            # would not match the space it is stored in -- see obs_from_zarr
             tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], gamma=cfg["gamma"],
                                   tau_ladder=cfg["tau_ladder"], frac=cfg["demo_seed_frac"],
-                                  crop_span=(aug or {}).get("crop_span"))
+                                  crop_span=(aug or {}).get("crop_span"),
+                                  episode_idxs=train_idxs)
+            print(f"[INFO] demo seeding restricted to {len(train_idxs)} TRAIN episodes of "
+                  f"{cfg['split_file']}")
             print(summarise(tr))
             preload_demos(agent.replay_buffer, tr)
 

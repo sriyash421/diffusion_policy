@@ -16,7 +16,7 @@ import numpy as np
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
 from stable_baselines3.common.vec_env import VecNormalize
 
-from recurrent_ppo.callbacks import (ActionDiagnostics, CleanEvalCallback,
+from recurrent_ppo.callbacks import (UnfreezeEncoder, ActionDiagnostics, CleanEvalCallback,
                                      CorruptEvalCallback, FeatureStdWindow, QHead,
                                      RolloutVideo, SecondEval, arm_tags)
 from recurrent_ppo.config import DEFAULTS, TRAINING_HPARAMS
@@ -152,6 +152,18 @@ def train(args_cli, arch):
             )
     else:
         agent = arch.build(env, cfg, log_dir)
+        if args_cli.bc_init:
+            # The BC stage saved a RecurrentPPO checkpoint of THIS policy class, so the transfer
+            # is a state_dict load rather than a translation -- strict, so a shape that does not
+            # line up raises here instead of training from a partly random actor. The agent is
+            # built fresh first so PPO's hyperparameters come from this command line; only the
+            # weights come from BC.
+            print(f"[INFO] BC-init from {args_cli.bc_init}")
+            donor = arch.load(args_cli.bc_init, env, cfg, print_system_info=False)
+            agent.policy.load_state_dict(donor.policy.state_dict(), strict=True)
+            del donor
+            unfreeze = UnfreezeEncoder(args_cli.bc_freeze_steps)
+            unfreeze.freeze(agent.policy)
 
     # callbacks for agent. save_freq counts agent steps, of which each is num_envs env steps.
     callbacks = [
@@ -167,6 +179,8 @@ def train(args_cli, arch):
         QHead(),
         FeatureStdWindow(),
     ]
+    if not resuming and args_cli.bc_init:
+        callbacks.append(unfreeze)
     if args_cli.video_freq > 0:
         if run is None:
             raise SystemExit("[ERROR] --video-freq needs --wandb: the video has nowhere else to go.")

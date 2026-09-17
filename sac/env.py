@@ -370,11 +370,19 @@ def obs_from_zarr(root, idx, obs_type, crop_span=None, rng=None):
 
 
 def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stride=1,
-                     gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0, crop_span=None):
+                     gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0, crop_span=None,
+                     episode_idxs=None):
     """Chunk transitions with a per-tau (reward, done, live) triple.
 
     Returns a dict with `obs`, `action`, `next_obs`, `reward` (N, n_tau), `done` (N, n_tau),
     `live` (N, n_tau) and `chunk_max_coverage` (N,).
+
+    `episode_idxs` RESTRICTS which demonstrations are used, and passing it matters. This seeded
+    the buffer from ALL 206 episodes, including the 50 the best-of-N sweep later scores the
+    learned Q on -- so the verifier was trained on transitions from the very episodes it was
+    judged against, and "the learned Q beats the heuristic" would not have been a held-out
+    claim. The heuristic it is compared with has no such advantage. Pass the manifest's train
+    split. None keeps every episode, which is right for a diagnostic and wrong for a run.
     """
     import zarr
 
@@ -387,7 +395,10 @@ def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stri
     taus = np.asarray(tau_ladder, dtype=np.float32)
 
     t0, rew, done, live, cmax = [], [], [], [], []
-    for s, e in zip(starts, ends):
+    keep = set(range(len(ends))) if episode_idxs is None else {int(i) for i in episode_idxs}
+    for ep, (s, e) in enumerate(zip(starts, ends)):
+        if ep not in keep:
+            continue
         # first frame at which the episode exceeds each tau; len(cov) if it never does
         crossed = cov[s:e] > taus[:, None]                       # (n_tau, T)
         first = np.where(crossed.any(1), crossed.argmax(1), e - s)   # (n_tau,) episode-relative

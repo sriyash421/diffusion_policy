@@ -118,7 +118,11 @@ DEFAULTS = {
     "mix_demo": 0.25,
     "mix_smooth": 0.25,
     "smooth_scale": 12.0,
-    "demo_seed_frac": 1.0,              # fraction of the 24,208 demo chunks preloaded
+    "demo_seed_frac": 1.0,              # fraction of the demo chunks preloaded
+    # WHICH demonstrations may be preloaded. Only this manifest's TRAIN episodes reach
+    # the buffer, so the learned Q is never fitted on transitions from the episodes the
+    # best-of-N sweep scores it on.
+    "split_file": "diffusion_policy/config/splits/pusht_seed42_train106_val50.json",
     "reset_from_demos": 0.0,
     # bookkeeping
     "wandb": False,
@@ -164,6 +168,9 @@ IDENTITY_KEYS = (
     "block_goal_offset_final", "max_reset_coverage",
     "curriculum_anneal_frac", "block_zero_coverage", "net_arch", "n_critics",
     "target_entropy", "mix_actor", "mix_uniform", "mix_demo", "mix_smooth", "smooth_scale", "demo_seed_frac",
+    # WHICH demonstrations seeded the buffer is part of what a run IS: resuming with a different
+    # manifest would swap the data under a checkpoint and leave nothing on disk saying so.
+    "split_file",
 )
 
 
@@ -280,6 +287,8 @@ def add_common_args(parser):
                              "before the sparse reward can ever be found.")
     parser.add_argument("--smooth-scale", type=float, default=D["smooth_scale"],
                         help="Per-step std (px) of the smooth random-walk exploration arm.")
+    parser.add_argument("--split-file", type=str, default=D["split_file"],
+                        help="Demo seeding uses only this manifest's TRAIN episodes.")
     parser.add_argument("--demo-seed-frac", type=float, default=D["demo_seed_frac"],
                         help="Fraction of the ~24k demo chunk transitions preloaded.")
     # bookkeeping

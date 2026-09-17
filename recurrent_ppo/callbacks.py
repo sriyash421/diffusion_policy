@@ -381,3 +381,41 @@ def arm_tags(cfg):
     if cfg["obs"] == "keypoint" and cfg["keypoint_visible_rate"] < 1.0:
         tags.append(f"occl-{cfg['occlusion']}")
     return tags
+
+
+class UnfreezeEncoder(BaseCallback):
+    """Hold the BC-initialised encoder still, then let PPO have it.
+
+    PPO's first updates are the highest-variance ones it will ever take -- advantages estimated
+    from a critic that is still at its initialisation, since BC has no target for a critic and
+    trains the actor alone. Letting those gradients straight into a representation that took a
+    supervised run to learn is how a warm start becomes indistinguishable from a cold one.
+
+    ONLY THE IMAGE ARM HAS ANYTHING TO FREEZE. KeypointExtractor is `nn.Flatten` and carries no
+    parameters, so on the keypoint and state arms this is a no-op and says so rather than
+    implying an effect it cannot have.
+    """
+
+    def __init__(self, n_steps, verbose=0):
+        super().__init__(verbose)
+        self.n_steps = int(n_steps)
+        self._frozen = False
+
+    def freeze(self, policy):
+        params = [p for p in policy.features_extractor.parameters()]
+        for p in params:
+            p.requires_grad_(False)
+        self._frozen = bool(params)
+        n = sum(p.numel() for p in params)
+        print(f"[INFO] BC-init: froze {n} encoder parameters for the first {self.n_steps} steps"
+              if params else
+              "[INFO] BC-init: the encoder is parameter-free on this arm; nothing to freeze")
+        return self._frozen
+
+    def _on_step(self):
+        if self._frozen and self.num_timesteps >= self.n_steps:
+            for p in self.model.policy.features_extractor.parameters():
+                p.requires_grad_(True)
+            self._frozen = False
+            print(f"[INFO] BC-init: encoder unfrozen at {self.num_timesteps} steps", flush=True)
+        return True

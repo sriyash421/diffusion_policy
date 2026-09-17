@@ -755,3 +755,31 @@ def test_score_builds_the_image_observation_the_arm_declares():
     # and the offset is the CENTRE one -- the Q trains on random crops and deploys on the centre
     lo = (96 - ST_CROP) // 2
     assert np.array_equal(built[AUG_CROP_KEY], np.full((2, 2), lo, dtype=np.float32))
+
+
+def test_demo_seeding_is_restricted_to_the_split():
+    """The buffer must never be seeded from an episode the verifier is later scored on.
+
+    `demo_transitions` used to walk all 206 episodes, so the learned Q was fitted on transitions
+    from the very 50 the best-of-N sweep judges it against -- while the heuristic it is compared
+    with has no such advantage. That makes "the learned Q beats the heuristic" not a held-out
+    claim, and nothing about the number would have shown it.
+    """
+    from recurrent_ppo.eval_episodes import states_from_manifest
+    from sac.env import demo_transitions
+
+    split = "diffusion_policy/config/splits/pusht_seed42_train106_val50.json"
+    _, train_idxs = states_from_manifest(split, "train")
+    _, test_idxs = states_from_manifest(split, "test")
+
+    everything = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=64)
+    restricted = demo_transitions(DEMO_ZARR, obs_type="keypoint", stride=64,
+                                  episode_idxs=train_idxs)
+    assert len(restricted["action"]) < len(everything["action"]), "the filter did nothing"
+
+    # 106 of 206 episodes, so the transition count should track that, not merely be smaller
+    ratio = len(restricted["action"]) / len(everything["action"])
+    assert 0.4 < ratio < 0.7, f"kept {ratio:.2%} of transitions for {len(train_idxs)}/206 episodes"
+
+    # and none of it is an episode the sweep scores on
+    assert not (set(int(i) for i in train_idxs) & set(int(i) for i in test_idxs))
