@@ -26,9 +26,14 @@ python eval_bon.py -c ... -o ... --n-samples 64 --n-envs 50
 """
 
 import sys
-# use line-buffering for both stdout and stderr
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
+
+if __name__ == '__main__':
+    # Line-buffered, so a SLURM log shows progress instead of arriving in 8 KB blocks.
+    # ONLY when run as a script: re-opening the fd on IMPORT hands the new file object
+    # ownership of a descriptor the caller still owns, and pytest's capture machinery then
+    # fails with `OSError: [Errno 9] Bad file descriptor` on every fixture that follows.
+    sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import os
 import json
@@ -43,9 +48,7 @@ import tqdm
 
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.pusht_image_dataset import (
-    get_split_masks, get_episode_init_states)
+from eval_search_pusht import get_split_states
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
@@ -262,7 +265,10 @@ def plot_curves(c, rewards, out_path):
 @click.option('--n-envs', default=50, help='parallel envs')
 @click.option('--max-steps', default=300)
 @click.option('--seed', default=0)
-def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps, seed):
+@click.option('--split', type=click.Choice(['val', 'test']), default='test',
+              help="which held-out split to score. 'val' is what a checkpoint should be CHOSEN "
+                   "on, so that test stays a report rather than a maximum.")
+def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps, seed, split):
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -279,17 +285,17 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
     policy.to(torch.device(device))
     policy.eval()
 
-    # the same held-out test resets the runner uses
+    # THE SAME EPISODES THE RUNNER USES, resolved the same way. This used to re-derive the
+    # split from (seed, n_test_episodes), which ignores `split_file` entirely. For the seed-42
+    # manifests that happens to agree; for the geometric ones it does not, and the episodes it
+    # picked were largely the checkpoint's own TRAINING episodes -- 42 of 50 on
+    # blockquad_topright. `get_split_states` reads the manifest and cross-checks the run's
+    # splits.json, so a silent mismatch becomes a hard error.
     ds_cfg = cfg.task.dataset
-    replay_buffer = ReplayBuffer.copy_from_path(
-        ds_cfg.zarr_path, keys=['agent_pos', 'block_pos'])
-    _, test_mask = get_split_masks(
-        n_episodes=replay_buffer.n_episodes,
-        n_test_episodes=ds_cfg.n_test_episodes,
-        seed=ds_cfg.seed,
-        n_train_episodes=ds_cfg.get('n_train_episodes', None))
-    states = get_episode_init_states(replay_buffer, test_mask)
-    episode_idxs = np.nonzero(test_mask)[0]
+    run_dir = pathlib.Path(checkpoint).resolve().parent.parent
+    states, episode_idxs = get_split_states(cfg, split, run_dir=run_dir)
+    print(f'[INFO] scoring the {split} split: {len(states)} episodes, '
+          f'split_file={ds_cfg.get("split_file", None)}')
     if n_resets is not None:
         states = states[:n_resets]
         episode_idxs = episode_idxs[:n_resets]
@@ -349,6 +355,11 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
 
     summary = {
         'checkpoint': checkpoint,
+        # WHICH episodes, named in the artifact. Pre-2026-09 summaries carry neither field and
+        # were produced by a seed derivation that ignored split_file, so on a geometric run
+        # they scored partly-training episodes; absence of these keys is the tell.
+        'split': split,
+        'split_file': ds_cfg.get('split_file', None),
         'n_resets': int(n_resets),
         'n_samples': int(n_samples),
         'mean_reward_single_sample': float(curves['mean_reward']),

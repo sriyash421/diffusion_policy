@@ -30,8 +30,15 @@ Watcher (evals each new step_*.ckpt as training writes it, logs curves to wandb)
 
 """
 import sys
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
+
+if __name__ == '__main__':
+    # Line-buffered, so a SLURM log shows progress instead of arriving in 8 KB blocks.
+    # ONLY when run as a script: re-opening the fd on IMPORT hands the new file object
+    # ownership of a descriptor the caller still owns, and pytest's capture machinery then
+    # fails with `OSError: [Errno 9] Bad file descriptor` on every fixture that follows --
+    # 353 errors from one import, none of them near the real cause.
+    sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import os
 import re

@@ -13,8 +13,15 @@ python bon_video.py -c ... -o ... --reset-idxs 47,12,2,22,6   # resets that succ
 """
 
 import sys
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
+
+if __name__ == '__main__':
+    # Line-buffered, so a SLURM log shows progress instead of arriving in 8 KB blocks.
+    # ONLY when run as a script: re-opening the fd on IMPORT hands the new file object
+    # ownership of a descriptor the caller still owns, and pytest's capture machinery then
+    # fails with `OSError: [Errno 9] Bad file descriptor` on every fixture that follows --
+    # 353 errors from one import, none of them near the real cause.
+    sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import os
 import pathlib
@@ -27,9 +34,7 @@ import tqdm
 
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.dataset.pusht_image_dataset import (
-    get_split_masks, get_episode_init_states)
+from eval_search_pusht import get_split_states
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
@@ -138,8 +143,10 @@ def tile(clips, n_rows, n_cols):
 @click.option('--crf', default=22)
 @click.option('--scale', default=2, help='upscale each 96px cell so text is legible')
 @click.option('--seed', default=0)
+@click.option('--split', type=click.Choice(['val', 'test']), default='test',
+              help='which held-out split to render')
 def main(checkpoint, output_dir, device, n_resets, n_samples, reset_idxs,
-         max_steps, fps, crf, scale, seed):
+         max_steps, fps, crf, scale, seed, split):
     import imageio.v2 as iio
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     media_dir = pathlib.Path(output_dir).joinpath('cells')
@@ -158,16 +165,13 @@ def main(checkpoint, output_dir, device, n_resets, n_samples, reset_idxs,
     policy.to(torch.device(device))
     policy.eval()
 
+    # the manifest, not a seed derivation -- see the note in eval_bon.py. Rendering the wrong
+    # episodes is worse here than in eval_bon: the video LOOKS like evidence.
     ds_cfg = cfg.task.dataset
-    replay_buffer = ReplayBuffer.copy_from_path(
-        ds_cfg.zarr_path, keys=['agent_pos', 'block_pos'])
-    _, test_mask = get_split_masks(
-        n_episodes=replay_buffer.n_episodes,
-        n_test_episodes=ds_cfg.n_test_episodes,
-        seed=ds_cfg.seed,
-        n_train_episodes=ds_cfg.get('n_train_episodes', None))
-    all_states = get_episode_init_states(replay_buffer, test_mask)
-    all_eps = np.nonzero(test_mask)[0]
+    run_dir = pathlib.Path(checkpoint).resolve().parent.parent
+    all_states, all_eps = get_split_states(cfg, split, run_dir=run_dir)
+    print(f'[INFO] rendering the {split} split: {len(all_states)} episodes, '
+          f'split_file={ds_cfg.get("split_file", None)}')
 
     if reset_idxs is not None:
         idxs = [int(x) for x in reset_idxs.split(',')]
