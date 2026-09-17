@@ -43,8 +43,18 @@ dataset:
   pad_before: 0
   pad_after: 0
   seed: 42
-  n_train_episodes: 150
+  # THE MANIFEST, like every other arm. This block used to pass `train_ratio: 0.2` and no
+  # `split_file`, which `PushTImageDataset` has accepted neither of since 2026-08-29 -- the
+  # arm raised on construction.
+  #
+  # The budget moved 150 -> 126, and it had to. 150 train was only reachable under the old
+  # TWO-way split (206 - 50 test); the manifest regime holds out 30 val episodes as well, so
+  # 206 - 50 - 30 = 126 is every episode that is neither val nor test. train126 is exactly
+  # that manifest, and it is a strict superset of train100/train30, so this arm's data is
+  # nested with the others' rather than a fourth independent draw.
+  split_file: diffusion_policy/config/splits/pusht_seed42_train126.json
+  n_train_episodes: 126
+  n_val_episodes: 30
   n_test_episodes: 50
   split: train
-  train_ratio: 0.2
   return_sequences: True

@@ -80,6 +80,10 @@ These are the reasons two numbers in the table above may not be measured on the 
    are fully visible and the mask would be a constant.
 5. **`goal_mask_noise` is train-split only** by design, so that arm is deliberately evaluated
    off its training distribution.
+5b. **The online-search arm does not share the encoder.** It keeps a private block with no
+   crop and `imagenet_norm: True` on a dataset already in [-1, 1]. It is not in the table above
+   because it has produced no measured result, and if it does, that number is not comparable
+   with the other image arms until the encoder question is settled. See `DEAD_CODE.md`.
 6. **Pre-2026-09-16 `eval_bon` numbers on geometric splits are train-leaked.** `eval_bon.py`
    re-derived the split from the seed and ignored `split_file`. On the eight seed-42 manifests
    that is identical, so those numbers stand. On the five geometric manifests it is not:

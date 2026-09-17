@@ -836,6 +836,19 @@ python train.py --config-name=train_online_search training.device=cuda:0
   pure-BC ablation (no env in the loop).
 - Checkpoints keep top-5 by `train_action_mse_error`; W&B project `pusht_online_search`.
 
+**Two things to know before comparing this arm with the others** (both in
+[`docs/reports/DEAD_CODE.md`](docs/reports/DEAD_CODE.md)):
+
+- Its data budget is **126 train episodes**, on `pusht_seed42_train126.json`. It read 150
+  until 2026-09-16, which was only reachable under the old two-way split; once 30 val
+  episodes are held out, 126 is every episode that is neither val nor test. Before that fix
+  the arm raised on construction — it passed `train_ratio`, which `PushTImageDataset` has not
+  accepted since 2026-08-29.
+- **Its encoder is not the shared one.** This config does not inherit `pusht_base.yaml`, so it
+  keeps a private block with no crop and `imagenet_norm: True` on a dataset already mapped to
+  [-1, 1] — a double normalisation. Its numbers are not comparable with the other image arms
+  until that is settled.
+
 ---
 
 ## 5. Training loop structures (read this before comparing runs)

@@ -174,8 +174,16 @@ class BaseWorkspace:
             'corrupt_obs': cfg.get('corrupt_obs'),
             'seed': cfg.training.get('seed'),
             'zarr_path': cfg.task.dataset.get('zarr_path'),
-            'train_ratio': cfg.task.dataset.get('train_ratio'),
+            'split_file': cfg.task.dataset.get('split_file'),
             'target': cfg.get('_target_'),
+            # The POLICY class, not just the workspace. `target` above is the workspace, and
+            # workspaces are shared: TrainDiffusionUnetImageWorkspace serves both the
+            # PushTUNetSearchPolicy arm (best-of-n, crop shared across the obs frames) and the
+            # upstream DiffusionUnetImagePolicy arm (neither). Two run directories can
+            # therefore differ in what the checkpoint IS while agreeing on every other key
+            # here, and the only thing distinguishing them was the config `name` -- which is an
+            # inference about what a config pointed at, not a record of what was built.
+            'policy_target': cfg.get('policy', {}).get('_target_'),
         })
         payload.setdefault('launches', []).append(launch)
         tmp = path.with_suffix('.json.tmp')
