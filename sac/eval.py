@@ -108,6 +108,30 @@ def install_q_ranker(policy, q, skip_context_sim=False):
     return lambda: setattr(policy, "_score_candidates", original)
 
 
+def install_v_ranker(policy, v):
+    """Rank on a learned V evaluated at the state the chunk REACHES. Returns a restore callable.
+
+    NO `skip_context_sim` COUNTERPART, and that is not an omission. Q's shortcut is valid
+    because Q scores (state, chunk) directly and needs no rollout; V takes no action, so the
+    rollout IS its input -- skipping the sim would leave it nothing to evaluate. `v.rollout`
+    therefore calls the sim verifier itself, and the original `_score_candidates` still runs so
+    the CONTEXT ST conditions on stays the t_goal-shaped one it was trained with.
+    """
+    original = policy._score_candidates
+    To, Ta = policy.n_obs_steps, policy.n_action_steps
+    keys = ("agent_pos", "feedback", "image")
+
+    def patched(verifier, obs_dict, action, want_subgoals=False):
+        now = {k: val[:, To - 1:To] for k, val in obs_dict.items() if k in keys}
+        exec_action = action[:, To - 1:To - 1 + Ta]
+        vv = v.get_value(now, exec_action)
+        context, value, subgoal, terms = original(verifier, obs_dict, action, want_subgoals)
+        return context, vv.to(value.device).to(value.dtype), subgoal, terms
+
+    policy._score_candidates = patched
+    return lambda: setattr(policy, "_score_candidates", original)
+
+
 def set_sim_value(policy, value_fn):
     """Point the sim verifier at one of VALUE_FNS, both places that must move together."""
     policy.search_kwargs["verifier_value"] = value_fn
@@ -364,7 +388,10 @@ def frames(checkpoint, q_ckpt, n_actions, n_frames, episode, split, device, seed
 @click.option('-c', '--checkpoint', required=True)
 @click.option('--q', 'q_ckpt', default=None, help='SAC checkpoint; required if `q` is a ranker')
 @click.option('--rankers', default='q,t_goal,armTn', show_default=True,
-              help='comma-separated: any of q, t_goal, d_t_goal, armTn')
+              help='comma-separated: any of q, v, t_goal, d_t_goal, armTn')
+@click.option('--v', 'v_ckpt', default=None,
+              help='PPO checkpoint; required if `v` is a ranker. Its V is evaluated at the '
+                   'state each candidate chunk reaches.')
 @click.option('--max-n', default=16, show_default=True)
 @click.option('--split', type=click.Choice(['val', 'test']), default='test', show_default=True)
 @click.option('--n-envs', default=25, show_default=True)
@@ -399,6 +426,15 @@ def bon_sweep(checkpoint, q_ckpt, rankers, max_n, split, n_envs, max_steps, epis
     q = PushTQVerifier(q_ckpt, device=device) if 'q' in rankers else None
     if 'q' in rankers and q_ckpt is None:
         raise SystemExit('--q is required when `q` is among the rankers')
+    if 'v' in rankers and v_ckpt is None:
+        raise SystemExit('--v is required when `v` is among the rankers')
+    vv = None
+    if 'v' in rankers:
+        from recurrent_ppo.value_score import PushTVVerifier
+
+        # the SAME sim verifier the heuristic rankers use, so every ranker is compared on
+        # identical reached states rather than on separately simulated ones
+        vv = PushTVVerifier(v_ckpt, policy.verifier, device=device)
 
     env = build_envs(min(n_envs, len(idxs)), policy.n_obs_steps, policy.n_action_steps, max_steps)
     curves = {}
@@ -407,6 +443,8 @@ def bon_sweep(checkpoint, q_ckpt, rankers, max_n, split, n_envs, max_steps, epis
             restore = None
             if ranker == 'q':
                 restore = install_q_ranker(policy, q, skip_context_sim)
+            elif ranker == 'v':
+                restore = install_v_ranker(policy, vv)
             else:
                 set_sim_value(policy, ranker)
             try:

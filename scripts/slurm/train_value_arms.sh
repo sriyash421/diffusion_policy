@@ -20,6 +20,19 @@ SPLIT=diffusion_policy/config/splits/pusht_seed42_train106_val50.json
 STEPS="${STEPS:-10000000}"
 SEED="${SEED:-42}"
 
+# Asked for, and filtered on, the SAME numbers -- pick_gpu.sh's whole point is that a partition
+# can show a free GPU while its CPU or memory allowance is exhausted, and a job sent there sits
+# in AssocGrpCpuLimit forever rather than failing. Modest on purpose: PushT stepping is cheap,
+# the rollout buffer holds uint8 frames, and 8 CPUs against the 128 free on gpu-l40 leaves the
+# node usable by everyone else.
+CPUS="${CPUS:-8}"
+MEM_G="${MEM_G:-32}"
+# MUST be finite and MUST end before the next maintenance window -- an unlimited job can never
+# be proven to finish before one, so SLURM parks it with Reason=ReqNodeNotAvail and it silently
+# never starts. Next window: 2026-10-13 09:00. Re-check with
+#   scontrol show reservation | grep -A1 Maintenance
+TIME="${TIME:-5-00:00:00}"
+
 # --reward delta throughout: its return telescopes to total progress, so V estimates "coverage
 # still to gain", which is what a ranker needs. A level-valued reward once paid a do-nothing
 # policy 92.7.
@@ -55,6 +68,20 @@ sac_image              | sac/runner.py               | --obs image
 
 WANT="${ARMS:-}"
 SCORE=""
+
+# ONE call, then round-robin. hyakalloc reports the SCHEDULER's view, which does not include a
+# job submitted seconds ago -- so calling this once per arm returns the same answer every time
+# and piles all ten onto one partition. pick_gpu.sh prints every candidate best-first precisely
+# so a multi-job caller can walk it, which is what this does.
+TARGETS=()
+if [ "${SUBMIT:-0}" = "1" ]; then
+    while read -r acct part; do
+        [ -n "$acct" ] && TARGETS+=("$acct $part")
+    done < <(NEED_CPUS=$CPUS NEED_MEM_G=$MEM_G NEED_GPUS=1 bash "$ROOT/scripts/slurm/pick_gpu.sh")
+    [ ${#TARGETS[@]} -eq 0 ] && { echo "no partition has ${CPUS} CPUs + ${MEM_G}G + 1 GPU free" >&2; exit 1; }
+    echo "[INFO] ${#TARGETS[@]} candidate partition(s): ${TARGETS[*]}"
+fi
+NEXT=0
 while IFS='|' read -r label entry extra; do
     label="$(echo "$label" | xargs)"; entry="$(echo "$entry" | xargs)"; extra="$(echo "$extra" | xargs)"
     [ -z "$label" ] && continue
@@ -79,10 +106,11 @@ while IFS='|' read -r label entry extra; do
     esac
 
     if [ "${SUBMIT:-0}" = "1" ]; then
-        read A P < <(bash "$ROOT/scripts/slurm/pick_gpu.sh")
+        read A P <<< "${TARGETS[$((NEXT % ${#TARGETS[@]}))]}"
+        NEXT=$((NEXT + 1))
         echo "[SUBMIT $label] account=$A partition=$P"
         sbatch --account="$A" --partition="$P" --job-name="va_$label" \
-               --gpus=1 --cpus-per-task=8 --mem=64G --time=2-00:00:00 \
+               --gpus=1 --cpus-per-task="$CPUS" --mem="${MEM_G}G" --time="$TIME" \
                --output=/gscratch/robotics/harine/slurm_logs/%x-%j.out \
                --wrap "set -u; source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh; \
                        conda activate robodiff; cd $ROOT; unset WANDB_API_KEY; $cmd"
@@ -93,12 +121,33 @@ done <<< "$ARMS_ALL"
 
 [ "${SUBMIT:-0}" = "1" ] || echo $'\nDry run. SUBMIT=1 to sbatch.'
 
+# Scoring the finished arms on the SHARED episodes. A separate step on purpose: PPO's
+# in-training evaluation is seeded procedural resets, a monitoring signal, while the number
+# comparable with ST / BC-UNet comes from rolling the manifest's own episodes.
+#
+#   EVAL=1 bash scripts/slurm/train_value_arms.sh
+#
+# ON THE ckpt PARTITION, preemptible and free, so the guaranteed robotics/weirdlab GPUs stay
+# available for training. --requeue re-runs after preemption; eval_checkpoints re-seeds per
+# checkpoint, so a requeued job repeats work rather than corrupting it.
 if [ -n "$SCORE" ]; then
-    echo $'\nWhen the PPO arms finish, score them on the SHARED episodes -- this is what makes'
-    echo "their numbers comparable with ST / BC-UNet, and it is a separate step on purpose:"
-    while read -r run; do
-        [ -z "$run" ] && continue
-        echo "  python -m recurrent_ppo.scripts.eval_checkpoints $run \\"
-        echo "         --split-file $SPLIT --split test --out $run/eval_test.json"
-    done <<< "$SCORE"
+    if [ "${EVAL:-0}" = "1" ]; then
+        while read -r run; do
+            [ -z "$run" ] && continue
+            [ -d "$run" ] || { echo "[SKIP $(basename "$run")] not trained yet"; continue; }
+            echo "[EVAL $(basename "$run")] -> ckpt"
+            sbatch --partition=ckpt --account=robotics --requeue \
+                   --job-name="ve_$(basename "$run")" --gpus=1 --cpus-per-task="$CPUS" \
+                   --mem="${MEM_G}G" --time=8:00:00 \
+                   --output=/gscratch/robotics/harine/slurm_logs/%x-%j.out \
+                   --wrap "set -u; source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh; \
+                           conda activate robodiff; cd $ROOT; unset WANDB_API_KEY; \
+                           python -m recurrent_ppo.scripts.eval_checkpoints $run \
+                                  --split-file $SPLIT --split test --num-envs $CPUS \
+                                  --out $run/eval_test.json"
+        done <<< "$SCORE"
+    else
+        echo $'\nWhen the PPO arms finish, score them on the SHARED episodes:'
+        echo "  EVAL=1 bash scripts/slurm/train_value_arms.sh    # submits to the ckpt partition"
+    fi
 fi

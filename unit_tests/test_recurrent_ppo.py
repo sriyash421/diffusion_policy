@@ -1079,3 +1079,62 @@ def test_bc_init_reports_a_parameter_free_encoder_honestly():
         features_extractor = KeypointExtractor(space)
 
     assert UnfreezeEncoder(n_steps=100).freeze(_Stub()) is False
+
+
+# ------------------------------------------------------------------ V as a verifier
+def test_v_verifier_refuses_a_value_fn_it_does_not_implement():
+    """Silently accepting 't_goal' and returning V is how a table gets the wrong label.
+
+    `PushTQVerifier` refuses anything but 'q' for the same reason. The guard has to be at
+    construction because `eval_search_pusht --verifier-value` assigns onto a built verifier.
+    """
+    from recurrent_ppo.value_score import PushTVVerifier
+
+    with pytest.raises(AssertionError, match="one value, 'v'"):
+        PushTVVerifier("unused.zip", sim_verifier=None, value_fn="t_goal")
+
+
+def test_v_observation_is_built_from_the_reached_state():
+    """V scores where the chunk LANDS, so its observation comes from the rollout's state.
+
+    (B, 18) = [agent_pos(2), feedback(16)] is what PushTVerifier.rollout returns. The keypoint
+    build must reconstruct the block pose from the feedback half and emit 20-d -- and must NOT
+    append a visibility mask, which would be 40-d against a 20-wide first layer.
+    """
+    from diffusion_policy.env.pusht.feedback_util import compute_feedback_from_pose
+    from recurrent_ppo.value_score import obs_for_arm
+
+    pose = np.array([[256.0, 256.0, 0.6], [180.0, 300.0, 2.1]], dtype=np.float32)
+    agent = np.array([[120.0, 130.0], [400.0, 410.0]], dtype=np.float64)
+    state = np.concatenate([agent, compute_feedback_from_pose(pose)], axis=-1)
+
+    out = obs_for_arm(state, None, "keypoint")
+    assert out.shape == (2, 20), f"expected 20-d, got {out.shape}"
+    assert (np.abs(out) <= 1.0 + 1e-6).all(), "everything the policy sees is in [-1, 1]"
+    # the agent half is the reached agent position, normalised the way PushTGymEnv does
+    assert np.allclose(out[:, -2:], agent / 256.0 - 1.0, atol=1e-5)
+
+
+def test_v_image_observation_carries_no_crop_key():
+    """A PPO image checkpoint emits no `aug_crop` and centre-crops inside the extractor.
+
+    `sac.score.obs_for_arm` MUST add that key, because SAC trains with VecAugmentationDraw.
+    Copying that branch here would be silently wrong rather than a crash -- the extractor's
+    `replay_crop` is fixed at construction from the observation space.
+    """
+    from recurrent_ppo.pusht_gym import AUG_CROP_KEY
+    from recurrent_ppo.value_score import obs_for_arm
+
+    state = np.zeros((2, 18), dtype=np.float64)
+    out = obs_for_arm(state, np.zeros((2, 3, 96, 96), dtype=np.uint8), "image")
+    assert set(out) == {"image"}, f"expected image only, got {sorted(out)}"
+    assert AUG_CROP_KEY not in out
+    assert out["image"].dtype == np.uint8
+
+
+def test_v_image_observation_requires_the_rendered_frame():
+    """Without render=True the rollout returns no frame, and V cannot score an image arm."""
+    from recurrent_ppo.value_score import obs_for_arm
+
+    with pytest.raises(ValueError, match="needs the frame"):
+        obs_for_arm(np.zeros((2, 18)), None, "image")
