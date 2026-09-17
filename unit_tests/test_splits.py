@@ -236,3 +236,61 @@ def test_every_committed_manifest_matches_the_real_zarr():
     ends = np.asarray(zarr.open(str(DEMO_ZARR), 'r')['meta/episode_ends'])
     for path in sorted(SPLITS_DIR.glob('*.json')):
         load_split_manifest(str(path), episode_ends=ends)
+
+
+# ------------------------------------------------- the RL arms resolve the SAME episodes
+@pytest.mark.slow
+def test_the_rl_path_resolves_the_same_episodes_as_the_offline_arms():
+    """`states_from_manifest` must agree with the manifest, index for index and state for state.
+
+    This is what makes an RL number comparable with an ST number at all. The RL arms cannot call
+    `eval_search_pusht.get_split_states` -- that reads a hydra `cfg.task.dataset` they do not
+    have -- so they resolve episodes by naming the manifest directly. Two resolvers for one
+    question is exactly how the eval_bon train-leak happened, so this pins them together: the
+    episode indices must BE the manifest's own list, and each state must be the zarr's recorded
+    first frame of that episode.
+    """
+    import zarr
+
+    from diffusion_policy.common.replay_buffer import ReplayBuffer
+    from recurrent_ppo.config import DEMO_ZARR
+    from recurrent_ppo.eval_episodes import states_from_manifest
+
+    if not pathlib.Path(DEMO_ZARR).exists():
+        pytest.skip(f"{DEMO_ZARR} not present")
+
+    split_file = str(SPLITS_DIR / 'pusht_seed42_train30.json')
+    states, idxs = states_from_manifest(split_file, 'test', zarr_path=DEMO_ZARR)
+
+    manifest = json.loads(pathlib.Path(split_file).read_text())
+    assert idxs.tolist() == sorted(manifest['test']), "episode indices are not the manifest's"
+    assert len(states) == 50 and states.shape[1] == 5
+
+    # each state is [agent_x, agent_y, block_x, block_y, angle] at that episode's FIRST frame
+    rb = ReplayBuffer.copy_from_path(DEMO_ZARR, keys=['agent_pos', 'block_pos'])
+    ends = np.asarray(rb.episode_ends[:])
+    starts = np.concatenate([[0], ends[:-1]])
+    for row, ep in zip(states, idxs):
+        f = starts[ep]
+        expected = np.concatenate([np.asarray(rb['agent_pos'])[f],
+                                   np.asarray(rb['block_pos'])[f]])
+        assert np.allclose(row, expected), f"episode {ep}: not its recorded first frame"
+
+
+@pytest.mark.slow
+def test_a_geometric_manifest_gives_the_rl_arms_a_different_set():
+    """Sanity that the manifest actually selects: blq and seed-42 must not resolve alike.
+
+    If `states_from_manifest` ignored its argument and fell back to a seeded derivation -- the
+    eval_bon failure, in a new place -- this is what would catch it.
+    """
+    from recurrent_ppo.config import DEMO_ZARR
+    from recurrent_ppo.eval_episodes import states_from_manifest
+
+    if not pathlib.Path(DEMO_ZARR).exists():
+        pytest.skip(f"{DEMO_ZARR} not present")
+
+    _, a = states_from_manifest(str(SPLITS_DIR / 'pusht_seed42_train30.json'), 'test')
+    _, b = states_from_manifest(str(SPLITS_DIR / 'pusht_blockquad_bottomleft_train137.json'),
+                                'test')
+    assert set(a) != set(b), "the manifest argument is not being honoured"
