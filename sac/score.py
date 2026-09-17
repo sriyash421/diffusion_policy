@@ -79,7 +79,10 @@ def obs_for_arm(obs_dict, obs_type):
         image = image[:, -1] if image.ndim == 5 else image             # (B, To, C, H, W) -> (B, C, H, W)
         if image.dtype != np.uint8:                                    # policy obs is float [0, 1]
             image = (image * 255).astype(np.uint8)
-        return {"image": image, "agent_pos": _normalise(state[:, :2])}
+        # IMAGE ONLY -- the pose is deliberately absent, so this Q sees no more than the ST/BC
+        # policies whose candidates it ranks. `state` is still used above to rebuild the frame's
+        # provenance and by the keypoint arm; it must not re-enter the image observation.
+        return {"image": image}
     raise ValueError(f"unknown obs_type {obs_type!r}")
 
 

@@ -228,17 +228,23 @@ def attach_bon_head(policy, n_tau, n_critics=2, net_arch=(256, 256), lr=3e-4):
 # ==================================================================== the agent
 
 
-def agent_pos_from_obs(obs, obs_type):
-    """Agent position in ARENA PIXELS, out of the observation the policy sees.
+def agent_pos_from_env(venv):
+    """Agent position in ARENA PIXELS, read from the environments themselves.
 
-    Everything the policy sees is in [-1, 1] (PushTGymEnv's convention), so this inverts
-    `_normalise`. The index is the one place each arm's layout is asserted.
+    NOT from the observation, because the image arm no longer carries one: `agent_pos` was
+    removed so the RL arms see exactly what the offline diffusion-policy arms see. Handing a
+    policy the pose in closed form is a strictly stronger observation than the standard
+    PushT-image setup, and the two families' success rates would not be comparable.
+
+    That constraint is about what the policy and Q are SCORED on. This position is used only to
+    decide WHERE to place a proposed chunk in the behaviour mixture -- it never reaches the
+    policy's input, the Q head's input, or the replay buffer's observation. So reading it here
+    keeps the image arm genuinely image-only in the sense that matters, while the demo-shape and
+    smooth-walk proposals still work on both arms. They are the reason the sparse reward is
+    findable at all (tau=0.95 terminals 1 -> 98), so losing them on the image arm would cost the
+    thing they were added for.
     """
-    if obs_type == "image":
-        norm = np.asarray(obs["agent_pos"])
-    else:
-        norm = np.asarray(obs)[..., 18:20]      # [9 block kps (18), agent xy (2)] then the mask
-    return (norm + 1.0) * (WS / 2)
+    return np.asarray(venv.get_attr("agent_position"), dtype=np.float64)
 
 
 class ChunkSAC(SAC):
@@ -283,7 +289,7 @@ class ChunkSAC(SAC):
         actor, _ = self.predict(self._last_obs, deterministic=False)
         out = np.array(actor, dtype=np.float64)
         which = np.random.choice(len(self.mix), size=n_envs, p=self.mix)
-        pos = agent_pos_from_obs(self._last_obs, self.obs_type)
+        pos = agent_pos_from_env(self.env)
 
         uniform = which == 1
         if uniform.any():

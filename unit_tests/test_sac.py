@@ -678,3 +678,68 @@ def test_q_is_higher_closer_to_the_goal():
     q_near = float(agent.q_values(near.reset(), a).mean())
     q_far = float(agent.q_values(far.reset(), a).mean())
     assert q_near > q_far, f"Q is not higher near the goal ({q_near:.4f} vs {q_far:.4f})"
+
+
+# ---------------------------------------------------------------- the image arm is image only
+def test_the_image_arm_observation_carries_no_pose():
+    """`agent_pos` was removed so the RL arms see exactly what the offline arms see.
+
+    Handing a policy the pose in closed form is a strictly stronger observation than the standard
+    PushT-image setup, so keeping it would make the two families' success rates incomparable --
+    and this Q exists to rank the offline arms' candidates. Every producer of an image
+    observation must agree, or a demo transition silently stops matching the space it is stored
+    in.
+    """
+    from sac.env import ChunkPushTEnv, demo_transitions
+
+    env = ChunkPushTEnv(obs_type="image", block_zero_coverage=False)
+    assert set(env.observation_space.spaces) == {"image"}
+    obs, _ = env.reset(seed=0)
+    assert set(obs) == {"image"}
+
+    tr = demo_transitions(DEMO_ZARR, obs_type="image", stride=128)
+    assert set(tr["obs"]) == {"image"} == set(tr["next_obs"])
+    assert tr["obs"]["image"].dtype == np.uint8
+
+
+def test_the_anchor_comes_from_the_env_not_the_observation():
+    """The behaviour mixture needs the agent's pixel position to PLACE a proposed chunk.
+
+    It cannot come from the image observation any more, and must not be put back there: the
+    position is used only to propose actions, never to score them, so reading it off the env
+    keeps the image arm genuinely image-only while the demo-shape and smooth-walk proposals keep
+    working. Those are the reason the sparse reward is findable at all.
+    """
+    from sac.agent import agent_pos_from_env
+    from sac.env import build_chunk_vec_env
+
+    for arm in ("keypoint", "image"):
+        env = build_chunk_vec_env(arm, n_envs=3, use_subproc=False, block_zero_coverage=False)
+        env.reset()
+        pos = agent_pos_from_env(env)
+        assert pos.shape == (3, 2)
+        # arena pixels, not the [-1, 1] the policy sees
+        assert (pos >= 0).all() and (pos <= WS).all() and pos.max() > 1.5
+
+
+def test_score_builds_the_image_observation_the_arm_declares():
+    """`obs_for_arm` must produce exactly the space the env declares, or the Q is fed a dict its
+    encoder cannot read -- at DEPLOYMENT, where there is no test to catch it."""
+    import torch as th
+    import zarr
+
+    from diffusion_policy.env.pusht.feedback_util import compute_feedback_from_pose
+    from sac.env import ChunkPushTEnv
+    from sac.score import obs_for_arm
+
+    state = np.asarray(zarr.open(DEMO_ZARR, "r")["data/state"])[[100, 200]]
+    obs_dict = {
+        "agent_pos": th.tensor(state[:, None, :2], dtype=th.float32),
+        "feedback": th.tensor(compute_feedback_from_pose(state[:, 2:5].astype(np.float32))[:, None, :],
+                              dtype=th.float32),
+        "image": th.rand(2, 1, 3, 96, 96),
+    }
+    built = obs_for_arm(obs_dict, "image")
+    declared = set(ChunkPushTEnv(obs_type="image", block_zero_coverage=False).observation_space.spaces)
+    assert set(built) == declared, f"score builds {sorted(built)}, env declares {sorted(declared)}"
+    assert built["image"].shape == (2, 3, 96, 96) and built["image"].dtype == np.uint8

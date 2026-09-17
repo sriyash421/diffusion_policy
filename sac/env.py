@@ -138,6 +138,17 @@ class ChunkPushTEnv(PushTGymEnv):
         # flat, not (chunk, 2): SB3's SAC needs a 1-D Box.
         self.action_space = spaces.Box(-1.0, 1.0, shape=(action_dim(chunk),), dtype=np.float32)
 
+    @property
+    def agent_position(self):
+        """The agent's arena-pixel position, as a plain array.
+
+        A property rather than `get_attr("agent")`: the agent is a pymunk Body, which does not
+        pickle, so reading it across a SubprocVecEnv has to return numbers. Used only by the
+        behaviour mixture to place a proposed chunk -- never by the policy or the Q head, which
+        see exactly what their observation arm defines.
+        """
+        return np.asarray(self.env.agent.position, dtype=np.float64)
+
     def _convert_action(self, action):
         """Inside a chunk the action is ALREADY an absolute pixel target.
 
@@ -325,10 +336,10 @@ def _obs_from_zarr(root, idx, obs_type):
         return np.concatenate([flat, np.ones_like(flat)], axis=-1)           # 40
     if obs_type == "image":
         # zarr img is float32 in [0, 255] HWC; the obs is uint8 CHW. Verified identical.
-        return {
-            "image": np.moveaxis(np.asarray(root["data/img"])[idx], -1, 1).astype(np.uint8),
-            "agent_pos": _normalise(np.asarray(root["data/agent_pos"])[idx]),
-        }
+        # IMAGE ONLY: `agent_pos` was removed from this arm so it sees exactly what the offline
+        # diffusion-policy arms see. A demo transition that still carried it would not match the
+        # observation space, and the buffer would store a shape the policy cannot read.
+        return {"image": np.moveaxis(np.asarray(root["data/img"])[idx], -1, 1).astype(np.uint8)}
     raise ValueError(f"unknown obs_type {obs_type!r}")
 
 
