@@ -28,6 +28,7 @@ import numpy as np
 
 from recurrent_ppo.arch import ARCHS
 from recurrent_ppo.corrupt_policy import aug_for
+from recurrent_ppo.eval_episodes import score_on_states, states_from_manifest
 from recurrent_ppo.pusht_gym import VecAugmentationDraw, build_vec_env, env_kwargs_from
 from recurrent_ppo.runner import resolve_config
 
@@ -81,6 +82,20 @@ def main():
     parser.add_argument("--stochastic", action="store_true",
                         help="Sample actions. Worth running alongside the default: a policy held "
                              "up by its exploration noise scores very differently under the two.")
+    parser.add_argument("--split-file", type=str, default=None,
+                        help="A committed split manifest (diffusion_policy/config/splits/*.json). "
+                             "Given one, the run is scored on THAT split's recorded episode "
+                             "starts -- the same episodes the diffusion-policy arms use -- "
+                             "instead of seeded procedural resets. --n-episodes and --seed are "
+                             "then ignored, since the manifest fixes both which episodes and "
+                             "how many.")
+    parser.add_argument("--split", type=str, default="test", choices=("train", "val", "test"),
+                        help="Which split of --split-file to score.")
+    parser.add_argument("--out", type=str, default=None,
+                        help="With --split-file, write per-episode rows keyed to the MANIFEST "
+                             "episode index. The printed means cannot be re-split afterwards, "
+                             "and pairing an arm against another episode-by-episode is the "
+                             "whole reason the split is shared.")
     parser.add_argument("--every", type=int, default=1, help="Take every Nth numbered checkpoint.")
     parser.add_argument("--device", type=str, default="auto")
     args = parser.parse_args()
@@ -104,6 +119,14 @@ def main():
                   snr=cfg.get("corrupt_snr"))
     if aug:
         env = VecAugmentationDraw(env, seed=eval_seed, **aug)
+    states = episode_idxs = None
+    if args.split_file:
+        states, episode_idxs = states_from_manifest(args.split_file, args.split,
+                                                    zarr_path=cfg["demo_zarr"])
+        print(f"[INFO] scoring the MANIFEST's {args.split} split: {len(states)} episodes from "
+              f"{args.split_file}")
+
+    per_episode = {}
     names = checkpoints(run_dir)
     names = [n for i, n in enumerate(names) if not n.startswith("model_") or i % args.every == 0]
     print(f"\n{'checkpoint':26s} {'return':>9s} {'success':>9s} {'coverage':>9s}")
@@ -111,10 +134,34 @@ def main():
         # the banner is per-checkpoint noise here, and identical every time
         agent = arch.load(os.path.join(run_dir, name), env, dict(cfg, device=args.device),
                           print_system_info=False)
-        ret, suc, cov = score(agent, env, args.n_episodes, args.num_envs, eval_seed,
-                              not args.stochastic)
+        if states is None:
+            ret, suc, cov = score(agent, env, args.n_episodes, args.num_envs, eval_seed,
+                                  not args.stochastic)
+        else:
+            rows = score_on_states(agent, env, states, args.num_envs,
+                                   deterministic=not args.stochastic,
+                                   max_steps=cfg["max_episode_steps"])
+            ret = float(np.mean([r["return"] for r in rows]))
+            suc = float(np.mean([r["is_success"] for r in rows]))
+            cov = float(np.mean([r["max_reward"] for r in rows]))
+            per_episode[name] = [dict(r, episode=int(i)) for r, i in zip(rows, episode_idxs)]
         print(f"{name:26s} {ret:9.2f} {suc:9.3f} {cov:9.3f}", flush=True)
     env.close()
+
+    if args.out and per_episode:
+        import json
+
+        payload = {"run_dir": run_dir, "split_file": args.split_file, "split": args.split,
+                   "episodes": [int(i) for i in episode_idxs],
+                   "deterministic": not args.stochastic, "checkpoints": per_episode}
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+        with open(args.out, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"[INFO] wrote {args.out}: {len(per_episode)} checkpoints x "
+              f"{len(episode_idxs)} episodes")
+    elif args.out:
+        raise SystemExit("--out needs --split-file: without a manifest there are no episode "
+                         "indices to key the rows to.")
 
 
 def _recorded_arch(run_dir):

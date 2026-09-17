@@ -870,3 +870,108 @@ def test_every_frame_of_a_stack_gets_the_SAME_stored_crop():
 
     # and the whole thing replays: same transition, same features, across epochs
     assert th.equal(extractor(obs), extractor(obs))
+
+
+# ------------------------------------------------------- the shared eval episode set
+def test_a_supplied_reset_state_is_used_verbatim():
+    """`reset_to_state` must survive BOTH rejection tests, or episodes are silently renumbered.
+
+    This is what lets an RL arm be scored on the same episodes as the diffusion-policy arms:
+    the recorded first frame of each held-out demo episode, replayed exactly. The failure mode
+    it guards is quiet. `block_zero_coverage` redraws any start whose block already overlaps the
+    goal -- 28.7% of uniform draws do, and the demonstrations were never filtered for it -- so
+    without the bypass, env k would come up on a DIFFERENT episode than the caller asked for,
+    with nothing raising and every cross-arm comparison off by that episode.
+    """
+    env = PushTGymEnv(obs_type="state", block_zero_coverage=True)
+    try:
+        # one reset first: goal_pose is assigned in PushTEnv._setup, which runs on reset, so
+        # it does not exist on a freshly constructed env
+        env.reset(seed=0)
+        # a state whose block sits exactly on the goal, i.e. coverage 1.0 -- the case
+        # block_zero_coverage exists to reject
+        goal = np.asarray(env.env.goal_pose, dtype=np.float64)
+        state = np.array([256.0, 256.0, goal[0], goal[1], goal[2]], dtype=np.float64)
+        env.reset_to_state = state
+        env.reset(seed=0)
+
+        got = np.array([*env.env.agent.position, *env.env.block.position, env.env.block.angle])
+        assert np.allclose(got, state, atol=1e-6), f"redrawn: asked {state}, got {got}"
+        assert env._block_coverage() > 0.9, \
+            "the fixture no longer exercises the block_zero_coverage branch"
+
+        # and it PERSISTS: same env, same state on the next reset, matching PushTEnv's contract
+        env.reset(seed=1)
+        again = np.array([*env.env.agent.position, *env.env.block.position, env.env.block.angle])
+        assert np.allclose(again, state, atol=1e-6), "reset_to_state was consumed, not persistent"
+    finally:
+        env.close()
+
+
+def test_clearing_reset_to_state_restores_sampling():
+    """Setting it back to None must return the env to its own draw, not freeze the last state."""
+    env = PushTGymEnv(obs_type="state")
+    try:
+        env.reset_to_state = np.array([100.0, 100.0, 200.0, 200.0, 0.5])
+        env.reset(seed=0)
+        pinned = np.array([*env.env.agent.position, *env.env.block.position])
+
+        env.reset_to_state = None
+        seen = set()
+        for s in range(6):
+            env.reset(seed=s)
+            seen.add(tuple(np.round([*env.env.agent.position, *env.env.block.position], 3)))
+        assert len(seen) > 1, "still pinned after clearing reset_to_state"
+        assert tuple(np.round(pinned, 3)) not in seen or len(seen) > 1
+    finally:
+        env.close()
+
+
+def test_pinning_reaches_the_inner_env_through_the_wrapper_chain():
+    """`_pin` must actually move the state into PushTGymEnv, not onto the Monitor around it.
+
+    A VecEnv's `set_attr` is a plain `setattr` on the outermost per-env wrapper, so the naive
+    spelling puts `reset_to_state` on `Monitor` and every episode is still sampled -- while the
+    results table is labelled with manifest episode indices. Nothing raises. This asserts the
+    two envs come up on exactly the states they were handed, which is the only way to tell.
+    """
+    from recurrent_ppo.eval_episodes import _pin
+    from recurrent_ppo.pusht_gym import build_vec_env
+
+    want = [np.array([120.0, 130.0, 240.0, 250.0, 0.3]),
+            np.array([300.0, 310.0, 180.0, 190.0, 1.1])]
+    venv = build_vec_env(obs_type="state", n_envs=2, seed=0, use_subproc=False)
+    try:
+        _pin(venv, want)                      # raises if it did not land
+        venv.reset()
+        got = [np.array([*e.env.agent.position, *e.env.block.position, e.env.block.angle])
+               for e in (venv.envs[0].unwrapped, venv.envs[1].unwrapped)]
+        for i, (w, g) in enumerate(zip(want, got)):
+            assert np.allclose(w, g, atol=1e-6), f"env {i}: pinned {w}, reset to {g}"
+    finally:
+        venv.close()
+
+
+def test_manifest_states_match_the_offline_runners_episodes():
+    """The RL arms must resolve the SAME episodes the diffusion-policy arms roll out.
+
+    `states_from_manifest` names the manifest directly because an RL arm has no hydra cfg, but
+    it must agree episode-for-episode with what `get_episode_init_states` gives the offline
+    runner off the same manifest -- otherwise 'same episodes' is a claim, not a fact.
+    """
+    from diffusion_policy.common.replay_buffer import ReplayBuffer
+    from diffusion_policy.dataset.pusht_image_dataset import (
+        get_episode_init_states, load_split_manifest, masks_from_manifest)
+    from recurrent_ppo.config import DEMO_ZARR
+    from recurrent_ppo.eval_episodes import states_from_manifest
+
+    split_file = "diffusion_policy/config/splits/pusht_seed42_train30.json"
+    states, idxs = states_from_manifest(split_file, "test")
+    assert len(states) == 50 and len(idxs) == 50
+
+    rb = ReplayBuffer.copy_from_path(DEMO_ZARR, keys=["agent_pos", "block_pos"])
+    ends = np.asarray(rb.episode_ends[:])
+    manifest = load_split_manifest(split_file, episode_ends=ends)
+    _, _, test_mask = masks_from_manifest(manifest, len(ends))
+    assert np.array_equal(idxs, np.nonzero(test_mask)[0])
+    assert np.allclose(states, get_episode_init_states(rb, test_mask))

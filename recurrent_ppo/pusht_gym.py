@@ -108,6 +108,19 @@ class PushTGymEnv(gymnasium.Env):
         self.block_near_goal_prob = float(block_near_goal_prob)
         self.block_goal_offset = tuple(float(x) for x in block_goal_offset)
         self.render_mode = render_mode
+        # A caller-supplied initial state, or None to sample one. Same name and contract as
+        # PushTEnv.reset_to_state, deliberately: this is what lets an RL arm be evaluated on
+        # the SAME episodes the diffusion-policy arms use, which are the recorded first frames
+        # of the split manifest's held-out episodes. Persistent, not consumed -- set it once
+        # per env and every reset of that env replays the same episode. See reset().
+        #
+        # ACROSS A VecEnv, set it with `env_method("set_wrapper_attr", "reset_to_state", s)`.
+        # Not `set_attr`: that is a plain setattr on the outermost wrapper (here Monitor), so
+        # the value lands there, this env keeps sampling, and the run reports manifest episode
+        # indices for randomly drawn starts. gymnasium 1.0 also removed the attribute
+        # forwarding that used to paper over it. recurrent_ppo/eval_episodes.py:_pin reads the
+        # value back and raises rather than trusting either mechanism.
+        self.reset_to_state = None
 
         if obs_type == "keypoint":
             # The inner env is PINNED to full visibility and we own the occlusion, for two
@@ -156,6 +169,20 @@ class PushTGymEnv(gymnasium.Env):
         # reasons. PushTEnv.reset() re-derives its state from RandomState(self._seed) and never
         # advances it, so without intervention every episode is the SAME episode. And its block
         # range is [100, 400], which excludes a quarter of the demonstrated block starts.
+        if self.reset_to_state is not None:
+            # VERBATIM, and none of the rejection below runs. A recorded demo start may well
+            # overlap the goal -- 28.7% of uniform draws do, and the demonstrations were not
+            # filtered for it -- so `block_zero_coverage` would silently redraw it and this
+            # env would no longer be on the episode its caller asked for. The arena check goes
+            # too: a recorded state is by construction reachable, and rejecting one would
+            # break the one-to-one map between env and episode index that makes the arms
+            # comparable at all.
+            state = np.asarray(self.reset_to_state, dtype=np.float64)
+            self.env.reset_to_state = state
+            self.env.seed(int(self.np_random.integers(0, 2**31 - 1)))
+            obs = self.env.reset()
+            return self._finish_reset(obs)
+
         for _ in range(SPAWN_TRIES):
             state = self._sample_state()
             self.env.reset_to_state = state
@@ -184,6 +211,15 @@ class PushTGymEnv(gymnasium.Env):
         else:
             print(f"[WARN] {SPAWN_TRIES} spawn draws all put the block through a wall; "
                   f"using the last one. Narrow --block-start-range.")
+        return self._finish_reset(obs)
+
+    def _finish_reset(self, obs):
+        """The per-episode bookkeeping both reset paths share.
+
+        Factored out so the supplied-state path cannot drift from the sampled one: these five
+        are what make step() and the reward well-defined, and a path that skipped one would
+        fail only later, as a reward computed against a stale potential.
+        """
         self._elapsed_steps = 0
         self._max_reward = 0.0
         self._solved = False
