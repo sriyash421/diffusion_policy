@@ -1,13 +1,20 @@
 # The architecture 2x2: what is held equal and what is not
 
+> **ARCHIVED 2026-09-16.** A dated record of the 2026-08 parity comparison, moved here from
+> `diffusion_policy/` and left otherwise unedited. It names configs that have since been
+> renamed or removed (`train_pusht_st_n1`, `train_pusht_unet_bc_29`, task `pusht_image_search`)
+> and describes UNet crop offsets as unreproducible across restarts, which was fixed on
+> 2026-08-30 by `CropScopeMixin.set_crop_step`. Read it as history. The current cross-arm
+> answer is `docs/reports/RESULTS.md`.
+
 > **NAMING UPDATED 2026-08-18.** `train_pusht_bc` is now **`train_pusht_st_k1`** — it was
 > never the UNet, it is the k=1 point of the same search transformer. In this repo **BC
 > means the diffusion UNet only** (`train_pusht_unet_bc`, `PushTUNetSearchPolicy`).
 > Below, "BC" still refers to the width-1 transformer, i.e. what is now ST k=1 —
-> read it that way. The live comparison is in `LATEST_SUCCESS_RATES.md`.
+> read it that way. The live comparison is in `docs/reports/archive/LATEST_SUCCESS_RATES.md`.
 
 > **2026-08-17 — superseded numbers.** Everything measured before the search-procedure
-> unification of 2026-08-17 is archived in `ARCHIVED_SUCCESS_RATES_AUG17.md`, which lists
+> unification of 2026-08-17 is archived in `docs/reports/archive/ARCHIVED_SUCCESS_RATES_AUG17.md`, which lists
 > the seven changes that invalidated it. The parity notes below have been updated to the
 > current arms; the "Not equal, deliberately" rows in particular changed.
 >
@@ -38,7 +45,7 @@ between the two columns is a confound, so it is either equalised or written down
 ## The transformer side changed on 2026-08-14. Read this before comparing anything.
 
 `train_pusht_st_n1` is not the model that produced the transformer columns of
-LATEST_SUCCESS_RATES.md. **Four** things moved at once, and no single result attributes
+docs/reports/archive/LATEST_SUCCESS_RATES.md. **Four** things moved at once, and no single result attributes
 among them:
 
 | | was | now | set in |
@@ -128,7 +135,7 @@ explicitly with `num_epochs: 100000` as a non-binding safety bound (the pattern
 changes the run length, and no config comment carries arithmetic that can drift.
 
 The cap was **300000** when this section was written; it is **100000** on all four arms today,
-which is the grid LATEST_SUCCESS_RATES.md reports on. The numbers below are the 2026-08-12
+which is the grid docs/reports/archive/LATEST_SUCCESS_RATES.md reports on. The numbers below are the 2026-08-12
 measurement at the then-current 300k and are kept as the record of the bug, not as the
 current setting.
 

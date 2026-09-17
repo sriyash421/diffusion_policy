@@ -1,4 +1,4 @@
-"""Regenerate slot_verifier_scores_noised_obs.md from candidate_scores.jsonl.
+"""Regenerate docs/reports/archive/slot_verifier_scores_noised_obs.md from candidate_scores.jsonl.
 
 THE QUESTION. The per-slot observation ladder assumes slot k improves with k: slot 0 sees
 the most-corrupted observation and no search context, slot K-1 sees the cleanest and the
@@ -28,7 +28,7 @@ which produced wrong readings on the first pass and are corrected here:
 
 The mean profile and the tie-excluded win-rate are the two numbers to read.
 
-    python scripts/build_slot_scores_doc.py [-o slot_verifier_scores_noised_obs.md]
+    python scripts/build_slot_scores_doc.py [-o docs/reports/archive/slot_verifier_scores_noised_obs.md]
 
 Produce the inputs with a single-checkpoint eval, one per arm:
 
@@ -141,7 +141,7 @@ def row(vals, fmt='{:.1f}'):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='slot_verifier_scores_noised_obs.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/slot_verifier_scores_noised_obs.md')
     args = ap.parse_args()
 
     L = ['# Per-slot verifier scores under the observation ladder', '',

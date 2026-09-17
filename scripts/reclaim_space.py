@@ -12,13 +12,13 @@ THREE CATEGORIES, each opt-in by flag:
                restorable with `cp step_<max>.ckpt latest.ckpt`.
 
   --nongeo     Every checkpoint of BC (unet_bc/) and ST k=1 (offline/) runs whose name has
-               no `_split-` tag, i.e. the runs NOT in SUCCESS_RATES_GEOMETRIC.md. These are
+               no `_split-` tag, i.e. the runs NOT in docs/reports/archive/SUCCESS_RATES_GEOMETRIC.md. These are
                the older random-split generation.
 
                NARROW IT WITH --after/--before. `nongeo` is not uniformly stale: it spans
                2026-08-02..08-30, and the 2026-08-29/30 files are the ResNet18-E2E
-               noised-obs runs behind success_rates_noised_obs_resnetE2E.md and
-               slot_verifier_scores_noised_obs.md -- the latter still has arms marked "not
+               noised-obs runs behind docs/reports/archive/success_rates_noised_obs_resnetE2E.md and
+               docs/reports/archive/slot_verifier_scores_noised_obs.md -- the latter still has arms marked "not
                dumped yet", which needs those checkpoints. Dates are on file mtime and both
                bounds are INCLUSIVE.
 

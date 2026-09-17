@@ -1,7 +1,7 @@
 #!/bin/bash
 # Find every checkpoint/n that has no 50-episode best-of-N eval, and optionally submit it.
 #
-# This is the executable half of aug9_analysis.md section 2: the doc is a snapshot, this
+# This is the executable half of docs/reports/archive/aug9_analysis.md section 2: the doc is a snapshot, this
 # recomputes the same gap set live. Dry-run by default -- nothing is submitted without
 # SUBMIT=1, because most gaps close on their own (the `ev_*` watchers are still running).
 #

@@ -1,10 +1,10 @@
-"""Regenerate success_rates_slot_weights_d_t_goal.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_slot_weights_d_t_goal.md from on-disk eval output.
 
 The round-2 slot-weight profiles re-run under `d_t_goal` -- `-d_T->goal / 13.6`, the task
 term on armTn's normalized footing -- so they sit alongside the t_goal-family reference
 arms (ST k=1, ST k=16 uniform, UNet BC) instead of the armTn ones.
 
-    python scripts/build_dtgoal_doc.py [-o success_rates_slot_weights_d_t_goal.md]
+    python scripts/build_dtgoal_doc.py [-o docs/reports/archive/success_rates_slot_weights_d_t_goal.md]
 
 Safe to re-run mid-sweep: it reads success_curves.jsonl and nothing else. Like the armTn
 doc it nominates no best checkpoint and no best n -- every evaluated cell is printed.
@@ -96,7 +96,7 @@ def delta_table(a_ctrl, a_var):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_slot_weights_d_t_goal.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_slot_weights_d_t_goal.md')
     args = ap.parse_args()
     L = []
     A = L.append

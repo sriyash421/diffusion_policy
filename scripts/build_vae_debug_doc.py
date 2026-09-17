@@ -1,4 +1,4 @@
-"""Regenerate success_rates_vae_debug.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_vae_debug.md from on-disk eval output.
 
 WHY THIS EXISTS. Under the frozen SD VAE, BC and ST k=1 collapsed at low n against the
 ResNet no-pos runs (ST k=1 n=1: 0.06 -> 0.00; BC n=1: 0.10 -> ~0.02) while HIGH n held up.
@@ -15,7 +15,7 @@ gradient steps, a checkpoint every 10k, the same 50 test episodes.
 
 Reads bon_search_*/success_curves.jsonl and nothing else, so it is safe to re-run mid-sweep.
 
-    python scripts/build_vae_debug_doc.py [-o success_rates_vae_debug.md]
+    python scripts/build_vae_debug_doc.py [-o docs/reports/archive/success_rates_vae_debug.md]
 
 Nominates no best checkpoint and no best n -- every evaluated cell is printed.
 """
@@ -37,7 +37,7 @@ SUF = f'ver-{VER}'
 ENCODERS = [
     ('resnet18', 'ResNet18, trainable',
      'ResNet18 IMAGENET1K_V1, `use_group_norm=True`, 76x76 crop, trained end to end. The '
-     'reference: at 30 demos it reproduces `success_rates_no_pos.md`, which is what '
+     'reference: at 30 demos it reproduces `docs/reports/archive/success_rates_no_pos.md`, which is what '
      'validates the revert of the 2026-08-30 speedup pass.'),
     ('resnet18-frozen', 'ResNet18, frozen',
      '`training.freeze_encoder=True`, so 11.2M encoder parameters are held out of the '
@@ -84,7 +84,7 @@ READOUTS = [('argmax', 'bon_search_sel-argmax_obs-clean'),
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_vae_debug.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_vae_debug.md')
     args = ap.parse_args()
 
     L = ['# PushT encoder debug — success rates', '',
@@ -98,7 +98,7 @@ def main():
          'training budgets (30 and 126 demos -- 126 is every episode that is neither test '
          'nor val). ResNet18 '
          'trainable tests the revert of the 2026-08-30 speedup pass against '
-         '`success_rates_no_pos.md`. Reading the square: down a column asks whether freezing '
+         '`docs/reports/archive/success_rates_no_pos.md`. Reading the square: down a column asks whether freezing '
          'hurts that encoder; across the frozen row asks whether SD features are worse than '
          'ResNet features when neither can adapt, at matched trainable capacity.', '',
          '`argmax` sweeps n = 1..64; `final_pass` was asked for at n = 1, 8, 16 only, so its '
@@ -133,7 +133,7 @@ def main():
           'crop and image pipeline, so the observation is matched; the capacity is not.', '',
           '**BC\'s crop changed with this generation.** BC now draws one crop offset per '
           'SAMPLE, shared across the observation window, as ST always did. The older ResNet '
-          'runs in `success_rates_no_pos.md` cropped each frame independently, so the BC '
+          'runs in `docs/reports/archive/success_rates_no_pos.md` cropped each frame independently, so the BC '
           'column here is not expected to match those exactly. ST k=1 is unaffected and is '
           'the clean reproduction target.', '',
           '**`final_pass` is degenerate without a ladder.** It executes the last-generated '

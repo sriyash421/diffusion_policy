@@ -5313,7 +5313,7 @@ Per-step traces (every candidate's verifier value and the executed index) sit in
 At `max_actions: 1` the transformer's `max_context_actions` is 0, so its conditioning sequence is just the two observation tokens (`cond_pos_emb` is `(1, 2, 256)` against `(1, 17, 256)` in the width-16 arms). It is slot 0 of the search transformer trained on its own.
 
 
-**Held equal**: the committed split manifests (identical 29 / 100 training episodes, and the same 50 test episodes as every other section), LR (3k warmup to 1e-4, cosine to a 1e-5 floor at step 80k, then held), 100k steps, batch 32, `num_inference_steps: 100`, `diffusion_step_embed_dim: 256`, ResNet18 + GroupNorm encoder with `imagenet_norm: False`, EMA 0.995, and the eval protocol. **Not equal, and not equalisable**: denoiser capacity (48x) and the sampler family (DDIM vs DDPM). See `diffusion_policy/config/ARCH_2x2_PARITY.md`.
+**Held equal**: the committed split manifests (identical 29 / 100 training episodes, and the same 50 test episodes as every other section), LR (3k warmup to 1e-4, cosine to a 1e-5 floor at step 80k, then held), 100k steps, batch 32, `num_inference_steps: 100`, `diffusion_step_embed_dim: 256`, ResNet18 + GroupNorm encoder with `imagenet_norm: False`, EMA 0.995, and the eval protocol. **Not equal, and not equalisable**: denoiser capacity (48x) and the sampler family (DDIM vs DDPM). See `docs/reports/archive/ARCH_2x2_PARITY.md`.
 
 
 > Trained locally 2026-08-12/13 and inserted directly rather than by regenerating this file. Evaluated `--skip-val`, so any checkpoint picked from these rows is picked on test.
@@ -5617,7 +5617,7 @@ All four are **search width 1** — one action sampled, no candidates, no verifi
 
 **Held equal**: committed split manifests (identical 29 / 100 training episodes, and the same 50 test episodes used everywhere else), LR (3k warmup to 1e-4, cosine to a 1e-5 floor at step 80k, then held), 100k steps, batch 32, `num_inference_steps: 100`, `diffusion_step_embed_dim: 256`, ResNet18 + GroupNorm encoder with `imagenet_norm: False`, EMA 0.995, eval protocol.
 
-**Not equalisable**: denoiser capacity (48x) and sampler family (DDIM vs DDPM). See `diffusion_policy/ARCH_2x2_PARITY.md`.
+**Not equalisable**: denoiser capacity (48x) and sampler family (DDIM vs DDPM). See `docs/reports/archive/ARCH_2x2_PARITY.md`.
 
 > Evaluated `--skip-val`, so any checkpoint picked from these tables is picked on test, not held out.
 
@@ -5934,7 +5934,7 @@ python eval_search_pusht.py -c <run>/checkpoints/step_XXXXXXX.ckpt \
 
 ## Reading these
 
-**The UNet wins decisively at 100 demos** — 62% against 28%, and 0.959 against 0.796 on mean reward, on identical episodes with a matched schedule. It also learns much faster: 56% by step 40k, a level the transformer never reaches at any checkpoint. (The gpt2+causal ST above lifts that 28% to 32%, which narrows the gap without changing this conclusion — the UNet is still ~2x at the same budget. Raising the ST denoiser 21x on top of that, to 126.58M, moves it no further: 32% again. So the remaining gap is **not** explained by the 47x capacity difference that `ARCH_2x2_PARITY.md` lists as the largest confound in the 2x2 — the one thing that had never been tested is now tested, and it is not the answer.)
+**The UNet wins decisively at 100 demos** — 62% against 28%, and 0.959 against 0.796 on mean reward, on identical episodes with a matched schedule. It also learns much faster: 56% by step 40k, a level the transformer never reaches at any checkpoint. (The gpt2+causal ST above lifts that 28% to 32%, which narrows the gap without changing this conclusion — the UNet is still ~2x at the same budget. Raising the ST denoiser 21x on top of that, to 126.58M, moves it no further: 32% again. So the remaining gap is **not** explained by the 47x capacity difference that `docs/reports/archive/ARCH_2x2_PARITY.md` lists as the largest confound in the 2x2 — the one thing that had never been tested is now tested, and it is not the answer.)
 
 **At 29 demos they converge** (20% vs 18%, indistinguishable at 50 episodes). So the architecture gap is a function of DATA BUDGET rather than a fixed offset: 29 -> 100 demos takes the UNet 20% -> 62% and the transformer only 18% -> 28%.
 

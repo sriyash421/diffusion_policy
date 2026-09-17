@@ -1,4 +1,4 @@
-"""Regenerate SUCCESS_RATES.md from the on-disk eval output.
+"""Regenerate docs/reports/SUCCESS_RATES.md from the on-disk eval output.
 
 Organised by DEMO BUDGET, because that is the axis the experiment varies:
 
@@ -257,7 +257,7 @@ L = ['# PushT best-of-N success rate\n',
      '`$DP_OUTPUT_ROOT` (default: the Hyak path), so it rebuilds off-cluster against a copied '
      'results tree.\n',
      '\n**To analyse these results off the cluster, see '
-     '[aug10_results2copy.md](aug10_results2copy.md)** — which directories to copy, what is '
+     '[docs/reports/archive/aug10_results2copy.md](docs/reports/archive/aug10_results2copy.md)** — which directories to copy, what is '
      'inside each, and an rsync recipe. Everything except the model weights is ~2.3 GB.\n']
 
 L += ['\n## What each arm is\n',
@@ -677,7 +677,7 @@ L += ['\n## 4. Where the raw results are\n',
       'Everything in this file is DERIVED. The raw per-checkpoint eval output lives under '
       '`$DP_OUTPUT_ROOT` = `/gscratch/robotics/harine/diffusion_policy_outputs`; nothing is '
       "on home, where one run's checkpoints alone exceed the 10G quota.\n",
-      '\n**Copying this off the cluster: [aug10_results2copy.md](aug10_results2copy.md).** It '
+      '\n**Copying this off the cluster: [docs/reports/archive/aug10_results2copy.md](docs/reports/archive/aug10_results2copy.md).** It '
       'lists all 26 run directories plus the outer/inner runs and `candidate_scores/`, says '
       'what each file below is worth keeping for, and carries an rsync recipe. Everything '
       'except the model weights is ~2.3 GB against 213 GB for a full mirror; set '
@@ -759,7 +759,7 @@ L += ['\n### Archive \u2014 binary success rate (TEST)\n'] + arch
 # and this script used to end with a bare write_text() that replaced the file wholesale, so
 # running the regenerate command this very document advertises silently deleted it.
 #
-# Fix: hand-written regions are fenced with sentinels in SUCCESS_RATES.md,
+# Fix: hand-written regions are fenced with sentinels in the generated doc,
 #
 #   <!-- HAND-WRITTEN after: ## 3. Selection rule ... -->
 #   ...prose and tables this script knows nothing about...
@@ -813,7 +813,8 @@ def splice_hand_written(generated, blocks):
     return '\n'.join(lines)
 
 
-out = pathlib.Path(__file__).resolve().parent.parent / 'SUCCESS_RATES.md'
+out = pathlib.Path(__file__).resolve().parent.parent / 'docs/reports/SUCCESS_RATES.md'
+out.parent.mkdir(parents=True, exist_ok=True)
 preserved = extract_hand_written(out.read_text()) if out.is_file() else []
 out.write_text(splice_hand_written(L, preserved).rstrip('\n') + '\n')
 n_ck = sum(len(rows_for(b)) for _, _, b in D100 + D29 + ARCHIVE)

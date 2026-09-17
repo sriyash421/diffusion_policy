@@ -1,6 +1,6 @@
 #!/bin/bash
 # Re-evaluate the val-selected checkpoint of every arm so the FINAL and DISCOUNTED reward
-# tables (SUCCESS_RATES.md 1d/1e/2d/2e) have data.
+# tables (docs/reports/SUCCESS_RATES.md 1d/1e/2d/2e) have data.
 #
 # Why a re-run is unavoidable. Both new series are reductions of the per-STEP reward
 # sequence, and every eval before 2026-08-05 called np.max() on that sequence inside the

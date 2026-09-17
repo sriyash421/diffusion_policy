@@ -5,6 +5,12 @@ policy, and **best-of-N** evaluation/visualization on top of upstream Diffusion 
 The root [README.md](README.md) is still the upstream Columbia doc and does **not** cover
 any of this — use this file for the Push-T work here.
 
+**This file is how to RUN the arms. What happened when they were run is in
+[`docs/reports/`](docs/reports/README.md)** — start at
+[RESULTS.md](docs/reports/RESULTS.md), which answers "do these methods work on PushT" for
+every arm in one table, with the caveats that decide whether two rows can be compared. The 24
+dated readouts that used to sit at the repo root are in `docs/reports/archive/`, unedited.
+
 What's new relative to upstream:
 
 | Area | Files |
@@ -365,7 +371,7 @@ SUBMIT=1 bash scripts/run_geometric_splits.sh     # ...and sbatch (robotics/weir
 TIME_LIMIT=5-00:00:00 SUBMIT=1 bash scripts/run_geometric_splits.sh   # longer wall clock
 
 SUBMIT=1 bash scripts/slurm/submit_geometric_readouts.sh   # eval, on the ckpt partition
-python scripts/build_geometric_splits_doc.py               # -> SUCCESS_RATES_GEOMETRIC.md
+python scripts/build_geometric_splits_doc.py               # -> docs/reports/archive/SUCCESS_RATES_GEOMETRIC.md
 ```
 
 **`split_suffix` is load-bearing.** These runs override `task.dataset.split_file`, and

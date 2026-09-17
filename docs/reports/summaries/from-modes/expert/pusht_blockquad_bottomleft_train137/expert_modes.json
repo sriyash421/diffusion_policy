@@ -1,0 +1,111 @@
+{
+  "split_file": "diffusion_policy/config/splits/pusht_blockquad_bottomleft_train137.json",
+  "n_windows": 24208,
+  "eps_theta_per_px": 0.02,
+  "states": {
+    "0": {
+      "window": 154,
+      "state": [
+        87.0,
+        285.0,
+        158.16250610351562,
+        357.1803283691406,
+        5.970620632171631
+      ],
+      "eps": {
+        "2": {
+          "n_demos": 1,
+          "endpoint_dispersion_px": 0.0
+        },
+        "5": {
+          "n_demos": 2,
+          "endpoint_dispersion_px": 26.92582403567252
+        },
+        "10": {
+          "n_demos": 4,
+          "endpoint_dispersion_px": 18.949554518149775
+        },
+        "20": {
+          "n_demos": 7,
+          "endpoint_dispersion_px": 15.949136649258012
+        },
+        "40": {
+          "n_demos": 15,
+          "endpoint_dispersion_px": 34.56779184089859
+        }
+      }
+    },
+    "1": {
+      "window": 11423,
+      "state": [
+        75.10758972167969,
+        368.9300537109375,
+        183.4483184814453,
+        316.85882568359375,
+        0.82105553150177
+      ],
+      "eps": {
+        "2": {
+          "n_demos": 1,
+          "endpoint_dispersion_px": 0.0
+        },
+        "5": {
+          "n_demos": 1,
+          "endpoint_dispersion_px": 0.0
+        },
+        "10": {
+          "n_demos": 7,
+          "endpoint_dispersion_px": 15.488005343630292
+        },
+        "20": {
+          "n_demos": 28,
+          "endpoint_dispersion_px": 78.93362129919402
+        },
+        "40": {
+          "n_demos": 272,
+          "endpoint_dispersion_px": 81.58242109573045
+        }
+      }
+    },
+    "2": {
+      "window": 23491,
+      "state": [
+        207.13665771484375,
+        380.73126220703125,
+        249.95936584472656,
+        254.89657592773438,
+        0.6554237008094788
+      ],
+      "eps": {
+        "2": {
+          "n_demos": 1,
+          "endpoint_dispersion_px": 0.0
+        },
+        "5": {
+          "n_demos": 1,
+          "endpoint_dispersion_px": 0.0
+        },
+        "10": {
+          "n_demos": 3,
+          "endpoint_dispersion_px": 25.385910352879694
+        },
+        "20": {
+          "n_demos": 25,
+          "endpoint_dispersion_px": 98.48553360597221
+        },
+        "40": {
+          "n_demos": 381,
+          "endpoint_dispersion_px": 111.2578456156467
+        }
+      }
+    }
+  },
+  "modes_json": "/gscratch/robotics/harine/mode_analysis/value_k16_ver-t_goal_enc-resnet18_demos-137_split-blq_seed-42/modes.json",
+  "mean_dispersion_by_eps": {
+    "2": 0.0,
+    "5": 8.975274678557506,
+    "10": 19.94115673821992,
+    "20": 64.45609718480807,
+    "40": 75.80268618409191
+  }
+}

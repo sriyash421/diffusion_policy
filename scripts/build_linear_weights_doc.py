@@ -1,11 +1,11 @@
-"""Regenerate SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md from the sweep logs.
+"""Regenerate docs/reports/archive/SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md from the sweep logs.
 
 The arm is ST-diffusion k=16 (4/4/256) trained on 30 demos for 100k gradient steps with
 LINEAR per-slot loss weights at ratio 4.857, launched by
 scripts/run_st_k16_linear_drumkit.sh on drumkit. Every 10k checkpoint is swept over
 {argmax, softmax, final_pass} x n = 1..64 on the same 50 test / 30 val episodes.
 
-    python scripts/build_linear_weights_doc.py [-o SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md]
+    python scripts/build_linear_weights_doc.py [-o docs/reports/archive/SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md]
 
 SOURCE IS THE DRIVER LOG, NOT success_curves.jsonl -- and that is not a preference.
 eval_search_pusht.py writes its curve keyed on the CHECKPOINT, not on (checkpoint,
@@ -131,7 +131,7 @@ def written_steps(run):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/SUCCESS_RATES_LINEAR_WEIGHTS_DRUMKIT.md')
     ap.add_argument('--log', action='append', default=None,
                     help='driver log to parse; repeatable, later logs win')
     args = ap.parse_args()

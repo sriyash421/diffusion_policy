@@ -1,0 +1,69 @@
+{
+  "run": "value_k1_ver-t_goal_enc-resnet18_demos-173_split-trq_seed-42",
+  "mode": "batch",
+  "steps": {
+    "10000": {
+      "n_obs_tokens": 2,
+      "max_context_actions": 0,
+      "K": 1,
+      "n_denoise_steps": 8,
+      "n_slots": 1,
+      "denoise": {
+        "0": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "4": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "7": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        }
+      }
+    },
+    "50000": {
+      "n_obs_tokens": 2,
+      "max_context_actions": 0,
+      "K": 1,
+      "n_denoise_steps": 8,
+      "n_slots": 1,
+      "denoise": {
+        "0": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "4": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "7": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        }
+      }
+    },
+    "100000": {
+      "n_obs_tokens": 2,
+      "max_context_actions": 0,
+      "K": 1,
+      "n_denoise_steps": 8,
+      "n_slots": 1,
+      "denoise": {
+        "0": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "4": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        },
+        "7": {
+          "slot_shown": 0,
+          "context_mass_mean": 0.0
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Regenerate success_rates_vae_tmrl_aug30.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_vae_tmrl_aug30.md from on-disk eval output.
 
 THE QUESTION. Does grading the observation by candidate slot buy anything as the search
 widens? Slot k's encoded observation is corrupted by a DDPM forward marginal at timestep
@@ -11,7 +11,7 @@ sampled more times.
 Reads bon_search_*/success_curves.jsonl and nothing else, so it is safe to re-run mid-sweep:
 arms that have not reached a checkpoint simply have fewer rows.
 
-    python scripts/build_vae_tmrl_doc.py [-o success_rates_vae_tmrl_aug30.md]
+    python scripts/build_vae_tmrl_doc.py [-o docs/reports/archive/success_rates_vae_tmrl_aug30.md]
 
 Nominates NO best checkpoint and no best n. Every evaluated cell is printed and the reader
 picks; a doc that highlighted a winner would be doing selection on test.
@@ -98,7 +98,7 @@ in the matrix as specified; read it as a badly-shaped-ladder control, not a cont
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_vae_tmrl_aug30.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_vae_tmrl_aug30.md')
     args = ap.parse_args()
 
     L = ['# PushT VAE + TMRL obs-corruption ladder — success rates',

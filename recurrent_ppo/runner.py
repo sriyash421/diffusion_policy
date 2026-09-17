@@ -268,7 +268,7 @@ def resolve_config(run_dir, args_cli, arch):
     missing = [k for k in keys if k not in saved]
     if missing:
         print(f"[WARN] This run predates {len(missing)} key(s); assuming today's default for each. "
-              f"See recurrent_ppo_runs_sep11.md for what it actually used.")
+              f"See docs/reports/archive/recurrent_ppo_runs_sep11.md for what it actually used.")
         for k in missing:
             print(f"         {k} = {DEFAULTS[k]!r}")
     cfg = {}

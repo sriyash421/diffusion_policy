@@ -35,7 +35,7 @@ distribution the policy never actually visits.
 
   python scripts/dump_candidate_scores.py -c <run>/checkpoints/step_0009000.ckpt \
       --arm subgoal-chosen4value --out-dir <dir> --n 16 --episodes 20
-  python scripts/dump_candidate_scores.py --report <dir1> <dir2> ... --out CANDIDATES_FROM_SUBGOAL.md
+  python scripts/dump_candidate_scores.py --report <dir1> <dir2> ... --out docs/reports/archive/CANDIDATES_FROM_SUBGOAL.md
 """
 import sys
 
@@ -734,7 +734,7 @@ _REPORT_KEYS = frozenset((
 
 
 def build_report(dirs, out_path, n_example_steps=8):
-    """Assemble CANDIDATES_FROM_SUBGOAL.md from a set of dump directories."""
+    """Assemble docs/reports/archive/CANDIDATES_FROM_SUBGOAL.md from a set of dump directories."""
     entries = []
     for d in dirs:
         d = pathlib.Path(d)
@@ -1338,7 +1338,7 @@ def sweep_rewards(checkpoint, arm, out_dir, device, n_list, episodes, split, max
 @click.option('--report', multiple=True, help='dump dirs to assemble into a markdown report')
 @click.option('--reanalyse', multiple=True,
               help='recompute stats+plot from an existing dump, no rollouts')
-@click.option('--out', default='CANDIDATES_FROM_SUBGOAL.md')
+@click.option('--out', default='docs/reports/archive/CANDIDATES_FROM_SUBGOAL.md')
 @click.option('--per-step-json/--no-per-step-json', default=False,
               help="write per_step/ep<NN>_idx<M>.json: every candidate's distance value at "
                    'every control step of the rollout')

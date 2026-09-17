@@ -1,4 +1,4 @@
-"""Regenerate the checkpoint x selection x n grid section of LATEST_SUCCESS_RATES.md.
+"""Regenerate the checkpoint x selection x n grid section of docs/reports/archive/LATEST_SUCCESS_RATES.md.
 
 Idempotent: rewrites everything between the marker comments, appending the block if it
 is not there yet. Safe to run against an in-progress sweep -- only completed cells appear.
@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DOC = ROOT / 'LATEST_SUCCESS_RATES.md'
+DOC = ROOT / 'docs/reports/archive/LATEST_SUCCESS_RATES.md'
 LOG = ROOT / 'logs' / 'bon_grid_30demo.log'
 LOG_N64_P1 = ROOT / 'logs' / 'bon_grid_30demo_n64.log.part1'  # pre-timeout-fix run
 LOG_N64 = ROOT / 'logs' / 'bon_grid_30demo_n64.log'   # the n in {32,64} argmax slice

@@ -26,7 +26,7 @@ PY_BIN="${PY_BIN:-/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python}
 # The `_l2tol1` and `_sw-lin4857` entries are the slot-weighting experiment: two knobs
 # varied one at a time off the `_ver-armTn_` k=16 arm directly above them, which is their
 # shared control (uniform slot weights, plain L2) on the same manifest, seed and protocol.
-# See success_rates_slot_weights_armTn.md.
+# See docs/reports/archive/success_rates_slot_weights_armTn.md.
 #
 # The three `_nopos_` entries at the bottom are the image-only ablation (scripts/
 # run_nopos_30demo.sh): the same three headline arms with `agent_pos` and `feedback` deleted
@@ -34,7 +34,7 @@ PY_BIN="${PY_BIN:-/gscratch/robotics/harine/miniconda3/envs/robodiff/bin/python}
 # outer_inner/value_k16_corrupt-False_demos-30_seed-42, offline/value_k1_demos-30_seed-42 and
 # unet_bc/unetbc_demos-30_seed-42 -- are already fully scored under t_goal and are
 # DELIBERATELY NOT relisted here: re-running them would spend GPU reproducing numbers that
-# already exist. See success_rates_no_pos.md.
+# already exist. See docs/reports/archive/success_rates_no_pos.md.
 # TMRL arms PARKED 2026-08-29: the SD-VAE encoder cannot import in robodiff
 # (diffusers 0.36 requires accelerate>=0.31, env has 0.13.2), so all three died at
 # startup with 0 steps. Re-add the three run dirs here to resume tracking them.

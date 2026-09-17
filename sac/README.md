@@ -7,7 +7,7 @@ heuristic, evaluated by rolling each candidate forward in a deterministic sim
 * `value_t_goal` **ignores `agent_pos` by construction** (`pusht_verifier.py:136`), so before
   the arm touches the block every candidate returns the identical value -- a measured 0.0000 px
   spread over 8 candidates -- and `argmax` degenerates to numpy's first-maximizer tie-break.
-* Blind on **28-35% of all decisions**, rising to **68-73% during approach** (`ASTAR_RECALL.md`).
+* Blind on **28-35% of all decisions**, rising to **68-73% during approach** (`docs/reports/archive/ASTAR_RECALL.md`).
   About a third of argmax picks are decided by the tie-break rather than by the verifier.
 * `armTn` patches this with an arm-to-T term, but that is a *proxy for* progress: the expert
   routinely swings the arm **around** the T to set up the next push, raising `d_arm_t` while
@@ -106,7 +106,7 @@ diagnostic arms and must never be reported as the headline Q.
 
 So a buffer seeded with demonstrations and a single 0.95 head carries **zero** positive reward,
 and a Q regressed on it learns `Q = 0` -- the identical "same score for every candidate"
-degeneracy as the heuristic being replaced, reached more expensively. `recurrent_ppo_runs_sep11.md`
+degeneracy as the heuristic being replaced, reached more expensively. `docs/reports/archive/recurrent_ppo_runs_sep11.md`
 records 18 PPO runs to 10M steps with no run ever recording a non-zero success rate.
 
 **The tau ladder** is the answer. Heads at {0.80, 0.85, 0.90, 0.95} share a trunk; rung `tau`

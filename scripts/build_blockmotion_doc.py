@@ -1,6 +1,6 @@
-"""Regenerate ARM_RANKING_BY_BLOCKMOTION.md from analysis/arm_ranking/step_*.json.
+"""Regenerate docs/reports/archive/ARM_RANKING_BY_BLOCKMOTION.md from analysis/arm_ranking/step_*.json.
 
-    python scripts/build_blockmotion_doc.py [-o ARM_RANKING_BY_BLOCKMOTION.md]
+    python scripts/build_blockmotion_doc.py [-o docs/reports/archive/ARM_RANKING_BY_BLOCKMOTION.md]
 
 Organised by SUBSET first, because the two subsets are different measurements and pooling
 them would hide the only thing that makes the still-block tables readable: most of that pool
@@ -47,7 +47,7 @@ def table(rows, sub, labels, head, get, fmt='{:.1%}'):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default=str(ROOT / 'ARM_RANKING_BY_BLOCKMOTION.md'))
+    ap.add_argument('-o', '--out', default=str(ROOT / 'docs/reports/archive/ARM_RANKING_BY_BLOCKMOTION.md'))
     args = ap.parse_args()
     rows = load()
     if not rows:
@@ -97,7 +97,7 @@ decisions fall in each subset for every arm and the comparison is paired.
                      f"{ns[0]['p_blind']:.1%} → {ns[-1]['p_blind']:.1%} |\n")
     A.append(f"""
 *pooled-blind* = no candidate from **any** of the five arms moves the T, so the verifier
-ranks nothing. This is stricter than the per-arm blind rate in `ASTAR_RECALL.md` and comes out
+ranks nothing. This is stricter than the per-arm blind rate in `docs/reports/archive/ASTAR_RECALL.md` and comes out
 far lower — five policies rarely all miss the block at once. The two answer different
 questions; do not compare them.
 """)
@@ -175,7 +175,7 @@ constant across steps because it does not train; that makes it a fixed yardstick
 be watched crossing.
 
 One seed, one dataset (`split-blq`, 137 demos), test split held out **by geometry**, so every
-number is an out-of-region readout and none of it is comparable to `SUCCESS_RATES.md`.
+number is an out-of-region readout and none of it is comparable to `docs/reports/SUCCESS_RATES.md`.
 """)
     pathlib.Path(args.out).write_text(''.join(A))
     print(f'wrote {args.out}  ({len(rows)} steps)')

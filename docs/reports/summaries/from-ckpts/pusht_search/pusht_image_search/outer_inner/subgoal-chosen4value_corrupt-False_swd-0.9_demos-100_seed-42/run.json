@@ -1,0 +1,22 @@
+{
+  "name": "train_pusht_diffusion_search",
+  "exp_name": "pusht_search",
+  "trainer": "outer_inner",
+  "task_name": "pusht_image_search",
+  "search_context": "subgoal",
+  "corrupt_obs": false,
+  "seed": 42,
+  "zarr_path": "data/pusht_cchi_v7_replay.zarr",
+  "train_ratio": null,
+  "target": "diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace",
+  "launches": [
+    {
+      "started_at": "2026-08-13T16:45:35",
+      "slurm_job_id": "38474425",
+      "hostname": "g3113",
+      "git_sha": "bbb8316560ded34ea1989919d7a570ebd770c72d",
+      "git_dirty": true,
+      "global_step": 0
+    }
+  ]
+}

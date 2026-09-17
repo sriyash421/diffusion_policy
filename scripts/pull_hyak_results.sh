@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pull the analysis material behind SUCCESS_RATES.md off Hyak -- see aug10_results2copy.md.
+# Pull the analysis material behind docs/reports/SUCCESS_RATES.md off Hyak -- see docs/reports/archive/aug10_results2copy.md.
 # Everything except checkpoints/, ~2.3 GB. Re-run with STEPS=(...) to add specific weights.
 set -euo pipefail
 

@@ -10,7 +10,7 @@
 #SBATCH --output=/gscratch/robotics/harine/slurm_logs/%x-%A_%a.out
 #SBATCH --array=0-8
 #
-# Objective 2 of aug19_analysis.md: candidate distance values for the 3x3 grid
+# Objective 2 of docs/reports/archive/aug19_analysis.md: candidate distance values for the 3x3 grid
 # {unetbc, stk1, stk16} x {10k, 50k, 100k}, at n=16 over the 50 test episodes.
 #
 # Read-only with respect to every training run: loads a checkpoint and writes only into
@@ -43,7 +43,7 @@ echo "=== task $SLURM_ARRAY_TASK_ID: $LABEL step ${STEPS[$s]}"
 [ -f "$CKPT" ] || { echo "missing checkpoint: $CKPT" >&2; exit 1; }
 
 # --pair-seeds is the default and is what makes the three arms comparable episode-by-
-# episode; it is passed explicitly so the command in aug19_analysis.md is self-describing.
+# episode; it is passed explicitly so the command in docs/reports/archive/aug19_analysis.md is self-describing.
 # --per-step-json writes all 50 episodes (~1 MB total) rather than a pre-chosen one:
 # picking "the" episode before seeing the data would be choosing the example to fit.
 PYTHONPATH=$PWD python -u scripts/dump_candidate_scores.py \

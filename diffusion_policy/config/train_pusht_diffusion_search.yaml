@@ -29,7 +29,7 @@ name: train_pusht_diffusion_search
 # snapshot of the collector at matched inputs, which is proportional to the per-denoising-step
 # KL. Measured at these settings it is ~0.006 and flat across the inner loop.
 #
-# **Runs trained the two ways are not comparable.** Every run in SUCCESS_RATES.md sections
+# **Runs trained the two ways are not comparable.** Every run in docs/reports/SUCCESS_RATES.md sections
 # 1-3 predates this flip and is `offline`; their directories are under .../offline/ and are
 # not resumed by anything launched now.
 #
@@ -385,7 +385,7 @@ policy:
   # create_from_checkpoint rebuilds from the cfg embedded in the payload, which still says
   # False -- but an in-flight run must be finished or restarted, not resumed across this.
   #
-  # Every number in LATEST_SUCCESS_RATES.md / SUCCESS_RATES.md predates this. Runs from here
+  # Every number in docs/reports/archive/LATEST_SUCCESS_RATES.md / docs/reports/SUCCESS_RATES.md predates this. Runs from here
   # are a new generation. Note also that it does NOT reach the UNet arms
   # (train_pusht_unet_bc*, DiffusionUnetImagePolicy has no such knob), so the ST-vs-UNet 2x2
   # now varies horizon causality as well as architecture.

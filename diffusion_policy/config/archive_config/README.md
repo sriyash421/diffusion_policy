@@ -14,7 +14,7 @@ know what a run actually resolved to.
 They are archived rather than deleted because twelve run directories on gscratch record
 these names in `.hydra/hydra.yaml` as the config they trained from. Nothing needs to load
 them again — the runs are finished and their fully-resolved configs are saved in their own
-`.hydra/config.yaml`, which is what `aug9_analysis.md` reads.
+`.hydra/config.yaml`, which is what `docs/reports/archive/aug9_analysis.md` reads.
 
 ## The replacement
 

@@ -12,7 +12,7 @@ the two are directly comparable, while still training on the SAME 29 episodes as
          splits.json, so nothing on disk ties a legacy checkpoint to the episodes behind
          it. That is a provenance gap, not an irreproducible split.
   test   the standard 50. Identical in every manifest, so test numbers are comparable
-         across every section of SUCCESS_RATES.md.
+         across every section of docs/reports/SUCCESS_RATES.md.
   val    30 episodes, up from the legacy 10. This is the one deliberate departure. At 10
          episodes SE is ~9.5pp at p=0.9, and three legacy arms tied at 9/10 while their
          test numbers were 84 / 70 / 32% -- the selector could not tell them apart. val is

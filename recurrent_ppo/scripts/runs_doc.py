@@ -1,4 +1,4 @@
-"""Regenerate recurrent_ppo_runs_sep11.md from the run directories.
+"""Regenerate docs/reports/archive/recurrent_ppo_runs_sep11.md from the run directories.
 
 Generated, not hand-kept. A hand-kept table of these same facts is precisely what drifted in
 config.LEGACY -- it claimed the action mode was `absolute` and the block start range [100, 400]
@@ -15,7 +15,7 @@ import os
 import numpy as np
 import yaml
 
-DOC = "recurrent_ppo_runs_sep11.md"
+DOC = "docs/reports/ppo/recurrent_ppo_runs.md"
 # the knobs that distinguish one arm from another; everything else is how a run is driven
 ARM_KEYS = ("obs", "reward", "shaping_potential", "shaping_coef", "progress_coef", "success_bonus",
             "corrupt_obs", "corrupt_t_max", "keypoint_visible_rate", "occlusion",
@@ -45,12 +45,27 @@ def evals(run_dir):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--logs", default="logs/recurrent_ppo")
+    ap.add_argument("--logs", default="logs/grid",
+                    help="directory holding the run dirs. logs/grid is where the 18-run grid "
+                         "actually landed; logs/recurrent_ppo and logs/ppo are what arch.py "
+                         "declares and hold only smoke runs.")
     ap.add_argument("--out", default=DOC)
     args = ap.parse_args()
 
     rows = []
-    for d in sorted(glob.glob(os.path.join(args.logs, "*", "*/"))):
+    # BOTH depths. arch.py's log_root nests one level (logs/<root>/<arm>/<timestamp>/), but the
+    # grid that produced the 18 recorded runs is FLAT (logs/grid/<arm>/ holds params/ and
+    # model.zip directly). Globbing only the nested shape silently found nothing there, so a
+    # doc whose header says it is generated could not in fact be regenerated. The
+    # `params/args.yaml` check below makes the extra depth harmless either way.
+    candidates = set(glob.glob(os.path.join(args.logs, "*/")))
+    candidates |= set(glob.glob(os.path.join(args.logs, "*", "*/")))
+    # `_superseded_*` trees are kept on disk deliberately (each carries a WHY_SUPERSEDED.md)
+    # and must NOT be counted: they were trained under an observation or reward this arm no
+    # longer uses, so listing them would inflate the run count and mix generations in one
+    # table. Skipping them here rather than at the glob keeps the nested shape working.
+    candidates = {d for d in candidates if "_superseded_" not in d}
+    for d in sorted(candidates):
         cfg_path = os.path.join(d, "params", "args.yaml")
         if not os.path.exists(cfg_path):
             continue

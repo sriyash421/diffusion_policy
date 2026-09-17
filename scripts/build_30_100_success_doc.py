@@ -99,7 +99,7 @@ ARM_DISTANCE_ARMS = [
 VERIFIER = 't_goal'
 
 
-# The arms named by success_rates_stk1_skk16_bc_atmTn_Tgoal.md: the three 30-demo policy
+# The arms named by docs/reports/archive/success_rates_stk1_skk16_bc_atmTn_Tgoal.md: the three 30-demo policy
 # families (ST k=1, ST k=16, UNet BC) under the two LIVE verifiers (t_goal, armTn).
 # Selected by (run-dir basename, eval subdir) because that pair is what actually identifies
 # a measurement -- one run dir holds several verifiers' sweeps side by side.
@@ -186,7 +186,7 @@ def main():
     # them byte-identical) and broke every inbound reference each time. The generation date
     # is recorded in the doc body instead, which is the part anyone actually needs.
     today = datetime.date.today().isoformat()
-    ap.add_argument('-o', '--out', default='success_rates_stk1_skk16_bc_atmTn_Tgoal.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_stk1_skk16_bc_atmTn_Tgoal.md')
     ap.add_argument('--all', action='store_true',
                     help='render every known arm instead of the FOCUS set '
                          '(adds the 100-demo halves, ST-gaussian, the 6/8/1024 trunk, and '

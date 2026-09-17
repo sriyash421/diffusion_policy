@@ -71,7 +71,7 @@ obs_encoder:
   # broke the policy: at step 10k, argmax n=1 was 0.00 on BOTH arms and stayed exactly 0.00
   # at every checkpoint, while the SAME encoder trained end to end recovered most of the
   # ResNet gap (BC 0.06/0.10/0.14 at n=1/2/4 against ResNet's 0.08/0.14/0.20) -- so the SD
-  # latent is a fine representation and freezing it is not. See success_rates_vae_debug.md.
+  # latent is a fine representation and freezing it is not. See docs/reports/archive/success_rates_vae_debug.md.
   #
   # To put the VAE back for an arm, override at THIS level -- `policy.obs_encoder` is an
   # interpolation of this block, so hydra cannot reach inside it:
@@ -136,7 +136,7 @@ exp_name: pusht_search
 #
 # 30 IS THE CURRENT GENERATION, set here so every arm -- ST at any k, UNet BC, Gaussian --
 # gets it from one place and no arm can be on a different budget by omission. 100 and the
-# retired 25/29 budgets are legacy: their runs are kept for reference in SUCCESS_RATES.md
+# retired 25/29 budgets are legacy: their runs are kept for reference in docs/reports/SUCCESS_RATES.md
 # and are reachable with `n_demos=100`, but nothing is trained at them by default.
 n_demos: 30
 

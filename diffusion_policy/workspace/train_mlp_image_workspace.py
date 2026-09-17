@@ -69,7 +69,7 @@ def _subgoal_panel(subgoals, n_rows=2):
 # The arm label for each (search_context, selection) pair. This is what the run DIRECTORY
 # is named, so it is asserted against cfg.arm below rather than left as a comment: the run
 # dir is how every downstream report identifies the arm, and a config whose label disagreed
-# with its mechanism would mislabel a whole column of SUCCESS_RATES.md with no error.
+# with its mechanism would mislabel a whole column of docs/reports/SUCCESS_RATES.md with no error.
 _ARM_LABELS = {
     ('value', 'argmax'): 'value',
     ('subgoal', 'argmax'): 'subgoal-chosen4value',

@@ -3,7 +3,7 @@
 # Same objective as train_pusht_diffusion_search_subgoal_only_cd (uniform slot loss,
 # context_decay 0.9); only the loop length differs, so the K sweep is clean.
 #
-# WHY A SHORTER LOOP IS WORTH TESTING. CANDIDATES_FROM_SUBGOAL.md measured the ordering signal
+# WHY A SHORTER LOOP IS WORTH TESTING. docs/reports/archive/CANDIDATES_FROM_SUBGOAL.md measured the ordering signal
 # decaying to the permutation null by k~6 -- beyond roughly six candidates the search is
 # resampling, not steering. If that holds, a 8-wide loop should lose little against 16 while
 # costing a fraction to train: generate_search_context draws K-1 candidates per gradient step,

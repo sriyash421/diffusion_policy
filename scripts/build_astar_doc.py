@@ -1,6 +1,6 @@
-"""Regenerate ASTAR_RECALL.md from the on-disk astar_uniform_walk output.
+"""Regenerate docs/reports/archive/ASTAR_RECALL.md from the on-disk astar_uniform_walk output.
 
-    python scripts/build_astar_doc.py [-o ASTAR_RECALL.md]
+    python scripts/build_astar_doc.py [-o docs/reports/archive/ASTAR_RECALL.md]
 
 Organised by QUESTION rather than by arm, because the questions are not independent: how
 often the verifier can distinguish anything at all bounds what every later table is allowed
@@ -60,7 +60,7 @@ def table(rows, head, get, fmt='{:.2f}'):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default=str(ROOT / 'ASTAR_RECALL.md'))
+    ap.add_argument('-o', '--out', default=str(ROOT / 'docs/reports/archive/ASTAR_RECALL.md'))
     args = ap.parse_args()
     rows = load()
     if not rows:

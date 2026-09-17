@@ -87,7 +87,7 @@ policy:
   # changes every one of those blocks.
   #
   # ARCHITECTURE-CHANGING: checkpoints written at 128 cannot be loaded at 256. The runs that
-  # produced the UNet columns of SUCCESS_RATES.md section 5 used 128 and are archived under
+  # produced the UNet columns of docs/reports/SUCCESS_RATES.md section 5 used 128 and are archived under
   # data/outputs/_discarded/; anything trained from here on is a different model.
   diffusion_step_embed_dim: 256
   down_dims: [512, 1024, 2048]

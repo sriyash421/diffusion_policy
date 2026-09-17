@@ -1,4 +1,4 @@
-"""Regenerate success_rates_no_pos.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_no_pos.md from on-disk eval output.
 
 THE ABLATION. Every PushT arm to date conditions on
 ``shape_meta.obs = {image, agent_pos, feedback}``. ``feedback`` is an exact, invertible
@@ -16,7 +16,7 @@ Everything is matched to the controls: 30 demos, seed 42, ``t_goal`` verifier, 4
 100k gradient steps, a checkpoint every 10k, and the same 50 held-out test episodes swept
 over n = 1..64.
 
-    python scripts/build_nopos_doc.py [-o success_rates_no_pos.md]
+    python scripts/build_nopos_doc.py [-o docs/reports/archive/success_rates_no_pos.md]
 
 Safe to re-run mid-sweep: it reads each run's bon_search/success_curves.jsonl and nothing
 else, so arms that have not reached a checkpoint render as pending. Like
@@ -93,7 +93,7 @@ def render_arm(A, run, obs_desc):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_no_pos.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_no_pos.md')
     args = ap.parse_args()
 
     L = []

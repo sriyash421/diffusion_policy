@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regenerate SUCCESS_RATES.md from whatever evals have landed, then commit and push.
+# Regenerate docs/reports/SUCCESS_RATES.md from whatever evals have landed, then commit and push.
 #
 # Scheduled with `at` on the LOGIN NODE, not as a cloud routine and not as a SLURM job:
 #   * the eval results live under /gscratch, which only the cluster can see;
@@ -30,20 +30,20 @@ say "start"
 # doc that lost any.
 count_of() { sed -n 's/.*(\([0-9]*\) bytes, \([0-9]*\) checkpoints.*/\2/p' <<<"$1"; }
 
-before=$(grep -c '^| ' SUCCESS_RATES.md 2>/dev/null || echo 0)
+before=$(grep -c '^| ' docs/reports/SUCCESS_RATES.md 2>/dev/null || echo 0)
 out=$("$PY" scripts/build_success_rates_doc.py 2>&1 | tail -1)
 say "generator: $out"
 after_ck=$(count_of "$out")
-after=$(grep -c '^| ' SUCCESS_RATES.md 2>/dev/null || echo 0)
+after=$(grep -c '^| ' docs/reports/SUCCESS_RATES.md 2>/dev/null || echo 0)
 
 if [ -z "$after_ck" ] || [ "$after_ck" -lt 1 ]; then
     say "ABORT: generator reported no checkpoints -- results tree unreadable? Nothing committed."
-    git checkout -- SUCCESS_RATES.md 2>/dev/null
+    git checkout -- docs/reports/SUCCESS_RATES.md 2>/dev/null
     exit 1
 fi
 if [ "$after" -lt "$before" ]; then
     say "ABORT: table rows fell $before -> $after. Reverting the regenerated doc, nothing committed."
-    git checkout -- SUCCESS_RATES.md 2>/dev/null
+    git checkout -- docs/reports/SUCCESS_RATES.md 2>/dev/null
     exit 1
 fi
 say "rows $before -> $after, $after_ck checkpoints"
@@ -58,7 +58,7 @@ git add -A
 git commit -q -F - <<EOF
 Refresh eval results: $after_ck checkpoints
 
-Regenerated SUCCESS_RATES.md from the eval output on gscratch, plus any working-tree
+Regenerated docs/reports/SUCCESS_RATES.md from the eval output on gscratch, plus any working-tree
 changes outstanding at the time of the run. Committed by
 scripts/slurm/commit_eval_results.sh, scheduled with \`at\`.
 

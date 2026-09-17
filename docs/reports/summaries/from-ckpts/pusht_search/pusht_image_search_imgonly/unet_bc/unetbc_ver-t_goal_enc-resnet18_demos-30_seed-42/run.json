@@ -1,0 +1,46 @@
+{
+  "name": "train_pusht_unet_bc",
+  "exp_name": "pusht_search",
+  "trainer": "unet_bc",
+  "task_name": "pusht_image_search_imgonly",
+  "search_context": null,
+  "corrupt_obs": null,
+  "seed": 42,
+  "zarr_path": "data/pusht_cchi_v7_replay.zarr",
+  "train_ratio": null,
+  "target": "diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace",
+  "launches": [
+    {
+      "started_at": "2026-08-30T11:31:36",
+      "slurm_job_id": "39349862",
+      "hostname": "g3060",
+      "git_sha": "d63d70b9f9e909cce32e051bcf28abda16a8a09d",
+      "git_dirty": true,
+      "global_step": 0
+    },
+    {
+      "started_at": "2026-08-30T13:43:03",
+      "slurm_job_id": "39356209",
+      "hostname": "g3071",
+      "git_sha": "7ec4c4476f15acbfe18ca7a08f06b3383d4b7156",
+      "git_dirty": true,
+      "global_step": 60000
+    },
+    {
+      "started_at": "2026-08-30T22:43:02",
+      "slurm_job_id": "39374679",
+      "hostname": "g3053",
+      "git_sha": "e40a38e17a4204c2c6e75c8d98e76efd1fda25cc",
+      "git_dirty": true,
+      "global_step": 100000
+    },
+    {
+      "started_at": "2026-08-30T22:51:00",
+      "slurm_job_id": "39374715",
+      "hostname": "g3073",
+      "git_sha": "e40a38e17a4204c2c6e75c8d98e76efd1fda25cc",
+      "git_dirty": true,
+      "global_step": 100000
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""Regenerate success_rates_slot_weights_armTn.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_slot_weights_armTn.md from on-disk eval output.
 
 Two per-candidate-slot knobs, each varied ONE AT A TIME off the arms already on disk:
 
@@ -9,7 +9,7 @@ Everything else is matched to the controls -- 30 demos, seed 42, armTn verifier,
 gradient steps, a checkpoint every 10k, and the same 50 held-out test episodes swept over
 n = 1..64.
 
-    python scripts/build_slot_norm_doc.py [-o success_rates_slot_weights_armTn.md]
+    python scripts/build_slot_norm_doc.py [-o docs/reports/archive/success_rates_slot_weights_armTn.md]
 
 Safe to re-run mid-sweep: it reads each run's bon_search/success_curves.jsonl and nothing
 else, so arms that have not reached a checkpoint simply render as pending. Like
@@ -160,7 +160,7 @@ def delta_table(agg_ctrl, agg_var):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_slot_weights_armTn.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_slot_weights_armTn.md')
     args = ap.parse_args()
 
     L = []

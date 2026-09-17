@@ -3,7 +3,7 @@
     python scripts/rank_arms_by_blockmotion.py --step 100000 \
         --out analysis/arm_ranking/step_0100000.json
 
-WHAT IS NEW HERE. Everything in ASTAR_RECALL.md measured one arm at a time, against a* and
+WHAT IS NEW HERE. Everything in docs/reports/archive/ASTAR_RECALL.md measured one arm at a time, against a* and
 against a uniform sampler. No arm was ever ranked against another arm's predictions, and
 nothing conditioned on whether the block was actually in play. This does both at once: at
 each offline decision state every arm proposes 16 candidates, they all go into a single pool
@@ -424,7 +424,7 @@ def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, o
         # BLIND HERE MEANS THE WHOLE POOL IS BLIND: no candidate from ANY of the five arms
         # moves the T. That is the right test for a pooled ranking -- it asks whether this
         # ranking can discriminate at all -- but it is STRICTER than the per-arm blind rate
-        # in ASTAR_RECALL.md and comes out much lower (five policies rarely all miss the
+        # in docs/reports/archive/ASTAR_RECALL.md and comes out much lower (five policies rarely all miss the
         # block at once). The two numbers answer different questions; do not compare them.
         # The reference rows are excluded so the tally describes the trained arms.
         pol_cols = np.array([s not in (UNIFORM, ASTAR) for s in src])
@@ -450,7 +450,7 @@ def report(res):
         print(f'{s["n_decisions"]} decisions   pooled-blind {s["p_blind"]:.1%} '
               f'(no candidate from ANY of the 5 arms moves the T,\n'
               f'{"":33s}so the verifier ranks nothing -- stricter than the per-arm rate '
-              f'in ASTAR_RECALL.md)\n{"="*92}')
+              f'in docs/reports/archive/ASTAR_RECALL.md)\n{"="*92}')
         print(f'{"source":15s}{"verif top1":>11s}{"top5":>8s}{"top10":>8s}'
               f'{"vrank/" + str(P):>11s}{"rmse top1":>11s}{"rmse rank":>11s}'
               f'{"eucl best":>11s}{"verif best":>12s}')

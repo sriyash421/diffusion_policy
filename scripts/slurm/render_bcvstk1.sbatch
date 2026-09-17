@@ -10,7 +10,7 @@
 #SBATCH --output=/gscratch/robotics/harine/slurm_logs/%x-%A_%a.out
 #SBATCH --array=0-5
 #
-# Objective 1 of aug19_analysis.md: UNet BC vs ST k=1 action-sample videos.
+# Objective 1 of docs/reports/archive/aug19_analysis.md: UNet BC vs ST k=1 action-sample videos.
 #
 # 6 array tasks = 2 policies x 3 checkpoints. Each task loads its policy ONCE, spawns the
 # 32-worker verifier pool ONCE, and sweeps every n internally -- the pools cost more to
@@ -35,7 +35,7 @@ cd /mmfs1/home/harine/diffusion_policy_standalone
 ROOT=/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search
 OUT=/mmfs1/home/harine/diffusion_policy_standalone/videos/aug19_bcvSTk1_actions_viz
 
-# Both ST arms in aug19_analysis.md are the 4/4/256 pair: the big 6x8x1024 k=16 run stops
+# Both ST arms in docs/reports/archive/aug19_analysis.md are the 4/4/256 pair: the big 6x8x1024 k=16 run stops
 # at step 40000 and so cannot supply the 50k/100k cells. stk1 is `bc_demos-30` -- that
 # directory name predates the rename and IS ST k=1, not the UNet BC baseline.
 RUNS=(unet_bc/unetbc_demos-30_seed-42 offline/bc_demos-30_seed-42)

@@ -1,4 +1,4 @@
-"""Regenerate success_rates_noised_obs_resnetE2E.md from on-disk eval output.
+"""Regenerate docs/reports/archive/success_rates_noised_obs_resnetE2E.md from on-disk eval output.
 
 Four per-slot OBSERVATION-noise schedules against three uncorrupted baselines, all on the
 ResNet18-end-to-end backbone. Slot k conditions on the first k scored candidates, so every
@@ -12,7 +12,7 @@ is the identity for them and only the clean readout exists.
 
 Reads bon_search_*/success_curves.jsonl and nothing else, so it is safe to re-run mid-sweep.
 
-    python scripts/build_noised_obs_doc.py [-o success_rates_noised_obs_resnetE2E.md]
+    python scripts/build_noised_obs_doc.py [-o docs/reports/archive/success_rates_noised_obs_resnetE2E.md]
 
 Nominates no best checkpoint and no best n -- every evaluated cell is printed.
 """
@@ -135,7 +135,7 @@ def _summary(arms):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('-o', '--out', default='success_rates_noised_obs_resnetE2E.md')
+    ap.add_argument('-o', '--out', default='docs/reports/archive/success_rates_noised_obs_resnetE2E.md')
     args = ap.parse_args()
 
     L = ['# PushT per-slot observation noise, ResNet18 end-to-end — success rates', '',

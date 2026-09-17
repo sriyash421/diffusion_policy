@@ -1,0 +1,60 @@
+{
+  "run": "unetbc_ver-t_goal_enc-resnet18_demos-137_split-blq_seed-42",
+  "repeats": 32,
+  "steps": {
+    "10000": {
+      "n_actions": 1,
+      "endpoint_dispersion_px": [
+        46.05386519432068
+      ],
+      "astar_min_dist_px": [
+        16.819305419921875
+      ],
+      "astar_mean_dist_px": [
+        56.84873580932617
+      ],
+      "astar_min_chunk_dist_px": [
+        19.194198608398438
+      ],
+      "astar_min_dist_norm": [
+        0.4082847574419916
+      ]
+    },
+    "50000": {
+      "n_actions": 1,
+      "endpoint_dispersion_px": [
+        20.375453134377796
+      ],
+      "astar_min_dist_px": [
+        29.82383918762207
+      ],
+      "astar_mean_dist_px": [
+        51.43867874145508
+      ],
+      "astar_min_chunk_dist_px": [
+        20.66737174987793
+      ],
+      "astar_min_dist_norm": [
+        1.612363089539449
+      ]
+    },
+    "100000": {
+      "n_actions": 1,
+      "endpoint_dispersion_px": [
+        13.121161421140036
+      ],
+      "astar_min_dist_px": [
+        36.08800506591797
+      ],
+      "astar_mean_dist_px": [
+        52.82185745239258
+      ],
+      "astar_min_chunk_dist_px": [
+        23.327733993530273
+      ],
+      "astar_min_dist_norm": [
+        3.292617861429077
+      ]
+    }
+  }
+}

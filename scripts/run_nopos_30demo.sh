@@ -58,7 +58,7 @@
 # which is the every-10k-checkpoint eval this ablation asks for and the same protocol the
 # controls were measured under. After the first checkpoints land:
 #   SUBMIT=1 bash scripts/slurm/submit_30_100_watchers.sh
-# then: python scripts/build_nopos_doc.py   ->  success_rates_no_pos.md
+# then: python scripts/build_nopos_doc.py   ->  docs/reports/archive/success_rates_no_pos.md
 #
 #   bash scripts/run_nopos_30demo.sh            # dry run: show what would be submitted
 #   SUBMIT=1 bash scripts/run_nopos_30demo.sh   # ...and sbatch them

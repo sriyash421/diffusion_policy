@@ -162,7 +162,7 @@ def main():
             assert cfg.slot_weight_decay is False, f'{name} decay={cfg.slot_weight_decay}'
             # Post-rename (the 2026-08-05 run-directory rename) the run dir is keyed on `arm`, not search_context.
             # Assert it resolves to THIS arm's label: a config whose directory disagreed with
-            # its mechanism would file a whole column of SUCCESS_RATES.md under the wrong arm,
+            # its mechanism would file a whole column of docs/reports/SUCCESS_RATES.md under the wrong arm,
             # and `training.resume` would either resume the wrong run or start a fresh one.
             assert cfg.slot_weights.mode == 'uniform', \
                 f'{name} slot_weights.mode={cfg.slot_weights.mode}'

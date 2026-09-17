@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regenerate SUCCESS_RATES.md every INTERVAL seconds, so the doc tracks the watchers
+# Regenerate docs/reports/SUCCESS_RATES.md every INTERVAL seconds, so the doc tracks the watchers
 # without anyone having to remember. Bounded (default 24h) rather than forever -- an
 # unbounded detached loop outlives the experiment and silently rewrites the file weeks
 # later. Idempotent: the generator reads only on-disk eval output.

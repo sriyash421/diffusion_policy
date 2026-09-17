@@ -1,4 +1,4 @@
-"""Verify the aug19 artifacts on disk and emit the status tables for aug19_analysis.md.
+"""Verify the aug19 artifacts on disk and emit the status tables for docs/reports/archive/aug19_analysis.md.
 
 The doc is provenance: it claims a set of files exist and were produced a particular way.
 Nothing keeps that claim true as jobs are re-run, preempted or partially completed, so this

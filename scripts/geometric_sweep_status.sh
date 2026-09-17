@@ -84,7 +84,7 @@ pgrep -f autoupdate_geometric_readouts.sh >/dev/null \
 # The LATEST evaluated checkpoint per (run, rule), at three widths. This is a progress
 # readout, not a result to quote: a row at step 40k is a partially-trained model, and no
 # step is nominated as best -- selection is never done on test. Full per-step tables with
-# every n are in SUCCESS_RATES_GEOMETRIC.md.
+# every n are in docs/reports/archive/SUCCESS_RATES_GEOMETRIC.md.
 echo
 echo "--- test success rate, LATEST evaluated step per run ---"
 $PY - "$ROOT" <<'PYEOF_INNER'
