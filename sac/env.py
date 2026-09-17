@@ -18,7 +18,7 @@ import gymnasium
 import numpy as np
 from gymnasium import spaces
 
-from recurrent_ppo.pusht_gym import PushTGymEnv
+from recurrent_ppo.pusht_gym import AUG_CROP_KEY, PushTGymEnv
 from sac.config import (CHUNK, DEFAULTS as D, DEMO_ZARR, SUCCESS_THRESHOLD, TAU_LADDER, WS,
                         ENV_KEYS, KEYPOINT_ONLY_KEYS, gamma_base)
 
@@ -232,11 +232,22 @@ def make_chunk_env(obs_type="keypoint", seed=0, rank=0, monitor_path=None, **env
 
 
 def build_chunk_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True,
-                        monitor_dir=None, **env_kwargs):
-    """The vectorised chunked env both train and play build, so they cannot drift."""
+                        monitor_dir=None, aug=None, **env_kwargs):
+    """The vectorised chunked env both train and play build, so they cannot drift.
+
+    `aug` is `recurrent_ppo.corrupt_policy.aug_for(...)`, or None. On the image arm it carries
+    `crop_span`, which puts a per-transition crop offset INTO the observation. That is what
+    keeps the image arm's crop the same while collecting and while updating: without it
+    CropRandomizer branches on `self.training`, which SB3 sets False in `collect_rollouts` and
+    True in `train()`, so the critic and the BON head would be fit on randomly-cropped features
+    against targets produced under a centre crop. The wrapper sits OUTSIDE the vec env for the
+    same reason it does on the PPO arms -- one draw per stacked observation.
+    """
     import os
 
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+
+    from recurrent_ppo.pusht_gym import VecAugmentationDraw
 
     fns = []
     for rank in range(n_envs):
@@ -246,6 +257,8 @@ def build_chunk_vec_env(obs_type="keypoint", n_envs=16, seed=0, use_subproc=True
     # forkserver: pymunk/pygame state does not survive a plain fork cleanly
     venv = SubprocVecEnv(fns, start_method="forkserver") if use_subproc and n_envs > 1 else DummyVecEnv(fns)
     venv.seed(seed)
+    if aug:
+        venv = VecAugmentationDraw(venv, seed=seed, **aug)
     return venv
 
 
@@ -325,8 +338,15 @@ def frame_coverage(zarr_path=DEMO_ZARR, cache=True):
     return out
 
 
-def _obs_from_zarr(root, idx, obs_type):
-    """The observation PushTGymEnv would emit at these demo frames, without re-simulating."""
+def _obs_from_zarr(root, idx, obs_type, crop_span=None, rng=None):
+    """The observation PushTGymEnv would emit at these demo frames, without re-simulating.
+
+    `crop_span` must be passed whenever the live env is wrapped in VecAugmentationDraw, because
+    the buffer stores the ENV's observation space and SB3's DictReplayBuffer indexes it key by
+    key: a demo transition missing `aug_crop` raises on `add`, and one carrying a constant
+    offset would hand the Q a demo distribution that is cropped differently from the collected
+    one. The offset is drawn per frame, exactly as the wrapper draws it per step.
+    """
     if obs_type == "keypoint":
         kps = np.asarray(root["data/keypoint"])[idx].reshape(len(idx), -1)   # 9 global kps
         agent = np.asarray(root["data/agent_pos"])[idx]
@@ -339,12 +359,16 @@ def _obs_from_zarr(root, idx, obs_type):
         # IMAGE ONLY: `agent_pos` was removed from this arm so it sees exactly what the offline
         # diffusion-policy arms see. A demo transition that still carried it would not match the
         # observation space, and the buffer would store a shape the policy cannot read.
-        return {"image": np.moveaxis(np.asarray(root["data/img"])[idx], -1, 1).astype(np.uint8)}
+        obs = {"image": np.moveaxis(np.asarray(root["data/img"])[idx], -1, 1).astype(np.uint8)}
+        if crop_span is not None:
+            rng = np.random.default_rng(0) if rng is None else rng
+            obs[AUG_CROP_KEY] = rng.integers(0, crop_span, size=(len(idx), 2)).astype(np.float32)
+        return obs
     raise ValueError(f"unknown obs_type {obs_type!r}")
 
 
 def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stride=1,
-                     gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0):
+                     gamma=0.95, tau_ladder=TAU_LADDER, frac=1.0, crop_span=None):
     """Chunk transitions with a per-tau (reward, done, live) triple.
 
     Returns a dict with `obs`, `action`, `next_obs`, `reward` (N, n_tau), `done` (N, n_tau),
@@ -391,8 +415,11 @@ def demo_transitions(zarr_path=DEMO_ZARR, obs_type="keypoint", chunk=CHUNK, stri
 
     chunks = action[t0[:, None] + np.arange(chunk)]              # (N, chunk, 2) absolute targets
     return {
-        "obs": _obs_from_zarr(root, t0, obs_type),
-        "next_obs": _obs_from_zarr(root, t0 + chunk, obs_type),
+        # independent draws for obs and next_obs, matching the collected stream: those are two
+        # different env steps and the wrapper draws once per step
+        "obs": _obs_from_zarr(root, t0, obs_type, crop_span, np.random.default_rng(0)),
+        "next_obs": _obs_from_zarr(root, t0 + chunk, obs_type, crop_span,
+                                   np.random.default_rng(1)),
         "action": encode(chunks, chunk=chunk).astype(np.float32),
         "reward": np.asarray(rew, np.float32),
         "done": np.asarray(done, bool),

@@ -729,6 +729,8 @@ def test_score_builds_the_image_observation_the_arm_declares():
     import zarr
 
     from diffusion_policy.env.pusht.feedback_util import compute_feedback_from_pose
+    from recurrent_ppo.corrupt_policy import ST_CROP, aug_for
+    from recurrent_ppo.pusht_gym import AUG_CROP_KEY, aug_spaces
     from sac.env import ChunkPushTEnv
     from sac.score import obs_for_arm
 
@@ -740,6 +742,15 @@ def test_score_builds_the_image_observation_the_arm_declares():
         "image": th.rand(2, 1, 3, 96, 96),
     }
     built = obs_for_arm(obs_dict, "image")
-    declared = set(ChunkPushTEnv(obs_type="image", block_zero_coverage=False).observation_space.spaces)
-    assert set(built) == declared, f"score builds {sorted(built)}, env declares {sorted(declared)}"
+    # The TRAINING space, not the bare env's: sac/runner wraps in VecAugmentationDraw so the
+    # image arm carries a crop offset, and that wrapped space is what the buffer stores and the
+    # extractor was built against. Comparing against the unwrapped env would pass while the Q
+    # was handed a dict one key short of what its encoder reads.
+    raw = ChunkPushTEnv(obs_type="image", block_zero_coverage=False).observation_space
+    aug = aug_for("image", corrupt_obs=False, render_size=96, random_crop=True)
+    declared = set(aug_spaces(raw, **aug).spaces)
+    assert set(built) == declared, f"score builds {sorted(built)}, training space is {sorted(declared)}"
     assert built["image"].shape == (2, 3, 96, 96) and built["image"].dtype == np.uint8
+    # and the offset is the CENTRE one -- the Q trains on random crops and deploys on the centre
+    lo = (96 - ST_CROP) // 2
+    assert np.array_equal(built[AUG_CROP_KEY], np.full((2, 2), lo, dtype=np.float32))

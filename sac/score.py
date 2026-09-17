@@ -29,6 +29,8 @@ import torch as th
 from diffusion_policy.env.pusht.feedback_util import block_pose_from_feedback
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 from diffusion_policy.env.pusht.pymunk_keypoint_manager import PymunkKeypointManager
+from recurrent_ppo.corrupt_policy import ST_CROP
+from recurrent_ppo.pusht_gym import AUG_CROP_KEY
 from sac.config import WS
 
 _KP_MANAGER = None
@@ -82,7 +84,17 @@ def obs_for_arm(obs_dict, obs_type):
         # IMAGE ONLY -- the pose is deliberately absent, so this Q sees no more than the ST/BC
         # policies whose candidates it ranks. `state` is still used above to rebuild the frame's
         # provenance and by the keypoint arm; it must not re-enter the image observation.
-        return {"image": image}
+        #
+        # THE CENTRE CROP IS SUPPLIED, not inferred. Training wraps the env in
+        # VecAugmentationDraw, so the extractor reads its crop offset out of the observation
+        # and would raise KeyError on a dict without one. Naming the centre explicitly also
+        # makes deployment's crop a property of what we hand the Q, rather than a side effect
+        # of whether `set_training_mode(False)` happened to have been called: the Q trains on
+        # random crops and is deployed on the centre one, matching the ST/BC arms it ranks.
+        height, width = image.shape[-2:]
+        centre = np.array([(height - ST_CROP) // 2, (width - ST_CROP) // 2], dtype=np.float32)
+        return {"image": image,
+                AUG_CROP_KEY: np.broadcast_to(centre, (len(image), 2)).copy()}
     raise ValueError(f"unknown obs_type {obs_type!r}")
 
 

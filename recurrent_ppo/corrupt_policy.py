@@ -98,7 +98,8 @@ class STResNetExtractor(BaseFeaturesExtractor):
         # stronger observation than task/pusht_image_search_imgonly.yaml gives the
         # diffusion-policy arms, and enough to make the two families' numbers non-comparable.
         super().__init__(observation_space, features_dim=512 * self.n_frames)
-        # the crop offset arrives with the observation when AugmentationDraw is in the stack
+        # the crop offset arrives with the observation when AugmentationDraw is in the stack;
+        # without one this arm centre-crops, which is what PPO now does in both phases
         self.replay_crop = AUG_CROP_KEY in observation_space.spaces
         resnet = get_resnet("resnet18", weights="IMAGENET1K_V1")
         if use_group_norm:
@@ -108,40 +109,44 @@ class STResNetExtractor(BaseFeaturesExtractor):
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features))
         self.resnet = resnet
-        # CropRandomizer switches on self.training by itself -- random crop in train, CENTRE crop
-        # in eval. We override that in both directions: `_crop` pins the stored offset whenever
-        # the observation carries one, which it always does on this arm. So this policy is
-        # evaluated on a random crop, deliberately. See _crop.
         # the cropper sees ONE frame at a time, so its input shape is 3 channels, not 3*n
         self.cropper = CropRandomizer(input_shape=(3,) + tuple(image_space.shape[1:]),
                                       crop_height=crop, crop_width=crop, num_crops=1, pos_enc=False)
+        # The centre offset, precomputed. `_crop` ALWAYS supplies an offset, so
+        # CropRandomizer's own `self.training` branch never runs -- see _crop for why.
+        height, width = image_space.shape[1:]
+        self._centre_offset = ((height - crop) // 2, (width - crop) // 2)
 
     def _crop(self, img, obs):
-        """The stored crop if the observation carries one, else CropRandomizer's own choice.
+        """The stored crop if the observation carries one, else the CENTRE crop.
 
-        Pinning the stored offset is what keeps PPO's ratio a policy ratio on the image arm:
-        without it the crop is redrawn on every epoch, so the update scores an action against
-        a different view of the observation than the one it was chosen from.
+        `self.training` is never consulted. SB3 has it backwards for this purpose -- False
+        while collecting, True during the update -- so an arm that let CropRandomizer branch on
+        it would crop one way while acting and another while learning. Supplying an offset
+        unconditionally is what makes the crop a property of the OBSERVATION rather than of
+        whichever phase the algorithm happens to be in.
 
-        IT IS PINNED AT EVALUATION TOO, and that is a protocol choice rather than a side effect.
-        `aug_for` emits `crop_span` for the image arm whether or not it is corrupted, so the key
-        is always present and CropRandomizer's own eval branch -- a centre crop -- never runs.
-        The evaluation is therefore true to training: the policy is scored on exactly the
-        transform it learned under, not on a sharper view it never saw. Centre-cropping at eval
-        would measure a different input distribution from the one the weights were fitted to,
-        and the gap between the two would show up as an unexplained eval/train discrepancy.
-        The eval env is re-seeded before each evaluation, so the crops are a FIXED set: every
-        checkpoint sees the same ones, and the comparison between checkpoints is still paired.
+        That single rule gives all three behaviours the arms need:
+          * PPO      `aug_for` emits no `crop_span` for image, so no key ever arrives and this
+                     arm centre-crops at train AND eval. A deterministic crop cannot be redrawn
+                     between rollout and update, so PPO's ratio stays a policy ratio for free.
+          * SAC      wraps with VecAugmentationDraw, so the key is present and the crop is
+                     random in both collection and update -- the augmentation the off-policy
+                     arms keep.
+          * verifier `sac.score.obs_for_arm` supplies the centre offset explicitly, so the Q is
+                     deployed on a centre crop while having trained on random ones.
         """
         if not self.replay_crop:
-            return self.cropper(img)
-        # ONE offset per transition, shared by every frame of the stack. The draw is per
-        # stacked observation (VecAugmentationDraw sits outside arch.wrap and stores a single
-        # (2,) offset), so repeating it is what keeps the replay exact: a per-frame offset would
-        # need the draw itself to widen to (n_frames, 2), changing the observation space.
-        offsets = obs[AUG_CROP_KEY].long().repeat_interleave(self.n_frames, dim=0)
+            dy, dx = self._centre_offset
+            offsets = th.tensor([dy, dx], device=img.device).expand(img.shape[0], 2)
+        else:
+            # ONE offset per transition, shared by every frame of the stack. The draw is per
+            # stacked observation (VecAugmentationDraw sits outside arch.wrap and stores a
+            # single (2,) offset), so repeating it is what keeps the replay exact: a per-frame
+            # offset would need the draw itself to widen to (n_frames, 2), changing the space.
+            offsets = obs[AUG_CROP_KEY].repeat_interleave(self.n_frames, dim=0)
         # _forced_offsets is CropRandomizer's own extension point for exactly this
-        self.cropper._forced_offsets = offsets
+        self.cropper._forced_offsets = offsets.long()
         try:
             return self.cropper(img)
         finally:
@@ -393,11 +398,19 @@ def features_extractor_kwargs(obs_type, corrupt_obs):
 
 
 def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T_MAX,
-            n_stack=1, snr=None):
+            n_stack=1, snr=None, random_crop=False):
     """The AugmentationDraw kwargs an arm needs, or None if it needs no draw.
 
-    The crop draw is needed by the image arm whether or not it is corrupted -- a redrawn crop
-    biases the ratio exactly as a redrawn noise does, and it does so on the CLEAN arm too.
+    `random_crop` is OFF by default, which is what makes PPO centre-crop: with no `crop_span`
+    the draw carries no offset, no `aug_crop` key reaches the observation, and
+    STResNetExtractor falls back to the centre. PPO therefore sees the same deterministic
+    transform while acting and while learning, and the eval it is scored on is the one it
+    trained under.
+
+    The off-policy arms pass `random_crop=True`. SAC keeps the augmentation because its
+    updates replay a buffer rather than the trajectory just collected, so a redrawn crop
+    costs it nothing -- and its verifier is deployed on a centre crop supplied explicitly by
+    `sac.score.obs_for_arm`.
     """
     aug = {}
     if corrupt_obs:
@@ -410,7 +423,7 @@ def aug_for(obs_type, corrupt_obs, render_size=96, crop=ST_CROP, t_max=DEFAULT_T
         # a target SNR pins ONE level; without it the level is drawn from U[0, t_max)
         t = snr_to_timestep(snr) if snr is not None else None
         aug["t_min"], aug["t_max"] = (t, t + 1) if t is not None else (0, t_max)
-    if obs_type == "image":
+    if obs_type == "image" and random_crop:
         aug["crop_span"] = render_size - crop
     return aug or None
 

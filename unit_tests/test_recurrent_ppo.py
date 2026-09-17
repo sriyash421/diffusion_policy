@@ -496,6 +496,11 @@ def test_evaluate_actions_reproduces_the_collected_log_prob(obs_type, corrupt):
     swap both the corruption noise and the image arm's random crop underneath the ratio. This
     covers the CLEAN image arm too, where only the crop was at fault.
 
+    The crop half is now structural rather than replayed: PPO centre-crops in both phases, so
+    there is no offset to carry and nothing a mode flip could change. The assertion stays
+    because the NOISE half is still replayed from the observation, and because a reintroduced
+    random crop would fail here first.
+
     The features are asserted bitwise, not the log-prob within a tolerance, and deliberately:
     measured against the old redrawing behaviour, the features moved by up to 2.34 (0.30 on the
     clean image arm) while the resulting ratio moved only 1.5e-5, because an untrained head
@@ -507,7 +512,8 @@ def test_evaluate_actions_reproduces_the_collected_log_prob(obs_type, corrupt):
 
     env = PushTGymEnv(obs_type=obs_type, max_episode_steps=20)
     aug = aug_for(obs_type, corrupt, render_size=96)
-    env = AugmentationDraw(env, **aug)
+    if aug:
+        env = AugmentationDraw(env, **aug)
     obs, _ = env.reset(seed=0)
 
     policy = policy_for(obs_type, recurrent=True, corrupt_obs=corrupt)(
@@ -516,7 +522,9 @@ def test_evaluate_actions_reproduces_the_collected_log_prob(obs_type, corrupt):
     # raw, not pre-divided: the policy's own preprocess_obs does the /255 on the image space
     obs_t = {k: th.as_tensor(np.asarray(v)).unsqueeze(0).float() for k, v in obs.items()}
     if obs_type == "image":
-        assert AUG_CROP_KEY in obs_t
+        # PPO carries NO crop offset: the arm centre-crops in both phases, so the transform is
+        # a property of the extractor rather than of the observation. See aug_for.
+        assert AUG_CROP_KEY not in obs_t
     starts = th.ones(1)
     shape = (policy.lstm_actor.num_layers, 1, policy.lstm_actor.hidden_size)
     z = lambda: (th.zeros(shape), th.zeros(shape))
@@ -686,14 +694,51 @@ def test_the_draw_tolerates_a_tuple_infos():
 
 
 @pytest.mark.parametrize("mode", ["train", "eval"])
-def test_the_image_arm_is_scored_on_its_stored_crop_in_both_modes(mode):
-    """The evaluation is true to training: the stored random crop, never a centre crop.
+def test_the_ppo_image_arm_centre_crops_in_both_modes(mode):
+    """PPO supplies no crop offset, so it centre-crops while acting AND while learning.
 
-    CropRandomizer switches on self.training by itself and would centre-crop at eval. This arm
-    overrides that in both directions, so the policy is scored on exactly the transform it
-    learned under. The property is easy to lose by accident -- deleting one `_forced_offsets`
-    line restores CropRandomizer's default and silently changes what every image-arm number
-    means -- and nothing else would fail if it did.
+    Two things are asserted because either alone would pass for the wrong reason: `aug_for`
+    emits no `crop_span`, so no `aug_crop` key can reach the observation; and with no key the
+    extractor takes the CENTRE crop rather than CropRandomizer's `self.training` branch. The
+    second is what makes the first safe -- a deterministic transform cannot be redrawn between
+    rollout and update, so PPO's ratio stays a ratio of policies without any replay machinery.
+    """
+    from recurrent_ppo.corrupt_policy import ST_CROP, STResNetExtractor, aug_for
+
+    assert aug_for("image", corrupt_obs=False, render_size=96) is None
+    assert "crop_span" not in (aug_for("image", corrupt_obs=True, render_size=96) or {})
+
+    space = gym.spaces.Dict({"image": gym.spaces.Box(0, 255, (3, 96, 96), np.uint8)})
+    extractor = STResNetExtractor(space)
+    assert not extractor.replay_crop
+    extractor.train(mode == "train")
+
+    th.manual_seed(0)
+    img = th.rand(1, 3, 96, 96)
+    got = extractor._crop(img, {"image": img})
+
+    lo = (96 - ST_CROP) // 2
+    expected = img[:, :, lo:lo + ST_CROP, lo:lo + ST_CROP]
+    assert th.equal(got, expected), f"{mode}: not the centre crop"
+    # and it is stable across calls, which is the property the ratio depends on
+    assert th.equal(extractor._crop(img, {"image": img}), got)
+
+
+@pytest.mark.parametrize("mode", ["train", "eval"])
+def test_a_supplied_crop_offset_wins_over_the_training_flag(mode):
+    """A stored offset is honoured in BOTH modes -- `self.training` is never consulted.
+
+    This is the contract the OFF-POLICY arms run on. SAC wraps its env in VecAugmentationDraw
+    so the offset rides in the observation, and `sac.score.obs_for_arm` supplies the centre one
+    at deployment; both rely on the supplied offset beating CropRandomizer's own mode branch.
+    SB3 has that flag backwards for this purpose -- False while collecting, True during the
+    update -- so without this the critic and the BON head would be fit on randomly-cropped
+    features against targets produced under a centre crop.
+
+    The property is easy to lose by accident -- deleting one `_forced_offsets` line restores
+    CropRandomizer's default -- and nothing else would fail if it did. PPO no longer takes this
+    path at all: it supplies no offset and centre-crops, which
+    test_the_ppo_image_arm_centre_crops_in_both_modes covers.
     """
     from recurrent_ppo.corrupt_policy import ST_CROP, STResNetExtractor
 

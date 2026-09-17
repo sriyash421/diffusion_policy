@@ -301,15 +301,27 @@ stops being a ratio of policies at all. Two things were doing this:
 * the image arm's `CropRandomizer`, which switches on `self.training` — so the **clean** image
   arm was biased too, not only the corrupted one.
 
-`AugmentationDraw` (in `pusht_gym.py`) fixes both by drawing the noise vector, its timestep and
-the crop offset **once per environment step** and carrying them in the observation. The
-observation is the only per-transition channel SB3 has into a features extractor, so that is what
-puts the draw in the rollout buffer, where every epoch reads back the same numbers.
-`CorruptingExtractor` then reads the noise instead of drawing it, and `STResNetExtractor` pins the
-stored offset through `CropRandomizer._forced_offsets` — that randomizer's own extension point,
-already used this way by `multi_image_obs_encoder`. No SB3 internals are copied and no buffer is
-subclassed. `test_evaluate_actions_reproduces_the_collected_log_prob` asserts the ratio is exactly
-1 on the first epoch, for the corrupted keypoint arm and for both image arms.
+`AugmentationDraw` (in `pusht_gym.py`) fixes the noise by drawing the vector and its timestep
+**once per environment step** and carrying them in the observation. The observation is the only
+per-transition channel SB3 has into a features extractor, so that is what puts the draw in the
+rollout buffer, where every epoch reads back the same numbers. `CorruptingExtractor` then reads
+the noise instead of drawing it. No SB3 internals are copied and no buffer is subclassed.
+
+**The crop is answered differently, and more cheaply: this arm does not draw one.**
+`STResNetExtractor` centre-crops whenever no offset is supplied, and `aug_for` supplies none for
+PPO — so the transform is deterministic, identical in both phases, and there is nothing a mode
+flip could change. A deterministic crop also makes eval true to training for free, which is what
+the earlier design bought with machinery. `self.training` is never consulted on this arm, in
+either direction.
+
+The `_forced_offsets` path it used to rely on is still there and still load-bearing, just not
+for PPO: **SAC** wraps its env in `VecAugmentationDraw` to keep random-crop augmentation across
+its off-policy updates, and `sac.score.obs_for_arm` supplies the centre offset explicitly so the
+learned Q is deployed on a centre crop while having trained on random ones.
+
+`test_evaluate_actions_reproduces_the_collected_log_prob` asserts the ratio is exactly 1 on the
+first epoch for the corrupted keypoint arm and both image arms;
+`test_the_ppo_image_arm_centre_crops_in_both_modes` pins the crop half.
 
 One consequence: the corrupted keypoint arm's observation is a `Dict` rather than a `Box`, so it
 uses the MultiInput policy. `policy_for` dispatches on it.

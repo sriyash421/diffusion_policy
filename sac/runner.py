@@ -35,6 +35,7 @@ import torch as th
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, LogEveryNTimesteps
 
 from diffusion_policy.common.slot_stats_util import BLIND_EPS
+from recurrent_ppo.corrupt_policy import aug_for
 from recurrent_ppo.run_io import check_conflicts, dump_args, load_args
 from recurrent_ppo.runner import _claim
 from sac.agent import ChunkSAC, buffer_class_for, preload_demos
@@ -280,15 +281,23 @@ def train(args_cli):
     demo_offsets = A - P[:, None, :]          # chunk SHAPES, re-anchorable anywhere
 
     env_kwargs = env_kwargs_from(cfg, cfg["obs"])
+    # The crop draw, on BOTH envs. It is what carries a per-transition offset in the
+    # observation, so the image arm crops identically while collecting and while updating
+    # rather than letting CropRandomizer branch on SB3's training-mode flag, which is False in
+    # collect_rollouts and True in train(). `aug_for` returns None for the keypoint arm, so
+    # that arm is untouched by construction. `corrupt_obs=False`: this arm studies the
+    # verifier, not observation noise.
+    aug = aug_for(cfg["obs"], corrupt_obs=False, render_size=cfg["render_size"],
+                  random_crop=True)
     env = build_chunk_vec_env(obs_type=cfg["obs"], n_envs=cfg["num_envs"], seed=cfg["seed"],
                               use_subproc=not cfg["dummy_vec_env"], monitor_dir=log_dir,
-                              **env_kwargs)
+                              aug=aug, **env_kwargs)
     # evaluation is on the REAL start distribution, never the curriculum's: the curriculum is
     # scaffolding for learning, not the task being measured.
     eval_kwargs = dict(env_kwargs, block_near_goal_prob=0.0)
     eval_env = build_chunk_vec_env(obs_type=cfg["obs"], n_envs=min(cfg["num_envs"], 8),
                                    seed=cfg["seed"] + 10_000,
-                                   use_subproc=not cfg["dummy_vec_env"], **eval_kwargs)
+                                   use_subproc=not cfg["dummy_vec_env"], aug=aug, **eval_kwargs)
 
     if resuming:
         print(f"[INFO] Loading checkpoint: {args_cli.checkpoint}")
@@ -296,8 +305,11 @@ def train(args_cli):
     else:
         agent = _build_agent(cfg, env, log_dir, demo_offsets)
         if cfg["demo_seed_frac"] > 0:
+            # the SAME crop_span the live env draws with, or the demo half of the buffer
+            # would not match the space it is stored in -- see _obs_from_zarr
             tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], gamma=cfg["gamma"],
-                                  tau_ladder=cfg["tau_ladder"], frac=cfg["demo_seed_frac"])
+                                  tau_ladder=cfg["tau_ladder"], frac=cfg["demo_seed_frac"],
+                                  crop_span=(aug or {}).get("crop_span"))
             print(summarise(tr))
             preload_demos(agent.replay_buffer, tr)
 
