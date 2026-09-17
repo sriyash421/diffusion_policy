@@ -15,7 +15,11 @@
 set -uo pipefail
 
 ROOT=/mmfs1/home/harine/diffusion_policy_standalone
-LOGS="${LOGS:-$ROOT/logs/value_arms}"
+# ON /gscratch, NOT under the repo. $HOME is a 10 GB HARD quota and these write checkpoints:
+# one 10M-step image arm produced 1.7 GB on its own, and four of six arms died on
+# `OSError: [Errno 122] Disk quota exceeded` when logs/ was the default. The repo's sbatch files
+# already send SLURM stdout here for the same reason; the model checkpoints are the larger half.
+LOGS="${LOGS:-/gscratch/robotics/harine/value_arms}"
 SPLIT=diffusion_policy/config/splits/pusht_seed42_train106_val50.json
 STEPS="${STEPS:-10000000}"
 SEED="${SEED:-42}"
