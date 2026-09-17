@@ -58,8 +58,11 @@ OCCLUSION_MODES = ("iid", "persistent")
 SHAPING_POTENTIALS = ("t_goal", "arm_t", "arm")
 
 DEMO_ZARR = "data/pusht_cchi_v7_replay.zarr"
-# used only when the demonstrations are not on disk; --delta-scale auto measures the real one
-DELTA_SCALE_FALLBACK = 32.0
+# used only when the demonstrations are not on disk; --delta-scale auto measures the real one.
+# 61 px is the p99 of |target - agent_pos| over the demonstrations -- the gap a delta action has
+# to cover. It was 32, the p99 of target-TO-TARGET displacement, which is a different and
+# systematically smaller quantity: see demo_action_steps.
+DELTA_SCALE_FALLBACK = 61.0
 
 # ------------------------------------------------------------------ DEFAULTS: the choices
 DEFAULTS = {
