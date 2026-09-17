@@ -97,7 +97,10 @@ class PushTVVerifier:
         assert value_fn == "v", f"PushTVVerifier has one value, 'v'; got {value_fn!r}"
         run_dir = os.path.dirname(os.path.abspath(checkpoint))
         saved = load_args(run_dir) or {}
-        cfg = dict(DEFAULTS, **saved, device=device)
+        # `saved` is the run's own args.yaml and ALREADY carries `device`, so passing it as a
+        # keyword too is a TypeError. Override after merging, not during.
+        cfg = dict(DEFAULTS, **saved)
+        cfg["device"] = device
         self.obs_type = obs_type or cfg["obs"]
         self.arch = ARCHS[arch or saved.get("arch", "lstm")]
         self.recurrent = self.arch.name == "lstm"

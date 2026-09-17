@@ -78,14 +78,50 @@ SCORE=""
 # and piles all ten onto one partition. pick_gpu.sh prints every candidate best-first precisely
 # so a multi-job caller can walk it, which is what this does.
 TARGETS=()
+declare -A FREE_GPUS FREE_CPUS
 if [ "${SUBMIT:-0}" = "1" ]; then
     while read -r acct part; do
         [ -n "$acct" ] && TARGETS+=("$acct $part")
     done < <(NEED_CPUS=$CPUS NEED_MEM_G=$MEM_G NEED_GPUS=1 bash "$ROOT/scripts/slurm/pick_gpu.sh")
     [ ${#TARGETS[@]} -eq 0 ] && { echo "no partition has ${CPUS} CPUs + ${MEM_G}G + 1 GPU free" >&2; exit 1; }
+
+    # WHAT EACH PARTITION CAN STILL TAKE, decremented as we submit. pick_gpu.sh reports the
+    # scheduler's view at ONE instant, and a job submitted a second ago is not in it -- so
+    # round-robining its list still over-commits: two jobs to one partition, the second parked
+    # on AssocGrpCpuLimit. Reading the free counts once and spending them here is the only way
+    # to know what is left without asking the scheduler between every sbatch.
+    while IFS='|' read -r _ acct part cpus mem gpus tag; do
+        acct="${acct// /}"; part="${part// /}"; tag="${tag// /}"
+        [ "$tag" = "FREE" ] || continue
+        [ -n "$part" ] || continue
+        FREE_GPUS["$acct/$part"]=$((gpus + 0))
+        FREE_CPUS["$acct/$part"]=$((cpus + 0))
+    done < <(hyakalloc | sed 's/│/|/g')
     echo "[INFO] ${#TARGETS[@]} candidate partition(s): ${TARGETS[*]}"
 fi
 NEXT=0
+
+# Sets TARGET to the next partition with room for one more job; returns 1 if all are spent.
+#
+# SETS A GLOBAL rather than echoing, because `t="$(next_target)"` would run this in a SUBSHELL
+# and every decrement below would be discarded -- the function would hand out the same
+# partition forever, which is exactly the bug it exists to fix. Caught by the self-test at the
+# bottom of this file, not by reading it.
+next_target() {
+    local i key k
+    for ((i = 0; i < ${#TARGETS[@]}; i++)); do
+        key="${TARGETS[$(((NEXT + i) % ${#TARGETS[@]}))]}"
+        k="${key// //}"
+        if [ "${FREE_GPUS[$k]:-0}" -ge 1 ] && [ "${FREE_CPUS[$k]:-0}" -ge "$CPUS" ]; then
+            NEXT=$(((NEXT + i + 1) % ${#TARGETS[@]}))
+            FREE_GPUS[$k]=$((FREE_GPUS[$k] - 1))
+            FREE_CPUS[$k]=$((FREE_CPUS[$k] - CPUS))
+            TARGET="$key"
+            return 0
+        fi
+    done
+    return 1
+}
 while IFS='|' read -r label entry extra; do
     label="$(echo "$label" | xargs)"; entry="$(echo "$entry" | xargs)"; extra="$(echo "$extra" | xargs)"
     [ -z "$label" ] && continue
@@ -110,8 +146,12 @@ while IFS='|' read -r label entry extra; do
     esac
 
     if [ "${SUBMIT:-0}" = "1" ]; then
-        read A P <<< "${TARGETS[$((NEXT % ${#TARGETS[@]}))]}"
-        NEXT=$((NEXT + 1))
+        if ! next_target; then
+            echo "[QUEUE $label] every candidate partition is spent; submitting to the first"
+            echo "               anyway -- it will pend until one frees"
+            TARGET="${TARGETS[0]}"
+        fi
+        read A P <<< "$TARGET"
         echo "[SUBMIT $label] account=$A partition=$P"
         sbatch --account="$A" --partition="$P" --job-name="va_$label" \
                --gpus=1 --cpus-per-task="$CPUS" --mem="${MEM_G}G" --time="$TIME" \
@@ -154,4 +194,25 @@ if [ -n "$SCORE" ]; then
         echo $'\nWhen the PPO arms finish, score them on the SHARED episodes:'
         echo "  EVAL=1 bash scripts/slurm/train_value_arms.sh    # submits to the ckpt partition"
     fi
+fi
+
+
+# ------------------------------------------------------------------ self-test
+# SELFTEST=1 bash scripts/slurm/train_value_arms.sh
+# Spends a fake two-partition budget and asserts the allocator stops when it is gone. This
+# caught the subshell bug above, where the decrements were discarded and every job was handed
+# the same partition -- which looks identical to working until the jobs pile up and pend.
+if [ "${SELFTEST:-0}" = "1" ]; then
+    TARGETS=("robotics gpu-x" "weirdlab gpu-y")
+    declare -A FREE_GPUS=( ["robotics/gpu-x"]=2 ["weirdlab/gpu-y"]=1 )
+    declare -A FREE_CPUS=( ["robotics/gpu-x"]=16 ["weirdlab/gpu-y"]=8 )
+    CPUS=8; NEXT=0; got=()
+    for n in 1 2 3 4; do
+        if next_target; then got+=("$TARGET"); else got+=("EXHAUSTED"); fi
+    done
+    printf '%s\n' "${got[@]}"
+    [ "${got[3]}" = "EXHAUSTED" ] || { echo "FAIL: 3 GPUs of capacity served 4 jobs" >&2; exit 1; }
+    [ "${got[0]}" = "${got[1]}" ] && { echo "FAIL: did not alternate partitions" >&2; exit 1; }
+    echo "self-test OK"
+    exit 0
 fi
