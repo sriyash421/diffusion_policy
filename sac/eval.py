@@ -545,7 +545,9 @@ def _plot(curves, path, title):
         ls, mk, col = styles.get(name, ('-', 'x', '#444444'))
         lo = [a for a, _ in c['ci']]
         hi = [b for _, b in c['ci']]
-        ax.plot(c['n'], c['success'], ls, marker=mk, color=col, label=name, lw=2)
+        # linestyle= AS A KEYWORD, not the third positional: that slot is a format
+        # STRING, and a dash-pattern tuple lands there as y data instead.
+        ax.plot(c['n'], c['success'], linestyle=ls, marker=mk, color=col, label=name, lw=2)
         ax.fill_between(c['n'], lo, hi, color=col, alpha=0.13, lw=0)
         ax.annotate(name, (c['n'][-1], c['success'][-1]), color=col, fontsize=10,
                     xytext=(7, 0), textcoords='offset points', va='center')
