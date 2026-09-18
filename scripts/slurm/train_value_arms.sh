@@ -78,7 +78,7 @@ SCORE=""
 # and piles all ten onto one partition. pick_gpu.sh prints every candidate best-first precisely
 # so a multi-job caller can walk it, which is what this does.
 TARGETS=()
-declare -A FREE_GPUS FREE_CPUS
+declare -A FREE_GPUS FREE_CPUS FREE_MEM_G
 if [ "${SUBMIT:-0}" = "1" ]; then
     while read -r acct part; do
         [ -n "$acct" ] && TARGETS+=("$acct $part")
@@ -90,14 +90,44 @@ if [ "${SUBMIT:-0}" = "1" ]; then
     # round-robining its list still over-commits: two jobs to one partition, the second parked
     # on AssocGrpCpuLimit. Reading the free counts once and spending them here is the only way
     # to know what is left without asking the scheduler between every sbatch.
-    while IFS='|' read -r _ acct part cpus mem gpus tag; do
-        acct="${acct// /}"; part="${part// /}"; tag="${tag// /}"
+    #
+    # hyakalloc PRINTS ACCOUNT AND PARTITION ON THE `TOTAL` ROW ONLY. The `USED` and `FREE` rows
+    # that follow leave both columns blank:
+    #
+    #   | weirdlab | gpu-a40 | 52 | 1007G | 8 | TOTAL |
+    #   |          |         | 39 |  368G | 6 | USED  |
+    #   |          |         | 13 |  639G | 2 | FREE  |
+    #
+    # so requiring a non-empty partition on the FREE row -- as this did until 2026-09-17 --
+    # skipped EVERY row and left the table empty. Each lookup then fell through to its `:-0`
+    # default, next_target found no partition with room, and all ten arms went to TARGETS[0] via
+    # the "every candidate partition is spent" path. That is not a hypothetical: it is how the
+    # 2026-09-17 wave put five jobs on one partition and parked sac_image on AssocGrpCpuLimit.
+    # Carry the labels forward across the triplet instead, and spend MEMORY as well -- a
+    # partition can have GPUs and CPUs to spare and still not fit two 32G jobs.
+    _acct="" _part=""
+    while IFS='|' read -r _ c1 c2 cpus mem gpus tag; do
+        c1="${c1// /}"; c2="${c2// /}"; tag="${tag// /}"
+        [ -n "$c1" ] && _acct="$c1"
+        [ -n "$c2" ] && _part="$c2"
         [ "$tag" = "FREE" ] || continue
-        [ -n "$part" ] || continue
-        FREE_GPUS["$acct/$part"]=$((gpus + 0))
-        FREE_CPUS["$acct/$part"]=$((cpus + 0))
+        [ -n "$_part" ] || continue
+        FREE_GPUS["$_acct/$_part"]=$((gpus + 0))
+        FREE_CPUS["$_acct/$_part"]=$((cpus + 0))
+        FREE_MEM_G["$_acct/$_part"]=$(( ${mem//[!0-9]/} + 0 ))
     done < <(hyakalloc | sed 's/│/|/g')
+
+    # LOUD, not silent. An empty table is indistinguishable from "everything is busy" at the
+    # call site, and the difference is a parse bug versus a real cluster state.
+    [ ${#FREE_GPUS[@]} -eq 0 ] && {
+        echo "capacity table is EMPTY -- hyakalloc's format changed; fix the parse above" >&2
+        echo "                          (refusing to submit: every arm would pile onto one partition)" >&2
+        exit 1
+    }
     echo "[INFO] ${#TARGETS[@]} candidate partition(s): ${TARGETS[*]}"
+    for k in "${!FREE_GPUS[@]}"; do
+        echo "[INFO]   $k free: ${FREE_GPUS[$k]} gpu / ${FREE_CPUS[$k]} cpu / ${FREE_MEM_G[$k]}G"
+    done
 fi
 NEXT=0
 
@@ -112,10 +142,15 @@ next_target() {
     for ((i = 0; i < ${#TARGETS[@]}; i++)); do
         key="${TARGETS[$(((NEXT + i) % ${#TARGETS[@]}))]}"
         k="${key// //}"
-        if [ "${FREE_GPUS[$k]:-0}" -ge 1 ] && [ "${FREE_CPUS[$k]:-0}" -ge "$CPUS" ]; then
+        # ALL THREE, because sbatch requires all three. Dropping the memory test was how a
+        # partition with spare GPUs and CPUs could still be handed a job it could not fit.
+        if [ "${FREE_GPUS[$k]:-0}" -ge 1 ] \
+        && [ "${FREE_CPUS[$k]:-0}" -ge "$CPUS" ] \
+        && [ "${FREE_MEM_G[$k]:-0}" -ge "$MEM_G" ]; then
             NEXT=$(((NEXT + i + 1) % ${#TARGETS[@]}))
             FREE_GPUS[$k]=$((FREE_GPUS[$k] - 1))
             FREE_CPUS[$k]=$((FREE_CPUS[$k] - CPUS))
+            FREE_MEM_G[$k]=$((FREE_MEM_G[$k] - MEM_G))
             TARGET="$key"
             return 0
         fi
@@ -203,16 +238,57 @@ fi
 # caught the subshell bug above, where the decrements were discarded and every job was handed
 # the same partition -- which looks identical to working until the jobs pile up and pend.
 if [ "${SELFTEST:-0}" = "1" ]; then
+    fail() { echo "FAIL: $1" >&2; exit 1; }
+
+    # (1) GPUs are the binding resource. 3 GPUs of capacity must serve 3 jobs, not 4.
     TARGETS=("robotics gpu-x" "weirdlab gpu-y")
-    declare -A FREE_GPUS=( ["robotics/gpu-x"]=2 ["weirdlab/gpu-y"]=1 )
-    declare -A FREE_CPUS=( ["robotics/gpu-x"]=16 ["weirdlab/gpu-y"]=8 )
-    CPUS=8; NEXT=0; got=()
+    declare -A FREE_GPUS=(  ["robotics/gpu-x"]=2  ["weirdlab/gpu-y"]=1 )
+    declare -A FREE_CPUS=(  ["robotics/gpu-x"]=16 ["weirdlab/gpu-y"]=8 )
+    declare -A FREE_MEM_G=( ["robotics/gpu-x"]=64 ["weirdlab/gpu-y"]=32 )
+    CPUS=8; MEM_G=32; NEXT=0; got=()
     for n in 1 2 3 4; do
         if next_target; then got+=("$TARGET"); else got+=("EXHAUSTED"); fi
     done
-    printf '%s\n' "${got[@]}"
-    [ "${got[3]}" = "EXHAUSTED" ] || { echo "FAIL: 3 GPUs of capacity served 4 jobs" >&2; exit 1; }
-    [ "${got[0]}" = "${got[1]}" ] && { echo "FAIL: did not alternate partitions" >&2; exit 1; }
+    printf '  gpu-bound: %s\n' "${got[@]}"
+    [ "${got[3]}" = "EXHAUSTED" ] || fail "3 GPUs of capacity served 4 jobs"
+    [ "${got[0]}" = "${got[1]}" ] && fail "did not alternate partitions"
+
+    # (2) MEMORY is binding on its own. Plenty of GPUs and CPUs, room for one 32G job.
+    # Without the FREE_MEM_G test this hands out four and three of them never start.
+    TARGETS=("robotics gpu-x")
+    FREE_GPUS=(  ["robotics/gpu-x"]=4 ); FREE_CPUS=( ["robotics/gpu-x"]=64 )
+    FREE_MEM_G=( ["robotics/gpu-x"]=40 )
+    NEXT=0; got=()
+    for n in 1 2; do
+        if next_target; then got+=("$TARGET"); else got+=("EXHAUSTED"); fi
+    done
+    printf '  mem-bound: %s\n' "${got[@]}"
+    [ "${got[1]}" = "EXHAUSTED" ] || fail "40G of capacity served two 32G jobs"
+
+    # (3) THE PARSE, against real hyakalloc output. This is the test that would have caught the
+    # 2026-09-17 wave: the table came back empty, so every arm looked unplaceable and all five
+    # went to TARGETS[0]. Asserting "not empty" is the whole point -- an empty table and a busy
+    # cluster are indistinguishable downstream.
+    unset FREE_GPUS FREE_CPUS FREE_MEM_G
+    declare -A FREE_GPUS FREE_CPUS FREE_MEM_G
+    _acct="" _part=""
+    while IFS='|' read -r _ c1 c2 cpus mem gpus tag; do
+        c1="${c1// /}"; c2="${c2// /}"; tag="${tag// /}"
+        [ -n "$c1" ] && _acct="$c1"
+        [ -n "$c2" ] && _part="$c2"
+        [ "$tag" = "FREE" ] || continue
+        [ -n "$_part" ] || continue
+        FREE_GPUS["$_acct/$_part"]=$((gpus + 0))
+        FREE_CPUS["$_acct/$_part"]=$((cpus + 0))
+        FREE_MEM_G["$_acct/$_part"]=$(( ${mem//[!0-9]/} + 0 ))
+    done < <(hyakalloc | sed 's/│/|/g')
+    echo "  parsed ${#FREE_GPUS[@]} partition(s) from live hyakalloc"
+    [ ${#FREE_GPUS[@]} -gt 0 ] || fail "parsed NOTHING from hyakalloc -- the format moved again"
+    for k in "${!FREE_GPUS[@]}"; do
+        [[ "$k" == */* && "$k" != /* && "$k" != */ ]] || fail "malformed key '$k'"
+        echo "    $k -> ${FREE_GPUS[$k]} gpu / ${FREE_CPUS[$k]} cpu / ${FREE_MEM_G[$k]}G"
+    done
+
     echo "self-test OK"
     exit 0
 fi
