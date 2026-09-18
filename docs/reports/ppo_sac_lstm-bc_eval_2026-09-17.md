@@ -188,10 +188,11 @@ That is the harness's own leak check, and it passing is what makes the rest mean
 | | `v` | 0.100 | 0.120 | 0.020 | 0.020 | **0.000** |
 | unetbc blq137 | `t_goal` | 0.240 | 0.420 | 0.840 | 0.820 | **0.920** |
 | | `v` | 0.240 | 0.220 | 0.180 | 0.060 | **0.000** |
-| unetbc brd60 | `t_goal` | 0.240 | 0.360 | 0.460 | 0.560 | 0.620 |
-| | `v` | 0.240 | 0.180 | 0.140 | 0.100 | *running* |
+| unetbc brd60 | `t_goal` | 0.240 | 0.360 | 0.460 | 0.560 | **0.620** |
+| | `v` | 0.240 | 0.180 | 0.140 | 0.100 | **0.060** |
 
-**`t_goal` rises 2–4x in n on every arm. `v` falls monotonically on every arm**, ending at
+**All six arms complete.** `t_goal` rises 2-4x in n on every one of them; `v` falls on every
+one of them, ending at
 0.000–0.040 where the heuristic reaches 0.320–0.920. Searching harder under V is worse than not
 searching at all, and worse the harder it searches. That is not a weak ranker; it is a ranker
 pointed the wrong way.
