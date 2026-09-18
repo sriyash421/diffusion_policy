@@ -1,8 +1,10 @@
 # PPO / SAC / LSTM-BC as best-of-N verifiers — 2026-09-17
 
-**Status: in progress.** The heuristic baseline, both BC stages, and **the first learned-V
-ranking evaluation** (section 5) are measured. Q is not: no SAC run has finished. Five of the
-six RL arms are still training.
+**Status: in progress.** The heuristic baseline, both BC stages, the learned-V ranking
+evaluation (section 5) and **the best-of-N sweep it was built for (section 6)** are measured.
+The answer to the headline question is **no, and for a diagnosable reason**: the V this plan
+specifies is the heuristic's *inverse*, confirmed at `argmax` agreement 0.000 over 608
+decisions. Q is not measured: no SAC run has finished.
 
 The question: best-of-N on PushT ranks candidates with `t_goal`, a hand-written heuristic that
 **ignores `agent_pos` by construction** — until a candidate actually moves the block, every
@@ -69,10 +71,10 @@ been launched.**
 | arm | state | note |
 |---|---|---|
 | `ppo_plain_keypoint` | **COMPLETED** 10M | `ep_rew_mean` 5.75, **success_rate 0** |
-| `ppo_plain_image` | running | 2.45M, `ep_rew_mean` -0.174 |
-| `ppo_lstm_keypoint` | running | 2.07M, `ep_rew_mean` -0.414 |
-| `ppo_lstm_image` | running | 890k, `ep_rew_mean` +0.009 |
-| `sac_keypoint` | running | 610k; `reward_rate_tau0.95` 7.4e-4, `q_resolution` 0.024 |
+| `ppo_plain_image` | running | 5.60M, `ep_rew_mean` -0.421 |
+| `ppo_lstm_keypoint` | running | 4.85M, `ep_rew_mean` -0.522 |
+| `ppo_lstm_image` | running | 2.05M, `ep_rew_mean` -0.109 |
+| `sac_keypoint` | running | 1.29M; `reward_rate_tau0.95` 9.2e-4, `q_spread_zero_frac` 0.0 |
 | `sac_image` | pending | `AssocGrpCpuLimit` |
 | `ppo_lstm_keypoint_bc` | **not launched** | see bc_keypoint above |
 | `ppo_lstm_image_bc` | not launched | pending the keypoint result |
@@ -164,13 +166,93 @@ unetbc blq137 over 52 decisions.
 - **No recurrent-V caveat applies here.** The V is feed-forward (`ppo_plain_keypoint`,
   `--n-stack 1`), so there is no zero-LSTM-state query. It will apply to the `ppo_lstm_*` arms.
 
-## 6. What is not yet measured
+## 6. The best-of-N sweep — V is an inverted ranker
 
-- **Q, on anything.** No SAC run has completed; `sac_keypoint` is at 610k steps.
-- **The best-of-N sweep**, which is the deployable question: does swapping the heuristic for a
-  learned value make the policy solve more episodes. Section 5 measures ranking of `a*`, which
-  is necessary but not sufficient.
+Phase 5(a) asked where the expert chunk `a*` ranks. This asks the deployable question: run the
+policy, let each verifier pick, count solved episodes. `sac/eval.py bon-sweep`, n = 1…16,
+50 test episodes, the same per-episode sampling noise under both rankers so the arms are paired
+episode by episode. Launched from `scripts/slurm/bon_sweep_arms.sh`.
+
+**At n=1 both rankers must agree** — there is nothing to rank — and they do, on all six arms.
+That is the harness's own leak check, and it passing is what makes the rest meaningful.
+
+| checkpoint | ranker | n=1 | n=2 | n=4 | n=8 | n=16 |
+|---|---|---|---|---|---|---|
+| value_k16 blq137 | `t_goal` | 0.180 | 0.400 | 0.520 | 0.540 | **0.580** |
+| | `v` | 0.180 | 0.140 | 0.100 | 0.120 | **0.020** |
+| value_k16 brd60 | `t_goal` | 0.100 | 0.240 | 0.220 | 0.380 | **0.320** |
+| | `v` | 0.100 | 0.140 | 0.100 | 0.100 | **0.040** |
+| value_k1 blq137 | `t_goal` | 0.160 | 0.300 | 0.500 | 0.620 | **0.520** |
+| | `v` | 0.160 | 0.120 | 0.040 | 0.040 | **0.020** |
+| value_k1 brd60 | `t_goal` | 0.100 | 0.160 | 0.260 | 0.300 | **0.340** |
+| | `v` | 0.100 | 0.120 | 0.020 | 0.020 | **0.000** |
+| unetbc blq137 | `t_goal` | 0.240 | 0.420 | 0.840 | 0.820 | 0.920 |
+| | `v` | 0.240 | 0.220 | 0.180 | 0.060 | *running* |
+| unetbc brd60 | `t_goal` | 0.240 | 0.360 | 0.460 | 0.560 | 0.620 |
+| | `v` | 0.240 | 0.180 | 0.140 | 0.100 | *running* |
+
+**`t_goal` rises 2–4x in n on every arm. `v` falls monotonically on every arm**, ending at
+0.000–0.040 where the heuristic reaches 0.320–0.920. Searching harder under V is worse than not
+searching at all, and worse the harder it searches. That is not a weak ranker; it is a ranker
+pointed the wrong way.
+
+### Why: the sign, measured
+
+`diag_v_sign.py` scores each candidate set **twice inside one rollout** and returns the sim
+value, so the trajectory stays `t_goal`'s and both rankers see identical candidates. Running
+the two as separate rollouts cannot answer this -- different rankers take different actions, so
+by the second decision they are at different states scoring different candidates.
+
+608 decisions, `value_k1` brd60, n=8:
+
+| | |
+|---|---|
+| within-decision correlation | mean **-0.589**, median **-0.856**, 82.4% negative |
+| pooled correlation | -0.430 |
+| **`argmax` agreement** | **0.000**, against 1/8 = 0.125 chance |
+
+**V and `t_goal` never once selected the same candidate.**
+
+The cause is in the reward, not the code. Under `--reward delta`
+([pusht_gym.py:376-384](recurrent_ppo/pusht_gym.py#L376-L384)) the return telescopes to
+`(d_here - d_end)` plus a success bonus. This V comes from `ppo_plain_keypoint`, which finished
+10M steps at **success_rate 0**, so the bonus term is ~0 everywhere and V reduces to roughly the
+current T-to-goal distance -- the negation of `t_goal`. Selection is `argmax`
+([pusht_search_mixin.py:28](diffusion_policy/policy/pusht_search_mixin.py#L28)), so it picks the
+candidate landing **furthest** from the goal.
+
+The plan's premise was "delta telescopes to total progress, so V estimates coverage still to
+gain, which is what a ranker needs". That drops the `coverage_now` term. What a ranker needs is
+expected *final* coverage, `coverage_now + V(s)`; `V(s)` alone is monotone in the wrong
+direction.
+
+### This also explains section 5
+
+V beat the heuristic on `block_still` in 6 of 6 rows and lost on `block_moving` in 6 of 6. Both
+follow: where the T does not move, `d` is identical across candidates, so V ranks on `agent_pos`
+-- real signal the heuristic does not have. Where the T moves, `d` varies and the inverted term
+dominates. Section 5's result was real and is not evidence that the value is usable.
+
+### What this does and does not settle
+
+- **It does not show that a learned value cannot rank best-of-N.** It shows that *this* value,
+  under *this* reward, ranked by `argmax` on the raw scalar, is inverted.
+- **The obvious repair is untested**: rank on `coverage_now + V`. One line in `install_v_ranker`.
+- **Q is unaffected by this argument.** SAC's chunk Q is fitted with a Bellman max backup to
+  terminal success, not to a telescoping progress signal, so it has no reason to invert. It is
+  also the only one of the two with a non-trivial `bon/q_spread_zero_frac` reading: 0.0 at every
+  probe, against `t_goal`'s measured 15-25% blind rate.
+- **`t_goal` itself is non-monotonic at the top end** (k16 brd60 0.380 -> 0.320, k1 blq137
+  0.620 -> 0.520, unetbc blq137 0.840 -> 0.820), so "more candidates is always better" does not
+  hold even for the heuristic. At 50 episodes a 0.100 move is 5 episodes.
+
+## 7. What is not yet measured
+
+- **Q, on anything.** No SAC run has completed; `sac_keypoint` is at 1.29M steps.
+- **`coverage_now + V` as the ranker** — the repair section 6 identifies, untested.
 - **V from any arm but `ppo_plain_keypoint`** — the image and recurrent arms are still training.
+  Every one of them trains under `--reward delta`, so the same inversion applies to all of them
+  unless the ranking quantity changes.
 - **Recurrent V's caveat**, when those arms are scored: V is queried at a state the chunk
   *reaches*, which has no history, so the LSTM starts from zeros and the query is
   off-distribution.
@@ -193,8 +275,12 @@ python sac/eval.py rank-expert -c <ST ckpt> --arm <name> --n 16 --episodes 20 \
        --split test --v /gscratch/robotics/harine/value_arms/ppo_plain_keypoint/model.zip \
        --out /gscratch/robotics/harine/value_arms/v_rank_<arm>.json
 
-# what section 6 is waiting on
-python sac/eval.py bon-sweep -c <ST ckpt> --rankers t_goal,v,q --v <ppo> --q <sac>
+# section 6
+SUBMIT=1 bash scripts/slurm/bon_sweep_arms.sh
+python diag_v_sign.py <ST ckpt> <ppo ckpt> <out>.json 8 12
+
+# what section 7 is waiting on: a finished SAC run
+SUBMIT=1 RANKERS=t_goal,v,q Q=<sac.zip> bash scripts/slurm/bon_sweep_arms.sh
 ```
 
 Run outputs are on `/gscratch/robotics/harine/value_arms/`, not under the repo: `$HOME` is a
