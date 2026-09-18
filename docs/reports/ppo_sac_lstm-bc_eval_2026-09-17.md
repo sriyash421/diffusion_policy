@@ -1,7 +1,8 @@
 # PPO / SAC / LSTM-BC as best-of-N verifiers — 2026-09-17
 
-**Status: in progress.** The heuristic baseline and both BC stages are measured. No learned V or
-Q has been evaluated yet, because five of the six RL arms are still training.
+**Status: in progress.** The heuristic baseline, both BC stages, and **the first learned-V
+ranking evaluation** (section 5) are measured. Q is not: no SAC run has finished. Five of the
+six RL arms are still training.
 
 The question: best-of-N on PushT ranks candidates with `t_goal`, a hand-written heuristic that
 **ignores `agent_pos` by construction** — until a candidate actually moves the block, every
@@ -68,14 +69,15 @@ been launched.**
 | arm | state | note |
 |---|---|---|
 | `ppo_plain_keypoint` | **COMPLETED** 10M | `ep_rew_mean` 5.75, **success_rate 0** |
-| `ppo_plain_image` | running | restarted 15:26 |
-| `ppo_lstm_keypoint` | running | restarted 15:26 |
-| `ppo_lstm_image` | running | restarted 15:26 |
-| `sac_keypoint` | running | first SAC run ever completed in this repo would be this one |
+| `ppo_plain_image` | running | 2.45M, `ep_rew_mean` -0.174 |
+| `ppo_lstm_keypoint` | running | 2.07M, `ep_rew_mean` -0.414 |
+| `ppo_lstm_image` | running | 890k, `ep_rew_mean` +0.009 |
+| `sac_keypoint` | running | 610k; `reward_rate_tau0.95` 7.4e-4, `q_resolution` 0.024 |
 | `sac_image` | pending | `AssocGrpCpuLimit` |
 | `ppo_lstm_keypoint_bc` | **not launched** | see bc_keypoint above |
 | `ppo_lstm_image_bc` | not launched | pending the keypoint result |
 
+All four running arms sit within noise of zero reward; none has begun to solve the task.
 `ppo_plain_keypoint` reaching 10M steps at **zero success** is consistent with the retired
 generation. Its V is still usable as a ranker — under `--reward delta` the return telescopes to
 total progress, so V estimates coverage-still-to-gain even for a policy that never crosses the
@@ -101,16 +103,77 @@ scores it on — so "the learned Q beats the heuristic" would not have been a he
 while the heuristic has no such advantage. Now restricted to the train split. V was never
 exposed this way: BC trains only the actor, and PPO's critic learns from sampled starts.
 
-## 5. What is not yet measured
+## 5. V as the ranker — the first learned-value result
 
-- **V or Q on any evaluation.** `rank-expert --v/--q` and `bon-sweep`'s `v` ranker are written
-  and import cleanly but have never scored a real checkpoint.
+Same six checkpoints, same 160 decision points, same `rank-expert` call as section 1, with
+`--v /gscratch/robotics/harine/value_arms/ppo_plain_keypoint/model.zip` added. `PushTVVerifier`
+rolls the candidate chunk out in the sim, converts the reached state to the PPO keypoint
+observation, and evaluates V there, de-normalising by `reward_scale 1.975` recovered from
+`model_vecnormalize.pkl`. `sim` rows are the heuristic; `v` rows are the learned value, on the
+identical decisions.
+
+`p_best` = fraction of decisions where `a*` outranks all 16 candidates. `mean_rank` is out of
+16; **8.0 is the exchangeability null**, lower is better.
+
+| checkpoint | all (sim → V) | block_still (sim → V) | block_moving (sim → V) |
+|---|---|---|---|
+| unetbc blq137 | 0.157 → 0.163 | 0.039 → **0.130** | 0.217 → 0.179 |
+| unetbc brd60 | 0.200 → 0.206 | 0.060 → **0.220** | 0.264 → 0.200 |
+| value_k16 blq137 | 0.299 → 0.306 | 0.051 → **0.241** | 0.425 → 0.340 |
+| value_k16 brd60 | 0.291 → 0.312 | 0.072 → **0.400** | 0.391 → 0.273 |
+| value_k1 blq137 | 0.221 → 0.188 | 0.025 → **0.148** | 0.321 → 0.208 |
+| value_k1 brd60 | 0.258 → 0.212 | 0.085 → **0.280** | 0.336 → 0.182 |
+
+`mean_rank` on the same rows, `block_still`: 9.81→6.52, 8.95→7.80, 9.81→6.80, 7.96→**8.40**,
+10.48→7.78, 8.80→8.16 — five of six move toward 0, one against.
+
+**The result: V beats the heuristic exactly where the heuristic is blind, and loses where it is
+not.** `p_best` on `block_still` rises in **6 of 6** rows, by 2.3×–5.6×. `p_best` on
+`block_moving` falls in **6 of 6**. The sign is the same across all three policy classes
+(BC-UNet, ST k16, ST k1) and both split families. That is the mechanism the plan predicted:
+`t_goal` reads T-to-goal distance only, so before contact all 16 candidates score identically
+and `a*` lands at the 8.0 null or worse; V reads `agent_pos` and can prefer approaching. Once
+the T is moving, the heuristic measures the thing being optimised directly and V — a coarse
+learned scalar — does not improve on it.
+
+**Overall it is a wash, not a win.** On `all`, `p_best` moves up in 4 of 6 rows by ≤0.021 and
+down in 2 by 0.033–0.046; `mean_rank` improves in 3 and degrades in 3. `block_moving` is
+66–69% of decisions, so its loss cancels the `block_still` gain. **The deployable claim — that
+substituting V raises best-of-N success — is not supported by this evaluation and has not been
+tested** (the sweep is section 6).
+
+The class-based split (`blind` / `partial` / `informative`, which classifies by whether the
+*candidates* moved the T rather than whether the demo did) shows the same effect more weakly:
+`p_best` on `blind` rises in 4 of 6 rows. It is the noisier of the two — `blind` is 24–40
+decisions per arm, and it depends on the candidate set, so the strata are not the same
+decisions across arms. `partial` is erratic in both directions, including 0.128 → 0.000 on
+unetbc blq137 over 52 decisions.
+
+### What this result does not establish
+
+- **One V, from a policy that never solved the task.** `ppo_plain_keypoint` finished 10M steps
+  at success_rate 0. Under `--reward delta` its V is still a progress estimate, but this is
+  V^pi of a failing policy, and nothing here separates "learned value" from "this particular
+  learned value".
+- **The six rows are not six independent trials.** They share one V and, within a split family,
+  largely the same held-out episodes — three rows on blq137's 20, three on brd60's 20. The
+  consistent sign is worth more than any single row, but it is closer to two samples than six.
+- **Every confidence interval overlaps.** `block_still` is 50–54 decisions per row; e.g. unetbc
+  blq137 is 0.039 [0.02,0.06] → 0.130 [0.05,0.22]. The 6-of-6 consistency carries the claim,
+  not per-row significance.
+- **No recurrent-V caveat applies here.** The V is feed-forward (`ppo_plain_keypoint`,
+  `--n-stack 1`), so there is no zero-LSTM-state query. It will apply to the `ppo_lstm_*` arms.
+
+## 6. What is not yet measured
+
+- **Q, on anything.** No SAC run has completed; `sac_keypoint` is at 610k steps.
 - **The best-of-N sweep**, which is the deployable question: does swapping the heuristic for a
-  learned value make the policy solve more episodes.
-- **The contact/no-contact split for V.** `frames` is Q-only today.
-- **Recurrent V's caveat**, when it is measured: V is queried at a state the chunk *reaches*,
-  which has no history, so the LSTM starts from zeros and the query is off-distribution. The
-  feed-forward arms have no such problem.
+  learned value make the policy solve more episodes. Section 5 measures ranking of `a*`, which
+  is necessary but not sufficient.
+- **V from any arm but `ppo_plain_keypoint`** — the image and recurrent arms are still training.
+- **Recurrent V's caveat**, when those arms are scored: V is queried at a state the chunk
+  *reaches*, which has no history, so the LSTM starts from zeros and the query is
+  off-distribution.
 
 ## Reproduce
 
@@ -125,9 +188,13 @@ SUBMIT=1 ARMS="bc_keypoint bc_image" bash scripts/slurm/train_value_arms.sh
 # the training in section 3
 SUBMIT=1 bash scripts/slurm/train_value_arms.sh
 
-# what section 5 is waiting on
-python sac/eval.py rank-expert -c <ST ckpt> --v <ppo ckpt> --q <sac ckpt> --split test
-python sac/eval.py bon-sweep   -c <ST ckpt> --rankers t_goal,v,q --v <ppo> --q <sac>
+# section 5
+python sac/eval.py rank-expert -c <ST ckpt> --arm <name> --n 16 --episodes 20 \
+       --split test --v /gscratch/robotics/harine/value_arms/ppo_plain_keypoint/model.zip \
+       --out /gscratch/robotics/harine/value_arms/v_rank_<arm>.json
+
+# what section 6 is waiting on
+python sac/eval.py bon-sweep -c <ST ckpt> --rankers t_goal,v,q --v <ppo> --q <sac>
 ```
 
 Run outputs are on `/gscratch/robotics/harine/value_arms/`, not under the repo: `$HOME` is a
