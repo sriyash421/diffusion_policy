@@ -9,6 +9,10 @@ heuristic, evaluated by rolling each candidate forward in a deterministic sim
   spread over 8 candidates -- and `argmax` degenerates to numpy's first-maximizer tie-break.
 * Blind on **28-35% of all decisions**, rising to **68-73% during approach** (`docs/reports/archive/ASTAR_RECALL.md`).
   About a third of argmax picks are decided by the tie-break rather than by the verifier.
+  **Re-measured 2026-09-17 on the six step-30k geometric-split checkpoints at n=16: 15-25%**
+  (`docs/reports/ppo_sac_lstm-bc_eval_2026-09-17.md`, section 1). Different generation, different
+  measurement -- not a contradiction, but the blind region is ~40% smaller than the figure above,
+  so use the dated one when judging a new verifier against it.
 * `armTn` patches this with an arm-to-T term, but that is a *proxy for* progress: the expert
   routinely swings the arm **around** the T to set up the next push, raising `d_arm_t` while
   lowering `d_t_goal`. Raw `armT` cost the UNet BC arm its whole best-of-n gain, 0.460 -> 0.060
@@ -191,7 +195,7 @@ actor did not propose.
 
 | metric | says |
 |---|---|
-| `bon/q_spread_zero_frac` | fraction of states where Q scores every candidate identically. **The heuristic's own blind rate is 28-35%.** If this is not far below that, the new verifier has the old verifier's disease. |
+| `bon/q_spread_zero_frac` | fraction of states where Q scores every candidate identically. **The heuristic's own blind rate is 28-35% as first measured, 15-25% when re-measured on the step-30k geometric checkpoints** (see above). If this is not far below that, the new verifier has the old verifier's disease. `sac_keypoint` reads **0.0** at every probe through 1.4M steps. |
 | `bon/q_resolution` | within-state spread / across-state spread. All n candidates share a state and differ by at most one chunk, so if this is tiny they sit inside the regression's noise floor and `--gamma` is too high. |
 | `buffer/reward_rate_tau*` | per rung. **If the 0.95 row is 0, everything downstream is vacuous** -- and it says so on day one. |
 | `bon/head_loss`, `bon/live_frac_tau*` | the head's own fit, and how much of the buffer each rung still owns. |
