@@ -445,7 +445,7 @@ def frames(checkpoint, q_ckpt, n_actions, n_frames, episode, split, device, seed
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
 @click.option('-o', '--out', default='sac_eval/bon_sweep', show_default=True)
-def bon_sweep(checkpoint, q_ckpt, rankers, max_n, split, n_envs, max_steps, episodes,
+def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_steps, episodes,
          skip_context_sim, device, seed, out):
     """The headline: does the learned Q improve a policy through best-of-N?
 
@@ -510,7 +510,9 @@ def bon_sweep(checkpoint, q_ckpt, rankers, max_n, split, n_envs, max_steps, epis
                     restore()
     finally:
         env.close()
-        for obj in (policy, q):
+        # vv TOO: PushTVVerifier holds a sim env of its own, and leaking it leaves a pygame
+        # process per sweep.
+        for obj in (policy, q, vv):
             close = getattr(obj, 'close', None)
             if close is not None:
                 try:
@@ -518,7 +520,10 @@ def bon_sweep(checkpoint, q_ckpt, rankers, max_n, split, n_envs, max_steps, epis
                 except Exception as exc:
                     print(f'warning: close failed: {exc}')
 
-    report = {'checkpoint': checkpoint, 'q': q_ckpt, 'split': split,
+    # BOTH checkpoints recorded, not just q. A v-ranked curve whose JSON does not say which V
+    # produced it is a number that cannot be attributed later.
+    report = {'checkpoint': checkpoint, 'q': q_ckpt, 'v': v_ckpt, 'split': split,
+              'rankers': list(rankers), 'seed': seed, 'max_n': max_n,
               'episodes': [int(i) for i in idxs], 'curves': curves}
     (outdir / 'bon_curves.json').write_text(json.dumps(report, indent=2))
     _plot(curves, outdir / 'bon_curves.png', checkpoint)
@@ -533,7 +538,8 @@ def _plot(curves, path, title):
 
     # style AND colour AND a direct label, so the figure survives greyscale (repo rule)
     styles = {'q': ('-', 'o', '#0072B2'), 't_goal': ('--', 's', '#D55E00'),
-              'armTn': (':', '^', '#009E73'), 'd_t_goal': ('-.', 'D', '#CC79A7')}
+              'armTn': (':', '^', '#009E73'), 'd_t_goal': ('-.', 'D', '#CC79A7'),
+              'v': ((0, (3, 1, 1, 1, 1, 1)), 'v', '#E69F00')}
     fig, ax = plt.subplots(figsize=(7.5, 5))
     for name, c in curves.items():
         ls, mk, col = styles.get(name, ('-', 'x', '#444444'))
