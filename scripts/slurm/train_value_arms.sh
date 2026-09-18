@@ -56,12 +56,29 @@ TIME="${TIME:-5-00:00:00}"
 # them and BC trains on them.
 COMMON="--reward delta --seed $SEED --video-freq 0"
 
+# ppo_plain_keypoint_near re-runs the one arm that learned anything (+7.8 eval reward, and still
+# success_rate 0 at 10M) from a start distribution that hands it the last push: the agent 16-25px
+# from the T's surface and the T 63px from the goal, median, against a uniform start's 167px.
+#
+# --block-coverage-max 0.2 is NOT a slackening of the no-overlap rule for its own sake. "T near
+# the goal" and "T covering none of it" are geometrically incompatible -- the T must be displaced
+# by roughly its own size to clear the goal -- so a ceiling is the only way to have both. The
+# number is set by what is samplable: at offset 60 a ceiling of 0.05 accepts 0% of draws and 0.20
+# accepts 34%, and SPAWN_TRIES is 20, so an acceptance rate much below ~0.3 silently falls back
+# to an UNFILTERED start on (1-p)^20 of resets. Nothing starts solved: 0 of 400 draws had
+# coverage >= 0.95. Under --reward delta start coverage is not paid per step anyway; that hazard
+# was specific to the level-valued reward.
+#
+# --eval-curriculum off so eval/ stays the real uniform task, directly comparable to the four
+# arms already finished, and best_model tracks it rather than the curriculum. The curriculum
+# number is still logged, as eval_train/.
 # label | entry | args
 ARMS_ALL="
 bc_keypoint            | -m recurrent_ppo.bc         | --obs keypoint
 bc_image               | -m recurrent_ppo.bc         | --obs image --lstm-hidden-size 256
 ppo_plain_keypoint     | -m recurrent_ppo.ppo.train  | --obs keypoint --n-stack 1
 ppo_plain_image        | -m recurrent_ppo.ppo.train  | --obs image --n-stack 1
+ppo_plain_keypoint_near| -m recurrent_ppo.ppo.train  | --obs keypoint --n-stack 1 --agent-near-block-prob 1.0 --block-near-goal-prob 1.0 --block-goal-offset 60 0.5 --block-coverage-max 0.2 --eval-curriculum off
 ppo_lstm_keypoint      | -m recurrent_ppo.train      | --obs keypoint
 ppo_lstm_image         | -m recurrent_ppo.train      | --obs image --lstm-hidden-size 256
 ppo_lstm_keypoint_bc   | -m recurrent_ppo.train      | --obs keypoint --bc-init BC/bc_keypoint/bc_best.zip

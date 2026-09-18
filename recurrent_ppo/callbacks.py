@@ -87,13 +87,27 @@ class SecondEval(BaseCallback):
     the policy is improving at what it practises; the real uniform distribution says whether that
     is the task. Reporting only one of those is how a curriculum run flatters or libels itself --
     the nb=1.0 arm pushes the block 47.9px with its curricula on and 15.4px without.
+
+    It reports SUCCESS RATE as well as reward, and saves its own `evaluations_<prefix>.npz` in
+    the same layout SB3's EvalCallback uses for `eval/`. Until 2026-09-18 it logged reward and
+    episode length only, so the second distribution was evaluated but not on the quantity a
+    curriculum run is asking about, and its curve could not be read back off disk at all --
+    only the primary's npz existed.
     """
 
-    def __init__(self, env, prefix, freq, n_episodes, seed):
+    def __init__(self, env, prefix, freq, n_episodes, seed, log_path=None):
         super().__init__()
         self.env, self.prefix, self.freq, self.n_episodes = env, prefix, freq, n_episodes
         self.seed = seed
         self._next = freq
+        self.log_path = None if log_path is None else os.path.join(log_path, f"evaluations_{prefix}")
+        self.timesteps, self.results, self.ep_lengths, self.successes = [], [], [], []
+
+    def _grab_success(self, locals_, globals_):
+        """SB3's own contract: `is_success` is read off the top-level info at episode end."""
+        info = locals_["info"]
+        if locals_["done"] and "is_success" in info:
+            self._success_buffer.append(bool(info["is_success"]))
 
     def _on_step(self):
         if self.num_timesteps < self._next:
@@ -105,14 +119,28 @@ class SecondEval(BaseCallback):
         was_on = extractor is not None and extractor.enabled
         if was_on:
             extractor.enabled = False
+        self._success_buffer = []
         try:
             rewards, lengths = evaluate_policy(self.model, self.env, n_eval_episodes=self.n_episodes,
-                                               deterministic=True, return_episode_rewards=True, warn=False)
+                                               deterministic=True, return_episode_rewards=True, warn=False,
+                                               callback=self._grab_success)
         finally:
             if was_on:
                 extractor.enabled = True
         self.logger.record(f"{self.prefix}/mean_reward", float(np.mean(rewards)))
         self.logger.record(f"{self.prefix}/mean_ep_length", float(np.mean(lengths)))
+        if self._success_buffer:
+            self.logger.record(f"{self.prefix}/success_rate", float(np.mean(self._success_buffer)))
+        if self.log_path is not None:
+            self.timesteps.append(self.num_timesteps)
+            self.results.append(list(rewards))
+            self.ep_lengths.append(list(lengths))
+            kwargs = {}
+            if self._success_buffer:
+                self.successes.append(list(self._success_buffer))
+                kwargs["successes"] = self.successes
+            np.savez(self.log_path, timesteps=self.timesteps, results=self.results,
+                     ep_lengths=self.ep_lengths, **kwargs)
         return True
 
 

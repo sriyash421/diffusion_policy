@@ -2,9 +2,11 @@
 
 **Status: in progress.** The heuristic baseline, both BC stages, the learned-V ranking
 evaluation (section 5) and **the best-of-N sweep it was built for (section 6)** are measured.
-The answer to the headline question is **no, and for a diagnosable reason**: the V this plan
-specifies is the heuristic's *inverse*, confirmed at `argmax` agreement 0.000 over 608
-decisions. Q is not measured: no SAC run has finished.
+The answer to the headline question is **no**: best-of-N under the learned V falls from 0.240
+to 0.000 where the heuristic rises to 0.920. The diagnosis -- that V is the heuristic's inverse
+under `--reward delta` -- follows from the reward definition and is consistent with the curves,
+but the diagnostic that claimed to confirm it measured the wrong axis and is retracted in
+section 6. Q is not measured: no SAC run has finished.
 
 The question: best-of-N on PushT ranks candidates with `t_goal`, a hand-written heuristic that
 **ignores `agent_pos` by construction** — until a candidate actually moves the block, every
@@ -199,20 +201,25 @@ pointed the wrong way.
 
 ### Why: the sign, measured
 
-`diag_v_sign.py` scores each candidate set **twice inside one rollout** and returns the sim
-value, so the trajectory stays `t_goal`'s and both rankers see identical candidates. Running
-the two as separate rollouts cannot answer this -- different rankers take different actions, so
-by the second decision they are at different states scoring different candidates.
-
-608 decisions, `value_k1` brd60, n=8:
-
-| | |
-|---|---|
-| within-decision correlation | mean **-0.589**, median **-0.856**, 82.4% negative |
-| pooled correlation | -0.430 |
-| **`argmax` agreement** | **0.000**, against 1/8 = 0.125 chance |
-
-**V and `t_goal` never once selected the same candidate.**
+> **RETRACTED, 2026-09-18.** The numbers below were computed on the wrong axis.
+> `_score_candidates` is called **once per candidate**, batched over ENVIRONMENTS
+> ([search_procedure.py:1021-1032](diffusion_policy/policy/search_procedure.py#L1021-L1032)):
+> each call returns `(B_envs,)`, one score per environment for candidate *i*, and the caller
+> stacks those into `(B, n)`. `diag_v_sign.py` treated a single call's array as the candidate
+> set, so every statistic below compares scores at **six different states**, not sixteen
+> candidates at one state. The `argmax` agreement figure is the worst of it: which *environment*
+> scored highest is not a selection, so "never selected the same candidate" was not measured.
+> What survives is weaker and still consistent with the inversion -- across states `t_goal` is
+> -distance and V rises with distance, so a strongly negative correlation is expected. The
+> within-candidate-set question is re-measured by `diag_ranker_agreement.py`, which buffers n
+> calls and transposes.
+>
+> | | |
+> |---|---|
+> | ~~within-decision correlation~~ | ~~mean -0.589, median -0.856, 82.4% negative~~ |
+> | ~~`argmax` agreement~~ | ~~0.000, against 1/8 = 0.125 chance~~ |
+>
+> The best-of-N curves above are unaffected: they ran through the real selection machinery.
 
 The cause is in the reward, not the code. Under `--reward delta`
 ([pusht_gym.py:376-384](recurrent_ppo/pusht_gym.py#L376-L384)) the return telescopes to
@@ -278,7 +285,7 @@ python sac/eval.py rank-expert -c <ST ckpt> --arm <name> --n 16 --episodes 20 \
 
 # section 6
 SUBMIT=1 bash scripts/slurm/bon_sweep_arms.sh
-python diag_v_sign.py <ST ckpt> <ppo ckpt> <out>.json 8 12
+python diag_ranker_agreement.py --ckpt <ST ckpt> --v <ppo ckpt> --out <out>.json
 
 # what section 7 is waiting on: a finished SAC run
 SUBMIT=1 RANKERS=t_goal,v,q Q=<sac.zip> bash scripts/slurm/bon_sweep_arms.sh

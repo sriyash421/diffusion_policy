@@ -234,7 +234,8 @@ def train(args_cli, arch):
             second_env = VecNormalize(second_env, training=False, norm_obs=False, norm_reward=False,
                                       gamma=args_cli.gamma, clip_reward=np.inf)
         callbacks.append(SecondEval(second_env, second_prefix, eval_freq * args_cli.num_envs,
-                                    args_cli.n_eval_episodes, args_cli.seed + 30_000))
+                                    args_cli.n_eval_episodes, args_cli.seed + 30_000,
+                                    log_path=log_dir))
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):
@@ -266,7 +267,7 @@ def train(args_cli, arch):
 RESOLVE_KEYS = ("obs", "corrupt_obs", "corrupt_snr", "corrupt_t_max",
                 "max_episode_steps", "render_size", "keypoint_visible_rate",
                 "occlusion", "occlusion_persistence", "reward", "shaping_coef",
-                "shaping_potential", "progress_coef", "success_bonus", "block_zero_coverage",
+                "shaping_potential", "progress_coef", "success_bonus", "block_zero_coverage", "block_coverage_max",
                 "action_mode", "delta_scale", "agent_start_range", "block_start_range",
                 "agent_near_block_prob", "agent_block_gap", "block_near_goal_prob",
                 "block_goal_offset", "gamma")

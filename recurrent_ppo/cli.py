@@ -47,6 +47,17 @@ def add_common_args(parser):
                         help="Allow block starts that already overlap the goal. Rejecting them is the DEFAULT: "
                              "34.5%% of uniform draws overlap, and any level-valued reward pays for that overlap "
                              "every step of the episode, which is how a do-nothing policy scored 92.7.")
+    parser.add_argument("--block-coverage-max", type=float, default=D["block_coverage_max"],
+                        help="Ceiling on the block's coverage of the goal at reset, applied only when goal "
+                             "overlap is being rejected (i.e. not under --allow-goal-overlap). 0.0, the default, "
+                             "is the strict no-overlap rule. It exists because 'the T starts near the goal' and "
+                             "'the T covers none of it' are geometrically incompatible: the T must be displaced "
+                             "by roughly its own size to clear the goal, and by then it is most of the way back "
+                             "to a uniform start. Measured at --block-near-goal-prob 1, 500 resets each: a "
+                             "ceiling of 0.05 is only reachable from --block-goal-offset 80 (10%% of draws "
+                             "accepted, median 93px from the goal), while 0.20 from offset 60 accepts 34%% at "
+                             "62px. Uniform starts sit at 167px. Rejected draws are redrawn at most SPAWN_TRIES "
+                             "times, so an acceptance rate much below ~0.3 falls back to an unfiltered start.")
     parser.add_argument("--shaping-potential", type=str, default=D["shaping_potential"],
                         choices=["t_goal", "arm_t", "arm"],
                         help="What the shaping potential measures. t_goal: mean per-keypoint distance of the T "

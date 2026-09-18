@@ -79,6 +79,7 @@ DEFAULTS = {
     "progress_coef": 30.0,
     "success_bonus": 10.0,
     "block_zero_coverage": True,
+    "block_coverage_max": 0.0,
     "shaping_potential": "t_goal",
     "action_mode": "delta",
     "delta_scale": "auto",
@@ -158,7 +159,7 @@ KEYPOINT_ONLY_KEYS = ("keypoint_visible_rate", "occlusion", "occlusion_persisten
 # these altered would continue one experiment under another's name.
 IDENTITY_KEYS = (
     "obs", "corrupt_obs", "corrupt_snr", "corrupt_t_max", "reward", "shaping_coef", "shaping_potential", "progress_coef", "success_bonus",
-    "block_zero_coverage",
+    "block_zero_coverage", "block_coverage_max",
     "max_episode_steps", "render_size", "keypoint_visible_rate",
     "occlusion", "occlusion_persistence", "action_mode", "delta_scale",
     "agent_start_range", "block_start_range",

@@ -877,6 +877,44 @@ def test_every_frame_of_a_stack_gets_the_SAME_stored_crop():
     assert th.equal(extractor(obs), extractor(obs))
 
 
+# ------------------------------------------------------- the reset coverage ceiling
+def test_coverage_ceiling_admits_near_goal_starts_the_zero_rule_cannot():
+    """The ceiling is what makes a near-goal start reachable at all.
+
+    `block_zero_coverage` alone rejects every draw that touches the goal, and a T displaced far
+    enough to touch none of it is most of the way back to a uniform start -- measured P(coverage
+    = 0) is 0.000 at a 60px offset and 0.140 at 100px, where the accepted draws sit 117px from
+    the goal against a uniform start's 167px. So the two requirements are checked together:
+    starts ARE admitted above zero, and are still bounded.
+    """
+    env = PushTGymEnv(obs_type="state", block_near_goal_prob=1.0, block_goal_offset=(60.0, 0.5),
+                      block_zero_coverage=True, block_coverage_max=0.2)
+    try:
+        env.reset(seed=0)
+        coverage = []
+        for _ in range(60):
+            env.reset()
+            coverage.append(env._block_coverage())
+        assert max(coverage) <= 0.2 + 1e-9, f"ceiling breached: max coverage {max(coverage):.3f}"
+        assert max(coverage) > 0.0, \
+            "no draw was admitted above zero, so the ceiling bought nothing over the zero rule"
+    finally:
+        env.close()
+
+
+def test_the_default_ceiling_is_the_strict_zero_rule():
+    """Zero is the default, so every run predating the flag keeps its exact start distribution."""
+    env = PushTGymEnv(obs_type="state", block_near_goal_prob=0.0)
+    try:
+        env.reset(seed=0)
+        assert env.block_coverage_max == 0.0
+        for _ in range(40):
+            env.reset()
+            assert env._block_coverage() == 0.0, "a uniform draw overlapping the goal was admitted"
+    finally:
+        env.close()
+
+
 # ------------------------------------------------------- the shared eval episode set
 def test_a_supplied_reset_state_is_used_verbatim():
     """`reset_to_state` must survive BOTH rejection tests, or episodes are silently renumbered.

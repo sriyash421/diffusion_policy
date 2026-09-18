@@ -71,6 +71,7 @@ class PushTGymEnv(gymnasium.Env):
         progress_coef=D["progress_coef"],
         success_bonus=D["success_bonus"],
         block_zero_coverage=D["block_zero_coverage"],
+        block_coverage_max=D["block_coverage_max"],
         shaping_gamma=D["gamma"],
         occlusion=D["occlusion"],
         occlusion_persistence=D["occlusion_persistence"],
@@ -95,6 +96,7 @@ class PushTGymEnv(gymnasium.Env):
         self.progress_coef = float(progress_coef)
         self.success_bonus = float(success_bonus)
         self.block_zero_coverage = bool(block_zero_coverage)
+        self.block_coverage_max = float(block_coverage_max)
         self.shaping_gamma = float(shaping_gamma)
         self.occlusion = occlusion
         self.obs_type = obs_type
@@ -192,8 +194,11 @@ class PushTGymEnv(gymnasium.Env):
             if not self._block_inside_arena():
                 continue
             # zero coverage at reset: 28.7% of uniform block draws already overlap the goal, and
-            # under a level reward that overlap is paid for every step of the episode
-            if self.block_zero_coverage and self._block_coverage() > 0.0:
+            # under a level reward that overlap is paid for every step of the episode.
+            # `block_coverage_max` relaxes the zero to a ceiling, which is what makes a near-goal
+            # start possible at all: the T must move roughly its own size to clear the goal
+            # entirely, so "near the goal" and "covering none of it" cannot both hold.
+            if self.block_zero_coverage and self._block_coverage() > self.block_coverage_max:
                 continue
             # guarded so prob=0 consumes no draw, i.e. it is bit-identical to not having the
             # curriculum at all rather than merely equivalent in distribution
@@ -209,8 +214,10 @@ class PushTGymEnv(gymnasium.Env):
             obs = self.env.reset()
             break
         else:
-            print(f"[WARN] {SPAWN_TRIES} spawn draws all put the block through a wall; "
-                  f"using the last one. Narrow --block-start-range.")
+            print(f"[WARN] {SPAWN_TRIES} spawn draws were all rejected -- block through a wall, or "
+                  f"coverage above --block-coverage-max {self.block_coverage_max:g}; using the last "
+                  f"one, which satisfies NEITHER. Narrow --block-start-range, or raise the ceiling: "
+                  f"an acceptance rate p falls back on (1-p)^{SPAWN_TRIES} of resets.")
         return self._finish_reset(obs)
 
     def _finish_reset(self, obs):
@@ -678,7 +685,7 @@ def env_kwargs_from(cfg, obs_type):
     kwargs["reward_mode"] = cfg["reward"]
     kwargs["shaping_coef"] = cfg.get("shaping_coef", D["shaping_coef"])
     kwargs["shaping_potential"] = cfg.get("shaping_potential", D["shaping_potential"])
-    for key in ("progress_coef", "success_bonus", "block_zero_coverage"):
+    for key in ("progress_coef", "success_bonus", "block_zero_coverage", "block_coverage_max"):
         kwargs[key] = cfg.get(key, D[key])
     kwargs["shaping_gamma"] = cfg.get("gamma", D["gamma"])
     if obs_type == "keypoint":
