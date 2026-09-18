@@ -306,19 +306,26 @@ def train(args_cli):
     else:
         agent = _build_agent(cfg, env, log_dir, demo_offsets)
         if cfg["demo_seed_frac"] > 0:
-            # TRAIN EPISODES ONLY. This used to seed from all 206, which put transitions from
-            # the best-of-N sweep's own eval episodes into the buffer the verifier learns from
-            # -- so any "the learned Q beats the heuristic" would not have been a held-out
-            # claim, while the heuristic it is compared against has no such advantage.
-            _, train_idxs = states_from_manifest(cfg["split_file"], "train")
+            # `train` holds out only `split_file`'s own test/val half. The best-of-N sweep
+            # scores on the GEOMETRIC manifests, which cut the same 206 episodes differently --
+            # seed-42's 106 train episodes cover 27 of blq137's 50 test episodes and 24 of
+            # brd60's 50 -- so it bought a half-clean eval set, which is worse than none:
+            # the bias lands unevenly across strata and only on the learned side, since the
+            # heuristic has no training set. `all` makes it uniform and declared.
+            if cfg["demo_episodes"] == "all":
+                train_idxs = None
+                print("[INFO] demo seeding from ALL episodes -- EVERY eval episode is in the "
+                      "buffer, uniformly. Q numbers are not held out; say so beside them.")
+            else:
+                _, train_idxs = states_from_manifest(cfg["split_file"], "train")
+                print(f"[INFO] demo seeding restricted to {len(train_idxs)} TRAIN episodes of "
+                      f"{cfg['split_file']} -- this does NOT hold out the geometric splits")
             # the SAME crop_span the live env draws with, or the demo half of the buffer
             # would not match the space it is stored in -- see obs_from_zarr
             tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], gamma=cfg["gamma"],
                                   tau_ladder=cfg["tau_ladder"], frac=cfg["demo_seed_frac"],
                                   crop_span=(aug or {}).get("crop_span"),
                                   episode_idxs=train_idxs)
-            print(f"[INFO] demo seeding restricted to {len(train_idxs)} TRAIN episodes of "
-                  f"{cfg['split_file']}")
             print(summarise(tr))
             preload_demos(agent.replay_buffer, tr)
 

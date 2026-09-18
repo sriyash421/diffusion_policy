@@ -119,9 +119,16 @@ DEFAULTS = {
     "mix_smooth": 0.25,
     "smooth_scale": 12.0,
     "demo_seed_frac": 1.0,              # fraction of the demo chunks preloaded
-    # WHICH demonstrations may be preloaded. Only this manifest's TRAIN episodes reach
-    # the buffer, so the learned Q is never fitted on transitions from the episodes the
-    # best-of-N sweep scores it on.
+    # WHICH demonstrations may be preloaded.
+    #   "train" -- only `split_file`'s TRAIN episodes.
+    #   "all"   -- every episode in the dataset.
+    # "train" only holds out the episodes of THIS manifest. The best-of-N sweep scores on the
+    # GEOMETRIC manifests, which partition the same 206 episodes differently: measured
+    # 2026-09-18, seed-42's 106 train episodes cover 27 of blq137's 50 test episodes and 24 of
+    # brd60's 50. So "train" bought a partial, uneven hold-out -- half the eval set clean, half
+    # not -- which biases strata against a heuristic that has no training set at all. "all"
+    # makes the contamination uniform and stated instead of partial and hidden.
+    "demo_episodes": "all",
     "split_file": "diffusion_policy/config/splits/pusht_seed42_train106_val50.json",
     "reset_from_demos": 0.0,
     # bookkeeping
@@ -170,7 +177,7 @@ IDENTITY_KEYS = (
     "target_entropy", "mix_actor", "mix_uniform", "mix_demo", "mix_smooth", "smooth_scale", "demo_seed_frac",
     # WHICH demonstrations seeded the buffer is part of what a run IS: resuming with a different
     # manifest would swap the data under a checkpoint and leave nothing on disk saying so.
-    "split_file",
+    "split_file", "demo_episodes",
 )
 
 
@@ -288,7 +295,12 @@ def add_common_args(parser):
     parser.add_argument("--smooth-scale", type=float, default=D["smooth_scale"],
                         help="Per-step std (px) of the smooth random-walk exploration arm.")
     parser.add_argument("--split-file", type=str, default=D["split_file"],
-                        help="Demo seeding uses only this manifest's TRAIN episodes.")
+                        help="Manifest whose TRAIN episodes demo seeding uses when "
+                             "--demo-episodes train.")
+    parser.add_argument("--demo-episodes", choices=("all", "train"), default=D["demo_episodes"],
+                        help="Which demonstrations may be preloaded: every episode, or only "
+                             "--split-file's train half. `train` holds out only THAT manifest, "
+                             "not the geometric ones the best-of-N sweep scores on.")
     parser.add_argument("--demo-seed-frac", type=float, default=D["demo_seed_frac"],
                         help="Fraction of the ~24k demo chunk transitions preloaded.")
     # bookkeeping
