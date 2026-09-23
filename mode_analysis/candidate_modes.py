@@ -47,6 +47,39 @@ C_CAND, C_STAR = '#2a78d6', '#eb6834'
 ARENA = (5, 506)
 
 
+def merge_summary(path, summary, params):
+    """Fold `summary` into an existing json instead of replacing it.
+
+    These analyses are run as checkpoints LAND, not once at the end, so a run's json is
+    written many times with a few new steps each time. Overwriting would silently drop every
+    previously computed step, and recomputing them all each round costs far more GPU than the
+    new ones.
+
+    MERGING IS ONLY SOUND WHEN THE SETTINGS MATCH. `params` names the knobs that change what
+    the numbers MEAN (how many redraws, how many states, how many candidates, whether the obs
+    ladder is applied). If the file on disk was produced under different ones, its steps are
+    not comparable with these, so it is replaced wholesale and the reason is printed -- a
+    quietly mixed file would be worse than a recomputed one.
+    """
+    merged = dict(summary)
+    if path.is_file():
+        try:
+            prev = json.loads(path.read_text())
+        except Exception:
+            prev = None
+        if prev is not None:
+            differing = {k: (prev.get(k), v) for k, v in params.items() if prev.get(k) != v}
+            if differing:
+                print(f'  {path.name}: settings changed {differing}; replacing rather than '
+                      f'merging -- old steps are not comparable with these')
+            else:
+                steps = dict(prev.get('steps', {}))
+                steps.update(summary.get('steps', {}))
+                merged['steps'] = dict(sorted(steps.items(), key=lambda kv: int(kv[0])))
+    path.write_text(json.dumps(merged, indent=2) + '\n')
+    return merged
+
+
 def load(step, run_dir, device):
     from eval_search_pusht import load_policy
     ckpt = pathlib.Path(run_dir) / 'checkpoints' / f'step_{int(step):07d}.ckpt'
@@ -224,7 +257,9 @@ def main():
     run_dir = pathlib.Path(args.run_dir)
     out = pathlib.Path(args.outdir or f'/gscratch/robotics/harine/mode_analysis/{run_dir.name}')
     out.mkdir(parents=True, exist_ok=True)
-    summary = {'run': run_dir.name, 'repeats': args.repeats, 'steps': {}}
+    summary = {'run': run_dir.name, 'repeats': args.repeats,
+               'n_states': args.n_states, 'n_actions': args.n_actions,
+               'corrupt': args.corrupt, 'steps': {}}
 
     for step in [int(s) for s in args.steps.split(',') if s.strip()]:
         policy, cfg = load(step, run_dir, args.device)
@@ -270,7 +305,8 @@ def main():
         del policy
         torch.cuda.empty_cache()
 
-    (out / 'modes.json').write_text(json.dumps(summary, indent=2) + '\n')
+    merge_summary(out / 'modes.json', summary,
+                  {k: summary[k] for k in ('repeats', 'n_states', 'n_actions', 'corrupt')})
     print(f'wrote {out}/')
 
 

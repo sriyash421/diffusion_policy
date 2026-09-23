@@ -8,7 +8,12 @@ them so the arms can be read against each other, which is the actual question --
 obs-noise ladder, or a goal mask, change HOW the policy uses its context, not just how well
 it scores.
 
-TWO THINGS THAT ARE NOT COMPARABLE, and are separated rather than averaged away:
+THREE THINGS THAT ARE NOT COMPARABLE, and are separated rather than averaged away:
+  * Arms probed at different STATES. `states: episode-init` reads attention at each test
+    episode's t=0, where the T has not been touched; `states: test-windows` reads it on the
+    held-out transitions the arm was actually trained on. Those are different measurements of
+    different states, so each probe set gets its OWN figure and its own table block -- never
+    one axes. (The same reason the mode comparator splits by width.)
   * ST k=1 has max_context_actions == 0, so it has no context block at all. It appears in
     the table with '--', never as a zero, because zero would read as "has context, ignores
     it" when the truth is "has none".
@@ -23,8 +28,10 @@ arm. The default is therefore the largest step present in EVERY arm with a conte
 each label. Arms lacking the chosen step are listed as omitted, never silently dropped.
 """
 import argparse
+import fnmatch
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
@@ -55,8 +62,22 @@ def family(run):
     return 'other', MUTED, (0, (1, 1)), 'x'
 
 
-def collect(root):
+def short(run):
+    """Collapse the policy tokens to `k<N>`, for ANY width.
+
+    Spelled as a regex rather than one replace per width: the k=4 arms were added in
+    2026-09 and a hardcoded k16/k1 list silently left them with the long token, which
+    breaks the column alignment the analysis-folder naming convention exists for.
+    """
+    run = re.sub(r'_?value_k(\d+)_ver-t_goal', lambda m: f'_k{m.group(1)}', run)
+    return run.replace('_enc-resnet18', '').replace('_seed-42', '').lstrip('_')
+
+
+def collect(root, pats=None):
     """Rows from every attention.json, one run per directory, labelled by FOLDER name.
+
+    `pats` is a list of fnmatch globs on the folder name. The tree holds every generation
+    at once, so without a filter one axes mixes arms trained on different splits.
 
     A run may appear under more than one directory when it was dumped before the current
     naming convention (`k16_blq/` holds the same run as the canonical dataset-first folder).
@@ -70,6 +91,8 @@ def collect(root):
     """
     seen, out = {}, []
     for j in sorted(pathlib.Path(root).glob('*/attention.json')):
+        if pats and not any(fnmatch.fnmatch(j.parent.name, p) for p in pats):
+            continue
         run = json.loads(j.read_text())['run']
         key = canonical(run) or run
         prev = seen.get(key)
@@ -83,6 +106,11 @@ def collect(root):
             for di, r in rec['denoise'].items():
                 out.append({
                     'run': j.parent.name, 'step': int(step), 'denoise': int(di),
+                    # Which observations the attention was measured on. Absent means
+                    # episode-init: every attention.json written before 2026-09-18 probed
+                    # each test episode's t=0 state, and that is not the same measurement as
+                    # the held-out-transition probe the filtered arms use.
+                    'states': d.get('states', 'episode-init'),
                     'K': rec.get('K'), 'mca': rec.get('max_context_actions', 0),
                     'per_slot': r.get('context_mass_per_slot'),
                     'mean': r.get('context_mass_mean'),
@@ -100,36 +128,60 @@ def main():
     ap.add_argument('--latest', action='store_true',
                     help='plot each arm at its OWN latest step (confounds arm with training time)')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--runs', default=None,
+                    help='comma-separated globs on the analysis folder name, e.g. "*split-mv*"; '
+                         'default is every arm in --dir, which spans generations')
+    ap.add_argument('--states', default='all',
+                    help="probe set to report: 'all' (default, one figure each), "
+                         "'episode-init' or 'test-windows'")
     args = ap.parse_args()
     root = pathlib.Path(args.dir)
-    rows = collect(root)
+    pats = [x for x in (args.runs or '').split(',') if x]
+    rows = collect(root, pats)
     if not rows:
         print(f'no attention.json under {root}'); return
 
+    # ONE REPORT PER PROBE SET. episode-init and test-windows measure attention at different
+    # states, so putting them on one axes would compare two different experiments. Every set
+    # present is reported -- nothing is dropped for being in the minority.
+    sets = sorted({r['states'] for r in rows})
+    if args.states != 'all':
+        sets = [x for x in sets if x == args.states]
+        if not sets:
+            print(f'no arm was probed with states={args.states}'); return
+    if len(sets) > 1:
+        print(f'{len(sets)} probe sets present: {", ".join(sets)} -- reported separately, '
+              f'because they are not the same measurement\n')
+    for st in sets:
+        report([r for r in rows if r['states'] == st], st, args, root)
+
+
+def report(rows, states, args, root):
     dsel = args.denoise if args.denoise is not None else max(r['denoise'] for r in rows)
+    print(f'=== probe set: {states} ===')
     print(f'context share of cross-attention, denoising step {dsel}\n')
-    print(f'{"arm":<52} {"step":>6} {"slot1":>6} {"slot8":>6} {"slotK-1":>8} {"mean":>6}')
+    print(f'{"arm":<52} {"step":>6} {"K":>3} {"slot1":>6} {"slotK/2":>7} {"slotK-1":>8} '
+          f'{"mean":>6}')
     plot = []
     for r in sorted(rows, key=lambda r: (r['run'], r['step'])):
         if r['denoise'] != dsel:
             continue
-        name = (r['run'].replace('_value_k16_ver-t_goal', '_k16')
-                        .replace('_value_k1_ver-t_goal', '_k1')
-                        .replace('value_k16_ver-t_goal', 'k16')
-                        .replace('value_k1_ver-t_goal', 'k1')
-                        .replace('_enc-resnet18', '').replace('_seed-42', ''))
+        name = short(r['run'])
         ps = r['per_slot']
         if not ps:
             # ST k=1: no context block. '--' not 0.0 -- see the module docstring.
-            print(f'{name:<52} {r["step"]//1000:5d}k {"--":>6} {"--":>6} {"--":>8} {"--":>6}'
-                  f'   (no context tokens)')
+            print(f'{name:<52} {r["step"]//1000:5d}k {"--":>3} {"--":>6} {"--":>7} '
+                  f'{"--":>8} {"--":>6}   (no context tokens)')
             continue
-        print(f'{name:<52} {r["step"]//1000:5d}k {ps[1]:6.2f} {ps[8]:6.2f} {ps[-1]:8.2f} '
-              f'{np.mean(ps[1:]):6.2f}')
+        # Columns are K-RELATIVE. A fixed slot 8 is an IndexError at K=4, and comparing
+        # absolute slot 8 across widths would compare different fractions of the ladder.
+        K = len(ps)
+        print(f'{name:<52} {r["step"]//1000:5d}k {K:3d} {ps[1]:6.2f} {ps[K//2]:7.2f} '
+              f'{ps[-1]:8.2f} {np.mean(ps[1:]):6.2f}')
         plot.append((name, r['step'], np.asarray(ps)))
 
     if not plot:
-        print('\nno arm has a context block yet'); return
+        print('  no arm has a context block yet\n'); return
 
     per_run = {}
     for name, step, ps in plot:
@@ -168,13 +220,16 @@ def main():
     ax.set_xlabel('candidate slot  (0 has no context by construction)', color=INK)
     ax.set_ylabel('context share of cross-attention', color=INK)
     ax.set_ylim(0, 1)
-    ax.set_title(f'Context use by arm — {label}, denoising step {dsel}',
+    ax.set_title(f'Context use by arm — {label}, denoising step {dsel}\n'
+                 f'probed on {states}',
                  color=INK, fontsize=12, loc='left')
     ax.legend(frameon=False, fontsize=7.5, labelcolor=INK, ncol=2,
               loc='upper left', bbox_to_anchor=(0, -0.12))
     for s in ('top', 'right'):
         ax.spines[s].set_visible(False)
-    out = pathlib.Path(args.out or (root / f'compare_arms_d{dsel}_{tag}.png'))
+    stem = pathlib.Path(args.out).with_suffix('') if args.out else (
+        root / f'compare_arms_d{dsel}_{tag}')
+    out = pathlib.Path(f'{stem}_{states}.png')
     fig.savefig(out, dpi=150, facecolor='white', bbox_inches='tight')
     print(f'\nwrote {out}')
 

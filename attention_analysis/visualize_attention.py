@@ -40,6 +40,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'attention_analysis'))
 from attention_hooks import capture_cross_attention, context_mass, split_slots
+sys.path.insert(0, str(ROOT / 'mode_analysis'))
+from candidate_modes import merge_summary  # one definition, shared
 
 INK, MUTED = '#1a1a19', '#8a8880'
 C_OBS, C_CTX = '#2a78d6', '#eb6834'      # paired with hatch/marker below, never hue alone
@@ -53,8 +55,50 @@ def load(step, run_dir, device):
     return (*load_policy(str(ckpt), device), ckpt)
 
 
-def test_observations(cfg, run_dir, n, device):
-    """A batch of real held-out TEST observations, shaped for the policy's obs dict."""
+def test_window_observations(cfg, n, device):
+    """A batch of held-out TEST WINDOWS, straight from the dataset the run was trained with.
+
+    WHY THIS EXISTS. `episode_init_observations` below probes at each test episode's t=0,
+    where the T has not been touched -- so every probe state is one where the demonstrator's
+    block does not move. For an arm trained only on the MOVING transitions (transition_file),
+    that is precisely the distribution it never saw, and "does it attend to its context" would
+    be answered off-distribution. Reading windows out of PushTImageDataset(split='test')
+    instead gives the held-out transitions themselves, and matches what
+    mode_analysis/candidate_modes.test_windows() already probes, so the two analyses of one
+    arm describe the same states.
+
+    Costs the 2.8 GB image array, which episode_init_observations deliberately avoids -- fine
+    inside run_attention.sbatch, not on a login node.
+    """
+    from diffusion_policy.dataset.pusht_image_dataset import PushTImageDataset
+    # Built exactly as mode_analysis/candidate_modes.test_windows builds it -- split on the
+    # constructor, goal mask dropped -- so the two analyses probe the same windows of the
+    # same split. `transition_file` rides along in cfg, which is what makes these the
+    # held-out MOVING transitions on a filtered arm and every test window otherwise.
+    ds_cfg = dict(cfg.task.dataset)
+    ds_cfg.pop('_target_', None)
+    ds_cfg['split'] = 'test'
+    ds_cfg.pop('goal_mask_noise', None)      # probe a clean observation, as eval always does
+    ds = PushTImageDataset(**ds_cfg)
+    if len(ds) == 0:
+        raise RuntimeError('the test split has no windows; nothing to probe')
+    To = int(cfg.n_obs_steps)
+    # Spread the probes over the whole split rather than taking a prefix: consecutive windows
+    # overlap by To-1 frames, so the first n would be one moment of one episode.
+    idxs = np.linspace(0, len(ds) - 1, num=min(n, len(ds))).round().astype(int)
+    keys = ('image', 'agent_pos', 'feedback')
+    batch = {k: torch.stack([ds[int(i)]['obs'][k][:To] for i in idxs]).float().to(device)
+             for k in keys}
+    return batch
+
+
+def episode_init_observations(cfg, run_dir, n, device):
+    """A batch of held-out TEST episode INITIAL states, shaped for the policy's obs dict.
+
+    Every attention.json written before 2026-09-18 used this, so it is what an existing arm
+    must keep being probed at for its numbers to stay comparable. See test_window_observations
+    for why a filtered arm should not use it.
+    """
     from eval_search_pusht import get_split_states
     from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
     from diffusion_policy.env.pusht.feedback_util import compute_feedback_from_pose
@@ -166,15 +210,27 @@ def main():
                     help='search width for the capture; defaults to the policy max_actions')
     ap.add_argument('--device', default='cuda:0')
     ap.add_argument('--outdir', default=None)
+    # WHERE the attention is probed. `auto` reads the run's own config: an arm trained on a
+    # filtered set of transitions is probed on the held-out transitions, and everything else
+    # keeps the episode-t=0 states every attention.json before 2026-09-18 was measured at.
+    # Recorded in the json, because the two probe sets are not comparable with each other.
+    ap.add_argument('--states', choices=('auto', 'episode-init', 'test-windows'),
+                    default='auto')
     args = ap.parse_args()
 
     run_dir = pathlib.Path(args.run_dir)
     out = pathlib.Path(args.outdir or (ROOT / 'attention_analysis' / run_dir.name))
     out.mkdir(parents=True, exist_ok=True)
     steps = [int(s) for s in args.steps.split(',') if s.strip()]
-    summary = {'run': run_dir.name, 'mode': args.mode, 'steps': {}}
+    summary = {'run': run_dir.name, 'mode': args.mode, 'states': args.states,
+               'n_episodes': args.n_episodes, 'n_actions': args.n_actions, 'steps': {}}
 
     across = []
+    # The probe states are a property of the RUN, not of the checkpoint, so they are built
+    # once and reused across steps. Worth being explicit about: test_window_observations
+    # loads the 2.8 GB image array, and rebuilding it per step would pay that ten times over
+    # a full 10k..100k grid for a byte-identical batch.
+    obs_cache = {}
     for step in steps:
         policy, cfg, ckpt = load(step, run_dir, args.device)
         K = int(getattr(policy, 'max_actions', 1) or 1)
@@ -185,7 +241,17 @@ def main():
                   f'so there is no context to attend to. Matrices still written.')
         n_act = args.n_actions or K
         n_ep = 1 if args.mode == 'episode' else args.n_episodes
-        obs = test_observations(cfg, str(run_dir), n_ep, args.device)
+        states = args.states
+        if states == 'auto':
+            states = ('test-windows'
+                      if cfg.task.dataset.get('transition_file', None) else 'episode-init')
+        summary['states'] = states
+        if (states, n_ep) not in obs_cache:
+            obs_cache[(states, n_ep)] = (
+                test_window_observations(cfg, n_ep, args.device) if states == 'test-windows'
+                else episode_init_observations(cfg, str(run_dir), n_ep, args.device))
+            print(f'built {n_ep} {states} probe observations')
+        obs = obs_cache[(states, n_ep)]
 
         cap, n_dstep, n_blocks = run_capture(policy, obs, n_act)
         n_layers = len(cap)
@@ -265,7 +331,10 @@ def main():
         fig.savefig(out / 'context_vs_step.png', dpi=150, facecolor='white')
         plt.close(fig)
 
-    (out / 'attention.json').write_text(json.dumps(summary, indent=2) + '\n')
+    # `states` is in the guard: the episode-t=0 and held-out-transition probes are not
+    # comparable, so a file must never hold both.
+    merge_summary(out / 'attention.json', summary,
+                  {k: summary[k] for k in ('mode', 'states', 'n_episodes', 'n_actions')})
     print(f'\nwrote {out}/')
 
 
