@@ -58,6 +58,9 @@ class PushTUNetSearchPolicy(PushTSearchMixin, CropScopeMixin, SearchProcedureMix
         # every external caller needed a getattr dance to find the right bag. The hosts now
         # name it `search_kwargs`, which collides with nothing.
         self.search_kwargs = search_kwargs
+        # PushTSearchMixin.__init__ could not run this: it fires inside the
+        # super().__init__() above, before this attribute exists.
+        self._init_learned_value()
         # only the scalar value mode: the wider modes feed an encoded subgoal into the
         # model as context, and this policy has no context input to feed.
         mode = search_kwargs.get('search_context', 'value') or 'value'

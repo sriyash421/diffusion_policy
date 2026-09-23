@@ -243,10 +243,8 @@ verifier.
 
 ## Not built yet
 
-* The four eval scripts -- `rank_expert.py` (where the expert action ranks), `value_over_episode.py`
-  (Q over candidates on frames where the arm is not touching the T), `bon_sweep.py` (ST k1 / BC
-  30k at n = 1..64, Q vs `t_goal` vs `armTn`), and the ST-candidate bank the off-distribution
-  probe needs.
+* The ST-candidate bank the off-distribution probe needs. (The eval scripts themselves are
+  built: they are `sac/eval.py`'s `rank-expert`, `frames`, `bon-sweep` and `policy` subcommands.)
 * An 18-d subgoal regression head, which would let the Q serve `search_context in {subgoal,
   subgoal_value}` as well as ranking. Supervisable from the `s'` already in the replay buffer.
 * A `ChunkDictReplayBuffer` storing obs once with a +1 index. `next_obs` of chunk *k* is `obs` of
@@ -282,6 +280,79 @@ well where the heuristic is silent is already the win.
 `bon-sweep` monkeypatches `_score_candidates` **on the policy instance**, so nothing ST and
 BC are trained and evaluated with changes on disk and an ordinary run stays bit-for-bit what it
 was.
+
+## The Q evaluation procedure
+
+This is what "evaluate the Q" resolves to. It is written down because the answer has to be the
+same every time it is asked for -- a Q number is only meaningful against a stated hold-out, and
+"which episodes" is not a detail that should be re-decided per run.
+
+### 1. Which Q scores which checkpoint
+
+One Q per geometric manifest, trained with its demo seeding restricted to that manifest's train
+episodes (`--demo-episodes train --split-file ...`, both `IDENTITY_KEYS`, so a resume cannot
+swap the data underneath). Three groups:
+
+| checkpoints | Q | test episodes in the Q's buffer |
+|---|---|---|
+| `*_demos-137_split-blq_*` | `sac_keypoint_blq137` | 0 of 50 |
+| `*_demos-100_split-brd100_*` | `sac_keypoint_brd100` | 0 of 50 |
+| `*_demos-60_split-brd60_*` | `sac_keypoint_brd100` | 0 of 50 |
+
+**The third row is the one that needs an argument**, and it is three measured facts, not a
+convention: `brd60.train` is a strict subset of `brd100.train`, their `test` sets are the
+*identical* 50 interior episodes, and their intersection with `brd100.train` is empty. So the
+brd100 Q holds out brd60's test set exactly as cleanly as its own, and training a third Q would
+add nothing. `unit_tests/test_splits.py` asserts all three on the committed manifests.
+
+**It does not extend to `val`.** All 40 of brd60's val episodes are inside `brd100.train`. That
+is why `--split test` is a precondition of this matrix rather than a default.
+
+The arms at step 30k are STk16-uniform, `son-flat400`, unet BC and STk1. `brd100` has no
+`son-flat400` run on disk, so that cell is absent rather than substituted -- 11 rows, not 12.
+
+### 2. Hold-out is enforced, not assumed
+
+`sac/score.py:assert_held_out` resolves the Q run's own `params/args.yaml` to the set of
+episodes that seeded its buffer and **refuses** to score any episode inside it. Every eval
+subcommand calls it and writes a `held_out` block into its JSON, so a result can always say
+whether it was held out.
+
+`--allow-contaminated` is the deliberate override, and it is *recorded* rather than merely
+permitted: the all-206 `sac_keypoint` run is still worth measuring, and its numbers stay
+distinguishable from the held-out ones on a shared plot. A run that seeds no demonstrations at
+all (PPO, BC) is correctly read as uncontaminated rather than as `all` -- the guard keys off key
+presence in the raw yaml, not off `dict(DEFAULTS, **saved)`.
+
+### 3-5. The three measurements
+
+```bash
+# 3. where the expert chunk a* ranks among the policy's own n candidates
+python sac/eval.py rank-expert -c <ckpt> --q <sac.zip> --n 16 --split test --arm <label>
+
+# 4. does ranking on Q solve more episodes
+python sac/eval.py bon-sweep -c <ckpt> --q <sac.zip> --rankers t_goal,q --max-n 16 --split test
+
+# 5. the SAC arm's OWN success rate on the same held-out episodes
+python sac/eval.py policy <sac_run_dir> --split test --watch
+```
+
+`rank-expert` prints two tables. The first splits by whether the *candidates* moved the T, which
+is what the heuristic's blindness is about but depends on which candidates were drawn, so it
+differs per arm and per n. **The second splits by whether the DEMO's own T moved over the
+window** (`block_moving` / `block_still`), which is a property of the state and is therefore
+byte-identical across every arm compared -- that is the read to quote.
+
+(5) is not a Q measurement, but every Q number has to be read against it: a Q distilled from a
+policy that never solves the task is a different object from one that does. It exists because
+the run's own `eval/success_rate` is seeded PROCEDURAL resets -- fixed in ST's style, not ST's
+set -- while this rolls the manifest's recorded episode starts, which is what every offline arm
+is scored on.
+
+Both are driven by `scripts/slurm/q_eval_arms.sh`, which holds the matrix above and skips work
+already on disk. Cadence is a submit-time decision: `bon-sweep` is ~12h against 11 rows, and
+`--episodes` scores a *prefix* of the 50 held-out episodes with the bootstrap clustered on
+episode, so raising it tightens the CI at a proportional cost in wall clock.
 
 ### Checkpoint compatibility, found the hard way
 

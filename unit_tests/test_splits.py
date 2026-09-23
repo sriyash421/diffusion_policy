@@ -294,3 +294,39 @@ def test_a_geometric_manifest_gives_the_rl_arms_a_different_set():
     _, b = states_from_manifest(str(SPLITS_DIR / 'pusht_blockquad_bottomleft_train137.json'),
                                 'test')
     assert set(a) != set(b), "the manifest argument is not being honoured"
+
+
+def test_the_border_budgets_are_nested_and_share_a_test_set():
+    """On the COMMITTED blockborder manifests, not the builder that made them.
+
+    `test_train_budgets_are_nested` exercises `build_split_manifest`'s seeded derivation. This
+    reads the files on disk, because a claim about the files is what the evaluation matrix rests
+    on: the brd60 diffusion checkpoints are scored with the brd100 Q and no separate brd60 Q is
+    trained, which is sound only if
+
+        brd60.train is a strict SUBSET of brd100.train   (so nothing new enters the buffer)
+        brd60.test  IS  brd100.test                      (so the same episodes are held out)
+
+    and the guard in `sac/score.py` would catch a violation only after someone regenerated a
+    manifest and re-ran a sweep. Here it is caught at `pytest`.
+
+    The `val` assertion is the trap, and it is the reason `--split test` is a PRECONDITION of
+    that matrix rather than a default: every one of brd60's 40 val episodes is inside
+    brd100.train, so scoring brd60's val with the brd100 Q is fully contaminated.
+    """
+    d = pathlib.Path(__file__).resolve().parents[1] / 'diffusion_policy' / 'config' / 'splits'
+    brd60 = json.loads((d / 'pusht_blockborder_train60_core50.json').read_text())
+    brd100 = json.loads((d / 'pusht_blockborder_train100_core50.json').read_text())
+    blq137 = json.loads((d / 'pusht_blockquad_bottomleft_train137.json').read_text())
+    S = lambda m, k: set(int(i) for i in m[k])                              # noqa: E731
+
+    assert S(brd60, 'train') < S(brd100, 'train'), 'brd60 train is not inside brd100 train'
+    assert S(brd60, 'test') == S(brd100, 'test'), 'the border budgets no longer share a test set'
+    assert not (S(brd60, 'test') & S(brd100, 'train'))
+
+    assert S(brd60, 'val') <= S(brd100, 'train'), (
+        'brd60 val used to be entirely inside brd100 train; if that changed, the '
+        '--split test precondition in scripts/slurm/q_eval_arms.sh needs revisiting')
+
+    # blq137 partitions the SAME 206 episodes differently, which is why it needs its own Q
+    assert len(S(blq137, 'test') & S(brd100, 'train')) == 29

@@ -49,7 +49,8 @@ from diffusion_policy.policy.diffusion_transformer_search_policy import (
 from diffusion_policy.env.pusht.pusht_verifier import (
     PushTVerifier, VALUE_FNS, DEFAULT_VALUE_FN, VERIFIER_VALUES,
     CROSS_CANDIDATE_VALUES, base_value_fn, value_terms_from_state,
-    T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE)
+    T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE,
+    is_q_value, q_verifier_spec)
 from diffusion_policy.env.pusht.feedback_util import GOAL_KEYPOINTS, N_KEYPOINTS
 
 # obs keys the verifier reads to reset the sim: agent_pos plus feedback, from which the
@@ -83,6 +84,14 @@ class PushTSearchMixin:
     # over all n candidates does not exist at the time a causal context is built.
     consumes_search_context = True
 
+    # The running value normalizer (see _normalize_q). DECAY matches pusht_base's
+    # `ema_decay: 0.995` -- one decay constant in the run rather than two, and ~200 updates
+    # of memory at this batch size. CLAMP is the +-5 sigma standard for a running observation
+    # normalizer; EPS keeps the first few updates finite while the variance is still ~0.
+    Q_NORM_DECAY = 0.995
+    Q_NORM_CLAMP = 5.0
+    Q_NORM_EPS = 1e-8
+
     def __init__(self, *args, **kwargs):
         """Build the host policy, then check its observation contract.
 
@@ -92,6 +101,50 @@ class PushTSearchMixin:
         """
         super().__init__(*args, **kwargs)
         self._check_obs_contract()
+        # Off until the training loop says otherwise; see set_value_norm_training.
+        self._value_norm_training = False
+        # NOT EVERY HOST HAS `search_kwargs` YET. The transformer arms set it inside their own
+        # __init__, so it exists by the time this line runs; PushTUNetSearchPolicy sets it
+        # AFTER super().__init__() returns, and calls _init_learned_value itself once it does.
+        # Reading it unconditionally here raised AttributeError on every UNet BC load.
+        if hasattr(self, 'search_kwargs'):
+            self._init_learned_value()
+
+    def _init_learned_value(self):
+        """The learned-Q contract check and its running-normalizer buffers. Idempotent.
+
+        Split out of __init__ because the two hosts set `search_kwargs` at different points
+        (see the note there), and both must end up having run this exactly once.
+
+        THE CONTRACT: a learned Q can only serve `search_context: value`. The subgoal contexts
+        are built from the OBSERVATION the candidate chunk reaches -- `_score_candidates`
+        renders it and `_encode_subgoal` runs it through the obs encoder. `PushTQVerifier`
+        does not simulate, so it reaches nothing and has nothing to render;
+        `rollout(render=True)` raises by design. Checked here so the failure lands at
+        construction rather than on the first compute_loss, after the dataset has loaded and
+        the GPU is allocated.
+        """
+        mode = self._verifier_value_mode(self.search_kwargs)
+        if not is_q_value(mode):
+            return
+        context = self._search_context_mode(self.search_kwargs)
+        if context != 'value':
+            raise ValueError(
+                f'{type(self).__name__}: verifier_value={mode!r} is a learned Q, which does '
+                f'not simulate and so has no reached observation to encode, but '
+                f'search_context={context!r} is built from one. Use search_context=value, or '
+                f'a simulated value from pusht_verifier.VALUE_FNS.')
+        if hasattr(self, 'q_norm_mean'):        # idempotent: both hosts may reach here
+            return
+        # REGISTERED ONLY FOR A LEARNED-Q ARM, so no existing checkpoint's state_dict gains
+        # keys it does not have. Buffers rather than attributes because these ARE trained
+        # state: an arm resumed or evaluated with different statistics than it trained under
+        # is conditioned on a context it has never seen. `_inited` is the same
+        # seeded-by-the-first-batch idiom as `obs_feature_std_inited`, so the initial 0/1 are
+        # never mistaken for a measurement.
+        self.register_buffer('q_norm_mean', torch.zeros(()))
+        self.register_buffer('q_norm_var', torch.ones(()))
+        self.register_buffer('q_norm_inited', torch.zeros((), dtype=torch.bool))
 
     def _check_obs_contract(self):
         """The policy observation is IMAGE ONLY, and this is what enforces it.
@@ -153,7 +206,18 @@ class PushTSearchMixin:
         return CROSS_CANDIDATE_VALUES[mode](terms)
 
     def _build_verifier(self, **kwargs):
-        self._check_cross_candidate_value(self._verifier_value_mode(kwargs))
+        mode = self._verifier_value_mode(kwargs)
+        self._check_cross_candidate_value(mode)
+        if is_q_value(mode):
+            # NO SIM POOL. PushTQVerifier scores (current state, chunk) in one forward pass,
+            # so the 32-process PushT pool below is not merely unused here -- forking it would
+            # be 32 idle workers per run. The keypoint arm needs only agent_pos and feedback,
+            # both already in _VERIFIER_OBS_KEYS, so nothing about the obs contract moves.
+            from sac.score import PushTQVerifier
+
+            checkpoint, rung = q_verifier_spec(mode)
+            return PushTQVerifier(checkpoint, rung=rung, value_fn=mode,
+                                  device=kwargs.get('verifier_device', 'auto'))
         return PushTVerifier(
             n_envs=kwargs.get('verifier_n_envs', 32),
             legacy=kwargs.get('verifier_legacy', False),
@@ -251,11 +315,24 @@ class PushTSearchMixin:
         Only the CONTEXT copy is rescaled -- the raw scalar still ranks candidates, so
         predict_action_best and the train_action_value* metrics are unchanged.
         """
+        mode = self._verifier_value_mode(self.search_kwargs)
+        if is_q_value(mode):
+            # NOT a fallthrough and not an approximation. Everything in this method
+            # RECOMPUTES the verifier's value from the state the sim REACHED; a learned Q
+            # does not simulate, so `state` here is the CURRENT state and every branch below
+            # would return the same number for every candidate -- a constant context, which
+            # trains but teaches nothing and is invisible in the loss.
+            raise ValueError(
+                f'_normalize_value cannot mirror {mode!r}: it is a learned Q, not a function '
+                f'of the reached state (there is no reached state -- it does not simulate). '
+                f'The context for a learned value is built by _normalize_q from the raw '
+                f'score instead; this method should never be reached for one.')
+
         agent_dim = PushTVerifier.AGENT_DIM
         feedback = state[..., agent_dim:]              # (B, 2*N_KEYPOINTS), raw pixels
         scale = self.normalizer['feedback'].params_dict['scale'].to(feedback)
 
-        base = base_value_fn(self._verifier_value_mode(self.search_kwargs))
+        base = base_value_fn(mode)
         # 'd_t_goal' shares this branch DELIBERATELY. It is t_goal divided by a positive
         # constant, so it ranks identically; giving the context copy a different scale would
         # make a d_t_goal run incomparable to the t_goal arms it exists to sit beside, for no
@@ -290,6 +367,105 @@ class PushTSearchMixin:
             f'_normalize_value has no branch for {base!r}; add one rather than letting it ' \
             f'fall through to the retired armT rescale.'
         return -(t_goal + arm_t) * scale.mean()        # (B,)
+
+    @torch.no_grad()
+    def _normalize_q(self, q: torch.Tensor) -> torch.Tensor:
+        """The learned Q as a search context: a running z-score, clamped. (B,) -> (B,).
+
+        WHY THE RAW Q IS UNUSABLE. It is a discounted sparse-reward success probability
+        (gamma 0.95, sparse reward) and it behaves like one: measured over 512 real decisions
+        on both splits (analysis/q_spread.json, scripts/measure_q_spread.py) it runs 0.34 to
+        0.93 with a mean of 0.77, and its spread ACROSS the 16 candidates of one decision is
+        **0.0011**. Concatenated into ``action_value_emb`` beside an O(1) embedding, a signal
+        of that size is a dead input -- it would train, teach nothing, and the loss would not
+        say so.
+
+        A RUNNING EMA, NOT THE CURRENT BATCH. The statistics are stale by construction: they
+        are applied first and updated after. Normalizing by the batch's OWN mean and std is
+        the BatchNorm trap -- at deployment the batch is one episode, every statistic is
+        taken over a single sample, and the feature collapses to exactly 0. It would look
+        fine for the whole of training and be identically zero where it matters.
+
+        ONE NORMALIZER FOR EVERY SLOT. ``_score_candidates`` is called once per candidate and
+        they all share this module, which is correct because every slot's Q estimates the
+        same quantity -- the return of a chunk from the same state. Per-slot statistics would
+        subtract a different mean from each slot and manufacture a slot-index signal out of
+        nothing. (Give them separate normalizers only if the slots ever estimate genuinely
+        different returns.)
+
+        THE CLAMP IS LOAD-BEARING. Before the EMA has seen much, the running variance is a
+        poor estimate and a single outlying Q lands many sigma out; unclamped, that spike
+        goes straight into ``action_value_emb`` and from there into every downstream head.
+        +-5 sigma is far outside anything the converged Q produces, so it only ever fires on
+        the early-training spikes it exists to stop.
+
+        The transform is affine with a positive scale SHARED by every candidate of a decision,
+        so it is monotone in the raw Q -- the model is conditioned on the same ordering
+        ``argmax`` applies, which still ranks on the raw scalar (``search_candidates`` keeps
+        ``scores`` untouched). The clamp can tie two candidates the raw Q separates, which is
+        a saturation of the CONTEXT only and never of the selection.
+        """
+        var, mean = self.q_norm_var, self.q_norm_mean
+        out = torch.clamp((q - mean) / torch.sqrt(var + self.Q_NORM_EPS),
+                          -self.Q_NORM_CLAMP, self.Q_NORM_CLAMP)
+        self._update_q_norm(q)
+        return out
+
+    @torch.no_grad()
+    def _update_q_norm(self, q: torch.Tensor) -> None:
+        """Advance the running mean/var. Training only; seeded by the first batch.
+
+        NOT GATED ON ``self.training``, deliberately, unlike ``_update_obs_feature_std``. The
+        outer/inner trainer generates its context under ``policy.eval()``
+        (``_fill_context_buffer``), so ``self.training`` is False on exactly the calls that
+        should be updating. The training loop says so explicitly instead, via
+        ``set_value_norm_training`` -- and the flag defaults to False, so a checkpoint loaded
+        by any eval script normalizes with the statistics it was trained under and cannot
+        drift with evaluation order.
+        """
+        if not self._value_norm_training:
+            return
+        flat = q.detach().reshape(-1).to(self.q_norm_mean.dtype)
+        mean = flat.mean()
+        # unbiased=False so a single-element batch reports 0 rather than nan
+        var = flat.var(unbiased=False)
+        if not bool(self.q_norm_inited):
+            self.q_norm_mean.copy_(mean)
+            self.q_norm_var.copy_(var)
+            self.q_norm_inited.fill_(True)
+            return
+        d = self.Q_NORM_DECAY
+        self.q_norm_mean.mul_(d).add_(mean, alpha=1.0 - d)
+        self.q_norm_var.mul_(d).add_(var, alpha=1.0 - d)
+
+    def sync_value_norm_from(self, src) -> None:
+        """Copy the running value statistics off `src`. No-op unless both sides have them.
+
+        ``EMAModel.step`` averages ``module.parameters(recurse=False)`` and never touches
+        BUFFERS, so without this the EMA copy keeps the (0, 1, uninited) statistics it was
+        deep-copied with at construction -- forever. Evaluation scores the EMA weights, so
+        the arm would be conditioned at eval on a context normalized by statistics it never
+        trained under: a silent, total train/eval mismatch that no loss or metric reports.
+
+        Copied rather than averaged, deliberately. These are already an EMA of the Q
+        distribution; averaging them again would give the EMA copy a second, slower time
+        constant and put the two models on different context scales for no reason.
+        """
+        for name in ('q_norm_mean', 'q_norm_var', 'q_norm_inited'):
+            mine = getattr(self, name, None)
+            theirs = getattr(src, name, None)
+            if mine is not None and theirs is not None:
+                mine.copy_(theirs)
+
+    def set_value_norm_training(self, enabled: bool = True) -> None:
+        """Let the running value normalizer advance. Called once by the training workspace.
+
+        A plain attribute and not a buffer: it is a statement about who is driving the
+        policy right now, not state a checkpoint should carry. Off by default so that
+        loading a checkpoint anywhere else -- eval, analysis, a diagnostic -- leaves the
+        statistics exactly as trained.
+        """
+        self._value_norm_training = bool(enabled)
 
     def _encode_subgoal(self, image: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         """Encode the reached observation -> (B, obs_feature_dim).
@@ -334,6 +510,17 @@ class PushTSearchMixin:
         # simulate the EXECUTED chunk from the CURRENT state (see _verifier_inputs);
         # neither is the default the verifier would pick on its own.
         now, exec_action = self._verifier_inputs(obs_dict, action)
+
+        if is_q_value(self._verifier_value_mode(self.search_kwargs)):
+            # A learned Q has no reached state and no reached frame, so the two things the
+            # branches below are built out of do not exist. The context here is the RAW score;
+            # `_normalize_q` turns it into the running z-score the model conditions on.
+            # `terms` is None: it exists for a cross-candidate value to re-weight, and no
+            # learned value decomposes.
+            value = verifier.get_value(now, exec_action)              # (B,)
+            # context is the running z-score, `value` stays RAW and is what argmax ranks on
+            # -- the same split as every other value here (see _normalize_value).
+            return self._normalize_q(value), value, None, None
 
         # always rollout, never get_value: the two cost the same (get_value is literally
         # rollout(...)[0]) and rollout also returns the reached state, which every mode

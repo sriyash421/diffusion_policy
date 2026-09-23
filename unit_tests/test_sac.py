@@ -362,11 +362,34 @@ def test_keypoint_arm_needs_no_simulation(obs_dict):
 
 def test_q_verifier_refuses_a_value_it_does_not_implement():
     """Silently accepting `armTn` and returning the Q is how an evaluation ends up labelled
-    with a ranking it did not use."""
-    with pytest.raises(AssertionError, match="one value"):
-        from sac.score import PushTQVerifier
+    with a ranking it did not use.
 
-        PushTQVerifier.__init__(object.__new__(PushTQVerifier), "x", value_fn="armTn")
+    The accepted set widened when the learned values got names: `q` (the eval path, handed an
+    explicit --q) and every `pusht_verifier.Q_VERIFIERS` key (the training path, where the
+    name IS the checkpoint). What must stay refused is a value of a DIFFERENT KIND -- a
+    simulated one.
+    """
+    from diffusion_policy.env.pusht.pusht_verifier import VALUE_FNS
+    from sac.score import PushTQVerifier
+
+    for simulated in VALUE_FNS:
+        with pytest.raises(AssertionError, match="learned Q"):
+            PushTQVerifier.__init__(object.__new__(PushTQVerifier), "x", value_fn=simulated)
+
+
+def test_q_verifier_accepts_a_registered_name():
+    """A registry name must reach the constructor -- it is how a training run names its Q.
+
+    Checked by getting PAST the assert (the next failure is the missing weights file at "x"),
+    not by constructing one: that would load an 8.8MB checkpoint per name.
+    """
+    from diffusion_policy.env.pusht.pusht_verifier import Q_VERIFIERS
+    from sac.score import PushTQVerifier
+
+    for name in ("q",) + tuple(Q_VERIFIERS):
+        with pytest.raises(Exception) as exc:
+            PushTQVerifier.__init__(object.__new__(PushTQVerifier), "x", value_fn=name)
+        assert "learned Q" not in str(exc.value), f"{name} was refused by the value_fn assert"
 
 
 # ---------------------------------------------------------------- the buffer and the backup
@@ -783,3 +806,187 @@ def test_demo_seeding_is_restricted_to_the_split():
 
     # and none of it is an episode the sweep scores on
     assert not (set(int(i) for i in train_idxs) & set(int(i) for i in test_idxs))
+
+
+def test_rank_expert_episode_override_is_the_complement_of_the_seeded_demos():
+    """`--episodes-from` must name the demos Q was NOT seeded from, whatever the POLICY held out.
+
+    `rank-expert` resolves episodes through the ST/BC checkpoint's own manifest, which answers
+    "what did this policy hold out" -- a different question from "what did this Q never see".
+    The two partition the same 206 episodes differently, so without the override a Q ranking is
+    reported against an episode set that has no relation to its replay buffer. This pins the
+    override to the exact complement, because an off-by-one split name (`val` alone, say) would
+    still produce a plausible-looking number over a contaminated set.
+    """
+    import json
+
+    from recurrent_ppo.eval_episodes import states_from_manifest
+
+    split = "diffusion_policy/config/splits/pusht_seed42_train106_val50.json"
+    resolved = sorted({int(i) for name in ("val", "test")
+                       for i in states_from_manifest(split, name)[1]})
+    manifest = json.loads(open(split).read())
+
+    assert len(resolved) == 100, f"expected the 100 non-seeded demos, got {len(resolved)}"
+    assert set(resolved) == set(manifest["val"]) | set(manifest["test"])
+    # the whole point: no episode here was ever preloaded into a `demo_episodes=train` buffer
+    assert not set(resolved) & set(manifest["train"])
+    assert len(set(resolved) | set(manifest["train"])) == manifest["n_episodes"] == 206
+
+
+# ---------------------------------------------------------------- the hold-out guard
+SPLITS = "diffusion_policy/config/splits/"
+BLQ137 = SPLITS + "pusht_blockquad_bottomleft_train137.json"
+BRD100 = SPLITS + "pusht_blockborder_train100_core50.json"
+BRD60 = SPLITS + "pusht_blockborder_train60_core50.json"
+
+
+def _fake_run(tmp_path, name, **args):
+    """A run directory with only the params/args.yaml the guard reads."""
+    import yaml
+
+    d = tmp_path / name
+    (d / "params").mkdir(parents=True)
+    (d / "params" / "args.yaml").write_text(yaml.safe_dump(args))
+    return str(d)
+
+
+def test_the_holdout_guard_catches_a_cross_family_q(tmp_path):
+    """A Q may only score episodes its replay buffer was never seeded from.
+
+    The failure this prevents is silent and flatters the Q: it has already seen the transitions
+    it is being asked to rank, while `t_goal` has no training set at all, so the comparison
+    reads as a win for the wrong reason. Nothing in the output would have said so.
+
+    The brd60 row is the one that needs the argument. brd60 and brd100 are the same blockborder
+    family -- brd60.train is a strict SUBSET of brd100.train and their TEST sets are the same 50
+    interior episodes -- so the brd100 Q holds out brd60's test set exactly as cleanly as its
+    own. That is why no separate brd60 Q is trained. It does NOT extend to brd60's val, every
+    episode of which is inside brd100.train, which is why `--split test` is a precondition
+    rather than a default.
+    """
+    from recurrent_ppo.eval_episodes import states_from_manifest
+    from sac.score import assert_held_out, held_out_report
+
+    q = _fake_run(tmp_path, "brd100", demo_seed_frac=1.0, demo_episodes="train",
+                  split_file=BRD100)
+
+    def idxs(manifest, split):
+        return states_from_manifest(manifest, split)[1]
+
+    for manifest, split in ((BRD100, "test"), (BRD60, "test")):
+        rep = assert_held_out(q, idxs(manifest, split))
+        assert rep["held_out"] and rep["n_overlap"] == 0
+
+    # blq137 cuts the same 206 episodes differently, so its test set is half inside brd100.train
+    with pytest.raises(SystemExit):
+        assert_held_out(q, idxs(BLQ137, "test"))
+    assert held_out_report(q, idxs(BLQ137, "test"))["n_overlap"] == 29
+
+    # the trap: brd60's val is ENTIRELY inside brd100's train
+    with pytest.raises(SystemExit):
+        assert_held_out(q, idxs(BRD60, "val"))
+    assert held_out_report(q, idxs(BRD60, "val"))["n_overlap"] == 40
+
+
+def test_the_holdout_guard_flags_demo_episodes_all(tmp_path):
+    """`--demo-episodes all` means EVERY eval episode is in the buffer, and must say so.
+
+    That run exists on purpose and its numbers are still worth having, so the guard refuses
+    rather than deletes: --allow-contaminated records the contamination in the report beside
+    the number instead of hiding it.
+    """
+    from recurrent_ppo.eval_episodes import states_from_manifest
+    from sac.score import assert_held_out, demo_train_episodes
+
+    q = _fake_run(tmp_path, "all206", demo_seed_frac=1.0, demo_episodes="all",
+                  split_file=BLQ137)
+    assert demo_train_episodes(q) is None, "'all' must mean every episode, not an empty set"
+
+    idxs = states_from_manifest(BRD100, "test")[1]
+    with pytest.raises(SystemExit):
+        assert_held_out(q, idxs)
+    rep = assert_held_out(q, idxs, allow=True)
+    assert rep["n_overlap"] == len(idxs)
+    assert rep["allowed_contaminated"] and not rep["held_out"]
+
+
+def test_the_guard_ignores_a_run_that_records_no_demo_seeding(tmp_path):
+    """A PPO or BC run seeds no replay buffer, and must not be read as maximally contaminated.
+
+    Its args.yaml has no `demo_seed_frac` key at all. Resolving the config as
+    `dict(SAC_DEFAULTS, **saved)` would fill in `demo_episodes="all"` from the SAC defaults and
+    report a run that touched no demonstrations as having seen every episode -- so the guard
+    keys off key PRESENCE in the raw yaml, which is the only honest signal a foreign run gives.
+    """
+    from recurrent_ppo.eval_episodes import states_from_manifest
+    from sac.score import assert_held_out, demo_train_episodes
+
+    ppo = _fake_run(tmp_path, "ppo", obs="keypoint", reward="delta", n_stack=1)
+    assert demo_train_episodes(ppo) == set()
+    assert assert_held_out(ppo, states_from_manifest(BRD100, "test")[1])["held_out"]
+
+    off = _fake_run(tmp_path, "noseed", demo_seed_frac=0.0, demo_episodes="train",
+                    split_file=BRD100)
+    assert demo_train_episodes(off) == set()
+
+
+@pytest.mark.slow
+def test_a_pinned_manifest_episode_runs_to_completion_in_the_chunked_env():
+    """`score_on_states` must finish a chunked episode within the budget `policy` gives it.
+
+    THE UNIT IS THE WHOLE TEST. `ChunkPushTEnv` truncates itself after `max_episode_steps` BASE
+    steps, but one agent step is a CHUNK of eight of them -- so the wave budget is
+    `max_episode_steps // CHUNK + 1` (39), not 304. Passing the base count still terminates,
+    because the budget is only a loop bound, but it would be 8x too generous and the
+    "did not terminate" error would never fire when the env genuinely hung. Passing anything
+    below 39 hangs the wave and raises. Both directions are silent at the call site.
+
+    Also checks that the episode actually STARTED where the manifest said: `_pin` writes through
+    `set_wrapper_attr` and reads back, but the read-back lives in recurrent_ppo, and nothing
+    else asserts that the chunked env stack -- ChunkPushTEnv inside Monitor -- forwards it.
+    """
+    from recurrent_ppo.eval_episodes import _pin, score_on_states, states_from_manifest
+    from sac.config import CHUNK
+    from sac.env import build_chunk_vec_env, env_kwargs_from
+
+    n_envs = 2
+    states, _ = states_from_manifest(BRD100, "test")
+    states = states[:n_envs]
+
+    cfg = dict(D, obs="keypoint", block_near_goal_prob=0.0)
+    env = build_chunk_vec_env(obs_type="keypoint", n_envs=n_envs, seed=0, use_subproc=False,
+                              monitor_dir=None, aug=None,
+                              **dict(env_kwargs_from(cfg, "keypoint"),
+                                     block_near_goal_prob=0.0))
+    try:
+        started = [np.asarray(s, dtype=np.float64) for s in states]
+
+        class _Still:
+            """A do-nothing agent: the budget, not the policy, is what is under test."""
+
+            def predict(self, obs, state=None, episode_start=None, deterministic=True):
+                return np.zeros((n_envs, env.action_space.shape[0]), dtype=np.float32), None
+
+        budget = cfg["max_episode_steps"] // CHUNK + 1
+        rows = score_on_states(_Still(), env, states, n_envs, max_steps=budget)
+        assert len(rows) == len(states)
+        assert all({"return", "is_success", "max_reward"} <= set(r) for r in rows)
+
+        # The pin reached the INNER env, checked where it is meaningful: on the observation of a
+        # fresh reset. Reading `reset_to_state` back after the wave says nothing -- a VecEnv
+        # auto-resets the instant an episode ends, so by then the attribute has been consumed.
+        # The keypoint obs is 9 block keypoints then agent xy, normalised by p/(WS/2) - 1.
+        _pin(env, started)
+        obs = env.reset()
+        want = np.stack([s[:2] for s in started]) / (WS / 2) - 1.0
+        assert np.allclose(obs[:, 18:20], want, atol=1e-4), (
+            f"episode did not begin at the manifest's recorded state: "
+            f"{obs[:, 18:20]} != {want}")
+
+        # the budget covers a full episode measured in CHUNKS, and is nowhere near the base-step
+        # count -- 39 against 304, so passing the latter is 8x too generous rather than too tight
+        assert budget >= cfg["max_episode_steps"] / CHUNK
+        assert budget < cfg["max_episode_steps"]
+    finally:
+        env.close()

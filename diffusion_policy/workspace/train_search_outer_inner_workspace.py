@@ -364,6 +364,13 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             # One collector instance for the whole run, refreshed in place each outer step.
             # Deep-copying the ResNet18 + transformer per outer step would churn ~100MB of
             # allocations a few thousand times over a 100k-step run for no benefit.
+            # The running value normalizer advances only while the training loop is driving.
+            # It is NOT gated on `self.training`: this trainer generates its context under
+            # policy.eval() (_fill_context_buffer), which is exactly when it must update. Off
+            # by default, so any eval or analysis script that loads a checkpoint normalizes
+            # with the statistics the arm trained under.
+            if hasattr(self.accelerator.unwrap_model(self.model), 'set_value_norm_training'):
+                self.accelerator.unwrap_model(self.model).set_value_norm_training(True)
             collector = _clone_policy(self.accelerator.unwrap_model(self.model))
             collector.eval()
             collector.requires_grad_(False)
@@ -440,6 +447,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         lr_scheduler.step()
                         if ema is not None:
                             ema.step(policy)
+                            # EMAModel averages parameters and never copies BUFFERS, so the running
+                            # value-normalizer statistics would stay at their construction values on
+                            # the EMA copy -- which is the copy evaluation scores. No-op on every arm
+                            # that has no learned-Q normalizer.
+                            if hasattr(ema.averaged_model, 'sync_value_norm_from'):
+                                ema.averaged_model.sync_value_norm_from(policy)
                         self.global_step += 1
 
                         loss_cpu = raw_loss.item()

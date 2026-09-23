@@ -277,6 +277,11 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             # will not reap. Register its shutdown so it is released on normal exit and on
             # exceptions alike, as the other two workspaces already do.
             stack.callback(self._close_worker_pools, env_runner)
+            # The running value normalizer advances only while the training loop is driving;
+            # off by default so an eval script normalizes with the statistics the arm trained
+            # under. No-op on every arm without a learned-Q verifier.
+            if hasattr(self.accelerator.unwrap_model(self.model), 'set_value_norm_training'):
+                self.accelerator.unwrap_model(self.model).set_value_norm_training(True)
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
@@ -341,6 +346,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             lr_scheduler.step()
                         if cfg.training.use_ema:
                             ema.step(self.accelerator.unwrap_model(self.model))
+                            # EMAModel averages parameters and never copies BUFFERS, so the running
+                            # value-normalizer statistics would stay at their construction values on
+                            # the EMA copy -- which is the copy evaluation scores. No-op on every arm
+                            # that has no learned-Q normalizer.
+                            if hasattr(ema.averaged_model, 'sync_value_norm_from'):
+                                ema.averaged_model.sync_value_norm_from(self.accelerator.unwrap_model(self.model))
                         raw_loss_cpu = raw_loss.item()
                         tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
                         train_losses.append(raw_loss_cpu)

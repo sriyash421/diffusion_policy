@@ -605,6 +605,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             # what actually makes it exact.
             max_gradient_steps = cfg.training.get('max_gradient_steps', None)
             stop_training = False
+            # The running value normalizer advances only while the training loop is driving;
+            # off by default so an eval script normalizes with the statistics the arm trained
+            # under. No-op on every arm without a learned-Q verifier.
+            if hasattr(self.accelerator.unwrap_model(self.model), 'set_value_norm_training'):
+                self.accelerator.unwrap_model(self.model).set_value_norm_training(True)
             for local_epoch_idx in range(cfg.training.num_epochs):
                 if max_gradient_steps is not None \
                     and self.global_step >= max_gradient_steps:
@@ -669,6 +674,12 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             if ema is not None:
                                 # per OPTIMIZER step, not per batch
                                 ema.step(self.accelerator.unwrap_model(self.model))
+                                # EMAModel averages parameters and never copies BUFFERS, so the running
+                                # value-normalizer statistics would stay at their construction values on
+                                # the EMA copy -- which is the copy evaluation scores. No-op on every arm
+                                # that has no learned-Q normalizer.
+                                if hasattr(ema.averaged_model, 'sync_value_norm_from'):
+                                    ema.averaged_model.sync_value_norm_from(self.accelerator.unwrap_model(self.model))
                             # global_step is exactly the number of optimizer steps taken,
                             # which is what checkpoint_every and step_*.ckpt names mean.
                             self.global_step += 1

@@ -104,9 +104,16 @@ def obs_for_arm(obs_dict, obs_type):
 class PushTQVerifier:
     """A trained Q, with PushTVerifier's interface.
 
-    `value_fn` is accepted and ignored: this verifier has exactly one value, the learned Q, and
-    silently accepting `armTn` while returning something else is how an evaluation ends up
-    labelled with a ranking it did not use. Anything but 'q' raises.
+    `value_fn` names WHICH Q, and is otherwise inert: this verifier has exactly one value, the
+    learned Q, and silently accepting `armTn` while returning something else is how an
+    evaluation ends up labelled with a ranking it did not use. So only the bare `'q'` (the
+    eval path, which is handed an explicit `--q <path>`) and the registered names of
+    `pusht_verifier.Q_VERIFIERS` (the training path, where the name IS the path) are accepted;
+    anything else raises.
+
+    THE NAME IS NOT CHECKED AGAINST THE CHECKPOINT. `Q_VERIFIERS` is the one binding between
+    them and `q_verifier_spec` is what reads it; re-deriving the mapping here would be a second
+    copy of it. This assert only refuses a name that belongs to a DIFFERENT KIND of verifier.
     """
 
     AGENT_DIM = 2
@@ -117,7 +124,11 @@ class PushTQVerifier:
         from sac.config import DEFAULTS
         from sac.agent import ChunkSAC
 
-        assert value_fn == "q", f"PushTQVerifier has one value, 'q'; got {value_fn!r}"
+        from diffusion_policy.env.pusht.pusht_verifier import Q_VERIFIERS
+
+        assert value_fn == "q" or value_fn in Q_VERIFIERS, (
+            f"PushTQVerifier scores a learned Q; 'q' or one of {sorted(Q_VERIFIERS)} names "
+            f"that, and {value_fn!r} does not.")
         import os
 
         saved = load_args(os.path.dirname(os.path.abspath(checkpoint))) or {}
@@ -127,8 +138,11 @@ class PushTQVerifier:
         self.tau_ladder = tuple(cfg["tau_ladder"])
         self.agent = ChunkSAC.load(checkpoint, device=device)
         self.agent.policy.set_training_mode(False)
-        self.value_fn = "q"
-        print(f"[INFO] PushTQVerifier: {self.obs_type} arm, "
+        # the name it was ASKED for, not a hardcoded 'q': the eval-side labelling reads
+        # this back, and flattening `q_sac_106` to `q` here is how a control run gets filed
+        # under the arm it was the control for.
+        self.value_fn = value_fn
+        print(f"[INFO] PushTQVerifier[{value_fn}]: {self.obs_type} arm, "
               f"ranking on tau={self.tau_ladder[self.rung]:.2f}")
 
     @th.no_grad()
@@ -185,3 +199,100 @@ class PushTQVerifier:
 
     def close(self):
         pass
+
+
+# ==================================================================== the hold-out guard
+#
+# A Q trained on demonstrations can be handed ANY checkpoint's held-out episodes, and until this
+# existed nothing checked that the two manifests were disjoint. The failure is silent and in the
+# flattering direction: the Q has seen the very transitions it is being asked to rank, and the
+# heuristic it is compared against has no training set at all, so the comparison reads as a win.
+#
+# The three groups this is built for:
+#   blq137 ckpts  <- the blq137 Q    0 overlap
+#   brd100 ckpts  <- the brd100 Q    0 overlap
+#   brd60  ckpts  <- the brd100 Q    0 overlap, because brd60.test IS brd100.test and
+#                                    brd60.train is a strict subset of brd100.train
+# and the two it must refuse: blq137 test under the brd100 Q (29 episodes), and brd60 VAL under
+# the brd100 Q (all 40) -- the val case is why `--split test` is not merely a convention here.
+
+
+def _run_dir_of(run_or_ckpt):
+    """The run directory, whether given one or a checkpoint inside it.
+
+    The same resolution `PushTQVerifier.__init__` uses, so the guard and the verifier can never
+    disagree about which run a checkpoint belongs to.
+    """
+    import os
+
+    p = os.path.abspath(run_or_ckpt)
+    return p if os.path.isdir(p) else os.path.dirname(p)
+
+
+def demo_train_episodes(run_or_ckpt):
+    """Episodes that seeded this run's replay buffer. `None` means EVERY episode.
+
+    Read off the RAW args.yaml, never off `dict(DEFAULTS, **saved)`: a PPO or BC run records no
+    `demo_seed_frac`, and merging the SAC defaults over it would invent `demo_episodes="all"`
+    and report a run that seeds no demonstrations at all as maximally contaminated. Key
+    PRESENCE is the test for "is this a demo-seeded SAC run", because its absence is the only
+    honest signal a foreign run gives.
+    """
+    from recurrent_ppo.run_io import load_args
+
+    saved = load_args(_run_dir_of(run_or_ckpt)) or {}
+    if "demo_seed_frac" not in saved:
+        return set()                                   # not a demo-seeding run
+    if float(saved.get("demo_seed_frac", 0.0)) <= 0.0:
+        return set()                                   # seeding switched off
+    if saved.get("demo_episodes", "all") == "all":
+        return None                                    # every episode, including every eval one
+    from recurrent_ppo.eval_episodes import states_from_manifest
+
+    _, idxs = states_from_manifest(saved["split_file"], "train")
+    return {int(i) for i in idxs}
+
+
+def held_out_report(run_or_ckpt, episode_idxs):
+    """What the guard knows, as a dict -- so it can ride in the output JSON beside the numbers.
+
+    A result that cannot say whether it was held out is a result nobody can weigh later.
+    """
+    from recurrent_ppo.run_io import load_args
+
+    saved = load_args(_run_dir_of(run_or_ckpt)) or {}
+    seen = demo_train_episodes(run_or_ckpt)
+    asked = [int(i) for i in episode_idxs]
+    overlap = sorted(asked) if seen is None else sorted(set(asked) & seen)
+    return {"run_dir": _run_dir_of(run_or_ckpt),
+            "demo_episodes": saved.get("demo_episodes"),
+            "demo_split_file": saved.get("split_file"),
+            "seeded_from_all_episodes": seen is None,
+            "n_scored": len(asked),
+            "n_overlap": len(overlap),
+            "overlap": overlap,
+            "held_out": len(overlap) == 0}
+
+
+def assert_held_out(run_or_ckpt, episode_idxs, allow=False):
+    """Refuse to score `episode_idxs` with a Q whose buffer contains them. -> held_out_report.
+
+    `allow` (the callers' --allow-contaminated) is the deliberate escape hatch, and it is
+    recorded in the returned report rather than merely permitted: the all-206 `sac_keypoint` run
+    can still be measured, and its numbers stay distinguishable from the held-out ones on a
+    shared plot.
+    """
+    rep = dict(held_out_report(run_or_ckpt, episode_idxs), allowed_contaminated=bool(allow))
+    if rep["held_out"] or allow:
+        return rep
+    where = ("seeded from ALL episodes" if rep["seeded_from_all_episodes"]
+             else f"seeded from {rep['demo_split_file']}'s train split")
+    raise SystemExit(
+        f"[ERROR] {rep['n_overlap']} of the {rep['n_scored']} episodes being scored are in this "
+        f"Q's replay buffer.\n"
+        f"  Q run: {rep['run_dir']} ({where})\n"
+        f"  overlapping episodes: {rep['overlap']}\n"
+        "The Q has seen these transitions and the heuristic it is compared against has no "
+        "training set at all, so the comparison would read as a win for the wrong reason. "
+        "Score a manifest this Q holds out, or pass --allow-contaminated to record the number "
+        "with the contamination declared beside it.")

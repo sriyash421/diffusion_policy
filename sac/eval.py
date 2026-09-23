@@ -37,9 +37,11 @@ from diffusion_policy.common.replay_buffer import ReplayBuffer                # 
 from diffusion_policy.env.pusht.feedback_util import (compute_feedback_from_pose,   # noqa: E402
                                                       t_goal_distance)
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv          # noqa: E402
+from diffusion_policy.env.pusht.pusht_verifier import (Q_VERIFIERS,            # noqa: E402
+                                                       is_q_value, q_verifier_spec)
 from eval_search_pusht import (_eval_split_at_n, build_envs, get_split_states,  # noqa: E402
                                load_policy)
-from sac.score import PushTQVerifier                                          # noqa: E402
+from sac.score import PushTQVerifier, assert_held_out                         # noqa: E402
 from scripts.astar_uniform_walk import expert_moved
 from scripts.verifier_ranks_expert import (BLIND, CLASSES, T_GOAL, _stats,    # noqa: E402
                                            build_batch, classify, sample_points)
@@ -152,12 +154,20 @@ def set_sim_value(policy, value_fn):
 @click.option('--episodes', default=20, show_default=True)
 @click.option('--per-episode', default=8, show_default=True)
 @click.option('--split', type=click.Choice(['val', 'test']), default='test', show_default=True)
+@click.option('--episodes-from', default=None,
+              help='a split manifest whose episodes to score instead of the CHECKPOINT\'s own '
+                   'split. Use when the held-out set is defined by something other than the '
+                   'policy -- e.g. the demos a learned Q was NOT seeded from.')
+@click.option('--episodes-split', default='val,test', show_default=True,
+              help='comma-separated splits of --episodes-from, unioned. Ignored without it.')
 @click.option('--batch', default=8, show_default=True)
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
+@click.option('--allow-contaminated', is_flag=True,
+              help="score episodes the Q's replay buffer was seeded from, with that recorded")
 @click.option('--out', default=None, help='write the stats as JSON here')
-def rank_expert(checkpoint, q_ckpt, v_ckpt, arm, n_actions, episodes, per_episode, split, batch,
-                device, seed, out):
+def rank_expert(checkpoint, q_ckpt, v_ckpt, arm, n_actions, episodes, per_episode, split,
+                episodes_from, episodes_split, batch, device, seed, allow_contaminated, out):
     """Where the EXPERT action ranks among the policy's candidates, under both verifiers.
 
     Best-of-n is only as good as the thing ranking, and the only ground truth for "good action"
@@ -181,12 +191,34 @@ def rank_expert(checkpoint, q_ckpt, v_ckpt, arm, n_actions, episodes, per_episod
     To, Ta, H = policy.n_obs_steps, policy.n_action_steps, cfg.policy.horizon
 
     run_dir = pathlib.Path(checkpoint).resolve().parent.parent
-    _, ep_idxs = get_split_states(cfg, split, run_dir=run_dir)      # ST's OWN held-out episodes
+    if episodes_from:
+        # A HELD-OUT SET THE POLICY DOES NOT DEFINE. `get_split_states` answers "what did THIS
+        # checkpoint hold out", which is the wrong question when the thing being evaluated is a
+        # verifier trained on its own partition: Q's hold-out is the demos its replay buffer was
+        # never seeded from, and that manifest has nothing to do with the policy's.
+        # `states_from_manifest` rather than a json.load, so a manifest built against a different
+        # dataset raises here instead of silently indexing into different frames.
+        from recurrent_ppo.eval_episodes import states_from_manifest
+
+        wanted = [t.strip() for t in episodes_split.split(',') if t.strip()]
+        ep_idxs = sorted({int(i) for t in wanted
+                          for i in states_from_manifest(episodes_from, t)[1]})
+        src = f'{pathlib.Path(episodes_from).name}:{"+".join(wanted)}'
+    else:
+        _, ep_idxs = get_split_states(cfg, split, run_dir=run_dir)  # ST's OWN held-out episodes
+        src = f'checkpoint split:{split}'
     ep_idxs = list(ep_idxs)[:episodes]
+    # AFTER the truncation, because --episodes scores a prefix and guarding the whole split
+    # would clear a wider set than the numbers come from. --episodes-from makes this the load-
+    # bearing check rather than a formality: it will point at ANY manifest it is given,
+    # including one this Q's buffer was seeded from.
+    held_out = ({} if q_ckpt is None
+                else assert_held_out(q_ckpt, ep_idxs, allow=allow_contaminated))
     rb = ReplayBuffer.copy_from_path(cfg.task.dataset.zarr_path,
                                      keys=['img', 'agent_pos', 'action', 'block_pos'])
     pts = sample_points(rb, ep_idxs, per_episode, To, H, np.random.default_rng(seed))
-    print(f'{arm}: {len(pts)} decision points from {len(ep_idxs)} {split} episodes, n={n_actions}')
+    print(f'{arm}: {len(pts)} decision points from {len(ep_idxs)} episodes '
+          f'({src}), n={n_actions}')
 
     sim_star, sim_cand, t_cand, ep_of, ref_of = [], [], [], [], []
     learned_star = {k: [] for k in learned}
@@ -247,8 +279,14 @@ def rank_expert(checkpoint, q_ckpt, v_ckpt, arm, n_actions, episodes, per_episod
         scores[name] = (np.concatenate(learned_star[name]),
                         np.concatenate(learned_cand[name]))
 
+    # episodes_from/_split RECORDED, not just used: a rank JSON whose episode set cannot be
+    # attributed is a number that cannot be compared to anything later.
     report = {'checkpoint': checkpoint, 'q': q_ckpt, 'v': v_ckpt, 'arm': arm, 'n': n_actions,
-              'split': split, 'episodes': len(ep_idxs), 'decisions': int(len(eps)),
+              'split': split, 'episodes_from': episodes_from,
+              'episodes_split': episodes_split if episodes_from else None,
+              'episode_idxs': [int(i) for i in ep_idxs],
+              'episodes': len(ep_idxs), 'decisions': int(len(eps)),
+              'held_out': held_out,
               'class_fractions': {c: float((cls == c).mean()) for c in CLASSES},
               'phase_fractions': {p: float((phase == p).mean())
                                   for p in ('block_still', 'block_moving')}}
@@ -428,11 +466,24 @@ def frames(checkpoint, q_ckpt, n_actions, n_frames, episode, split, device, seed
     print(f"wrote {outdir}/frames.png, values.png, values.json")
 
 
+def _q_paths(rankers, q_ckpt):
+    """{ranker name: checkpoint} for every Q in this sweep. A registry name resolves itself."""
+    paths = dict()
+    for r in rankers:
+        if r == 'q' and q_ckpt is not None:
+            paths[r] = q_ckpt
+        elif is_q_value(r):
+            paths[r] = q_verifier_spec(r)[0]
+    return paths
+
+
 @cli.command("bon-sweep")
 @click.option('-c', '--checkpoint', required=True)
 @click.option('--q', 'q_ckpt', default=None, help='SAC checkpoint; required if `q` is a ranker')
 @click.option('--rankers', default='q,t_goal,armTn', show_default=True,
-              help='comma-separated: any of q, v, t_goal, d_t_goal, armTn')
+              help='comma-separated: any of q, v, t_goal, d_t_goal, armTn, or a '
+                   'pusht_verifier.Q_VERIFIERS name (q_sac_all, q_sac_106) which resolves '
+                   'its own checkpoint and needs no --q')
 @click.option('--v', 'v_ckpt', default=None,
               help='PPO checkpoint; required if `v` is a ranker. Its V is evaluated at the '
                    'state each candidate chunk reaches.')
@@ -442,11 +493,22 @@ def frames(checkpoint, q_ckpt, n_actions, n_frames, episode, split, device, seed
 @click.option('--max-steps', default=300, show_default=True)
 @click.option('--episodes', default=None, type=int, help='cap, for a smoke run')
 @click.option('--skip-context-sim', is_flag=True, help='BC only: it ignores the search context')
+@click.option('--selection', type=click.Choice(['argmax', 'softmax', 'index', 'final_pass']),
+              default=None,
+              help="readout rule; default leaves the checkpoint's own. `final_pass` returns the "
+                   "n'th generation conditioned on the other n-1 and SELECTS NOTHING, so it is "
+                   'the verifier-off control: every ranker must give the same curve under it.')
+@click.option('--selection-index', default=None, type=int,
+              help='1-based slot for --selection index; negative counts from the end')
+@click.option('--selection-temperature', default=1.0, show_default=True)
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
+@click.option('--allow-contaminated', is_flag=True,
+              help="score episodes the Q's replay buffer was seeded from, with that recorded")
 @click.option('-o', '--out', default='sac_eval/bon_sweep', show_default=True)
 def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_steps, episodes,
-         skip_context_sim, device, seed, out):
+         skip_context_sim, selection, selection_index, selection_temperature,
+         device, seed, allow_contaminated, out):
     """The headline: does the learned Q improve a policy through best-of-N?
 
     n in {1..64} on ST and BC, ranked by the learned Q and by the sim heuristics it replaces, on
@@ -460,18 +522,39 @@ def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_ste
     if not hasattr(policy, 'predict_action_best'):
         raise SystemExit(f'{type(policy).__name__} has no predict_action_best, so best-of-n is '
                          'undefined for it.')
+    # Selection is a pure READOUT rule -- which of the n generations is executed -- so it is
+    # swappable on trained weights, exactly as `eval_search_pusht.eval_checkpoint` does it.
+    if selection is not None:
+        policy.selection = selection
+        policy.selection_temperature = float(selection_temperature)
+        policy.selection_index = selection_index
     rankers = tuple(r.strip() for r in str(rankers).split(',') if r.strip())
     states, idxs = get_split_states(cfg, split, pathlib.Path(checkpoint).resolve().parent.parent)
     if episodes:
         states, idxs = states[:episodes], idxs[:episodes]
+    # EVERY Q IN THE SWEEP IS CHECKED, not just --q. A registry name carries its own
+    # checkpoint, so keying the contamination guard on `q_ckpt` alone would let
+    # `--rankers q_sac_all` (no --q) skip it entirely -- and q_sac_all is precisely the one
+    # seeded from all 206 episodes.
+    held_out = {name: assert_held_out(path, idxs, allow=allow_contaminated)
+                for name, path in _q_paths(rankers, q_ckpt).items()}
     n_list = [2 ** k for k in range(int(np.log2(max_n)) + 1)]
     print(f'[INFO] {len(idxs)} {split} episodes, n in {n_list}, rankers {list(rankers)}')
 
-    q = PushTQVerifier(q_ckpt, device=device) if 'q' in rankers else None
+    # A NAMED Q CARRIES ITS OWN CHECKPOINT. `--rankers q --q <path>` still works and is what
+    # an unregistered one-off needs; `--rankers q_sac_all` resolves through the registry
+    # instead, which is what makes the curve's own label say WHICH Q produced it rather than
+    # leaving that to the output directory the launcher happened to choose.
     if 'q' in rankers and q_ckpt is None:
-        raise SystemExit('--q is required when `q` is among the rankers')
+        raise SystemExit('--q is required when the bare `q` is among the rankers (a named '
+                         f'{sorted(Q_VERIFIERS)} resolves its own checkpoint)')
     if 'v' in rankers and v_ckpt is None:
         raise SystemExit('--v is required when `v` is among the rankers')
+    qs = dict()
+    for r, path in _q_paths(rankers, q_ckpt).items():
+        rung = -1 if r == 'q' else q_verifier_spec(r)[1]
+        qs[r] = PushTQVerifier(path, rung=rung, value_fn=r, device=device)
+    q = qs.get('q')
     vv = None
     if 'v' in rankers:
         from recurrent_ppo.value_score import PushTVVerifier
@@ -485,26 +568,44 @@ def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_ste
     try:
         for ranker in rankers:
             restore = None
-            if ranker == 'q':
-                restore = install_q_ranker(policy, q, skip_context_sim)
+            if ranker in qs:
+                restore = install_q_ranker(policy, qs[ranker], skip_context_sim)
             elif ranker == 'v':
                 restore = install_v_ranker(policy, vv)
             else:
                 set_sim_value(policy, ranker)
             try:
-                rates, cis = [], []
+                rates, cis, means, per_ep, covs, per_cov = [], [], [], [], [], []
                 for n in n_list:
                     # the SAME per-episode noise under every ranker, so the arms are paired
                     torch.manual_seed(seed)
                     np.random.seed(seed)
-                    rate, ci, _ = _eval_split_at_n(env, policy, states, device, n,
-                                                   min(n_envs, len(idxs)), seed,
-                                                   label=f'{ranker} n={n}')
+                    rate, ci, rew = _eval_split_at_n(env, policy, states, device, n,
+                                                     min(n_envs, len(idxs)), seed,
+                                                     label=f'{ranker} n={n}')
                     rates.append(float(rate))
                     cis.append([float(ci[0]), float(ci[1])])
+                    # MEAN MAX-REWARD AND THE PER-EPISODE VECTOR, beside the success rate.
+                    # REWARD, not coverage: `reward = clip(coverage / 0.95, 0, 1)`
+                    # (pusht_env.py:132) and success is `reward >= 1.0` (eval_search_pusht.py:412),
+                    # so this saturates at 1.0 and an episode at 0.99 is at coverage 0.94 -- just
+                    # under the line. Naming it coverage would misstate every value above 0.95.
+                    # The rate alone cannot say whether it moved because episodes crossed the
+                    # threshold or because they genuinely got worse; this pair can, and the
+                    # per-episode vector says WHICH episodes flipped between two n.
+                    means.append(float(np.nanmean(rew['max'])))
+                    per_ep.append([float(x) for x in rew['max']])
+                    # RAW goal coverage too. Reward saturates at 1.0 from 0.95 coverage up, so
+                    # a mean reward is right-censored exactly where the solved episodes are;
+                    # this is the uncensored quantity and the one success thresholds.
+                    covs.append(float(np.nanmean(rew['coverage'])))
+                    per_cov.append([float(x) for x in rew['coverage']])
                     print(f'  {ranker:<8} n={n:<3} success {rate:.3f} '
-                          f'[{ci[0]:.3f}, {ci[1]:.3f}]')
-                curves[ranker] = {'n': n_list, 'success': rates, 'ci': cis}
+                          f'[{ci[0]:.3f}, {ci[1]:.3f}]  mean_max_rew {means[-1]:.3f}'
+                          f'  mean_max_cov {covs[-1]:.3f}')
+                curves[ranker] = {'n': n_list, 'success': rates, 'ci': cis,
+                                  'mean_max_reward': means, 'per_episode_max': per_ep,
+                                  'mean_max_coverage': covs, 'per_episode_coverage': per_cov}
             finally:
                 if restore is not None:
                     restore()
@@ -512,7 +613,7 @@ def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_ste
         env.close()
         # vv TOO: PushTVVerifier holds a sim env of its own, and leaking it leaves a pygame
         # process per sweep.
-        for obj in (policy, q, vv):
+        for obj in (policy, *qs.values(), vv):
             close = getattr(obj, 'close', None)
             if close is not None:
                 try:
@@ -522,8 +623,14 @@ def bon_sweep(checkpoint, q_ckpt, rankers, v_ckpt, max_n, split, n_envs, max_ste
 
     # BOTH checkpoints recorded, not just q. A v-ranked curve whose JSON does not say which V
     # produced it is a number that cannot be attributed later.
-    report = {'checkpoint': checkpoint, 'q': q_ckpt, 'v': v_ckpt, 'split': split,
+    report = {'held_out': held_out,
+              'checkpoint': checkpoint, 'q': q_ckpt, 'v': v_ckpt, 'split': split,
+              # every Q actually used, keyed by the ranker name in `curves`. `q` above is
+              # only the --q path, which is null when every Q came from the registry.
+              'q_checkpoints': _q_paths(rankers, q_ckpt),
               'rankers': list(rankers), 'seed': seed, 'max_n': max_n,
+              'selection': selection or getattr(policy, 'selection', None),
+              'selection_index': selection_index,
               'episodes': [int(i) for i in idxs], 'curves': curves}
     (outdir / 'bon_curves.json').write_text(json.dumps(report, indent=2))
     _plot(curves, outdir / 'bon_curves.png', checkpoint)
@@ -560,6 +667,130 @@ def _plot(curves, path, title):
     fig.tight_layout()
     fig.savefig(path, dpi=140)
     plt.close(fig)
+
+
+# ==================================================================== the policy's own success
+@cli.command("policy")
+@click.argument('run_dir', type=click.Path(exists=True, file_okay=False))
+@click.option('-c', '--checkpoint', default=None,
+              help='one checkpoint inside RUN_DIR; default is every one on disk')
+@click.option('--watch', is_flag=True, help='keep polling RUN_DIR for new model_*_steps.zip')
+@click.option('--split-file', default=None, help="default: the run's own --split-file")
+@click.option('--split', type=click.Choice(['train', 'val', 'test']), default='test',
+              show_default=True)
+@click.option('--n-envs', default=10, show_default=True)
+@click.option('--stochastic', is_flag=True,
+              help='sample actions. A policy held up by its exploration noise scores very '
+                   'differently under the two, so this is worth running alongside the default.')
+@click.option('--allow-contaminated', is_flag=True,
+              help="score episodes this run's replay buffer contains, with that recorded")
+@click.option('-d', '--device', default='auto')
+@click.option('-o', '--out-dir', default=None, help='default: <run_dir>/policy_eval')
+@click.option('--poll-sec', default=60.0, show_default=True)
+@click.option('--idle-exit-sec', default=None, type=float,
+              help='exit after this long with no new checkpoint (watch mode)')
+@click.option('--redo', is_flag=True, help='re-score steps already in the results file')
+def policy(run_dir, checkpoint, watch, split_file, split, n_envs, stochastic,
+           allow_contaminated, device, out_dir, poll_sec, idle_exit_sec, redo):
+    """Success rate on the MANIFEST's held-out episodes, per checkpoint.
+
+    The run's own `eval/success_rate` is seeded PROCEDURAL resets -- fixed in ST's style, not
+    ST's set. This rolls the recorded first frame of each episode the manifest holds out, which
+    is what every offline arm is scored on, so the numbers are comparable across families.
+
+    `max_reward` (max coverage) is that cross-family number. `return` here is the chunk-
+    discounted sparse sum and is NOT comparable with the PPO arms' `--reward delta` return,
+    whose telescoping sum means something else entirely.
+
+    Nothing here nominates a best checkpoint. It records one row per step, and which step to
+    read is a decision made outside this file.
+    """
+    import os
+    import time
+
+    from recurrent_ppo.eval_episodes import score_on_states, states_from_manifest
+    from recurrent_ppo.run_io import load_args
+    from recurrent_ppo.corrupt_policy import aug_for
+    from recurrent_ppo.scripts.eval_checkpoints import checkpoints as list_checkpoints
+    from sac.agent import ChunkSAC
+    from sac.config import CHUNK, DEFAULTS
+    from sac.env import build_chunk_vec_env, env_kwargs_from
+    from sac.score import assert_held_out
+    from eval_bc_keypoint_pusht import append_row, read_rows
+
+    cfg = dict(DEFAULTS, **(load_args(run_dir) or {}))
+    manifest = split_file or cfg["split_file"]
+    # no zarr_path=: a SAC args.yaml records no `demo_zarr` (a PPO one does), and the default
+    # is the same DEMO_ZARR every other path in this package reads
+    states, ep_idxs = states_from_manifest(manifest, split)
+    held_out = assert_held_out(run_dir, ep_idxs, allow=allow_contaminated)
+    print(f"[INFO] {len(states)} {split} episodes from {manifest}; "
+          f"held_out={held_out['held_out']} (overlap {held_out['n_overlap']})")
+
+    out_root = out_dir or os.path.join(run_dir, "policy_eval")
+    aug = aug_for(cfg["obs"], corrupt_obs=False, render_size=cfg["render_size"], random_crop=True)
+    # monitor_dir=None is load-bearing: pointing it at run_dir would overwrite the TRAINING
+    # run's own env_*.monitor.csv, i.e. destroy the episode log of the thing being measured.
+    # block_near_goal_prob=0.0 is the real start distribution -- the curriculum is scaffolding
+    # for learning, never the task being reported.
+    env = build_chunk_vec_env(
+        obs_type=cfg["obs"], n_envs=n_envs, seed=cfg["seed"] + 10_000,
+        use_subproc=not cfg["dummy_vec_env"], monitor_dir=None, aug=aug,
+        **dict(env_kwargs_from(cfg, cfg["obs"]), block_near_goal_prob=0.0))
+    # CHUNK steps, not base steps: ChunkPushTEnv truncates itself at max_episode_steps BASE
+    # steps, i.e. that many eighths. Passing the base count still terminates, but the wave's
+    # "did not finish" error would be wrong by 8x and would not fire when it should.
+    max_steps = cfg["max_episode_steps"] // CHUNK + 1
+
+    def score_one(name):
+        """-> (step, result). The step comes from the CHECKPOINT, not its filename.
+
+        `checkpoints()` returns the numbered saves plus the run's final `model.zip`, whose name
+        carries no step at all -- parsing it gave -1 and wrote a bogus row sorting before every
+        real one. `num_timesteps` is what the agent itself recorded, so the final save lands on
+        its true step and `append_row` then replaces the identical numbered row rather than
+        duplicating it.
+        """
+        path = os.path.join(run_dir, name)
+        agent = ChunkSAC.load(path, env, device=device)
+        step = int(agent.num_timesteps)
+        env.seed(cfg["seed"] + 10_000)         # the same episodes in the same order, every time
+        rows = score_on_states(agent, env, states, n_envs,
+                               deterministic=not stochastic, max_steps=max_steps)
+        succ = [bool(r["is_success"]) for r in rows]
+        return step, {"checkpoint": name, "split": split, "split_file": manifest,
+                "deterministic": not stochastic, "held_out": held_out,
+                "success_rate": float(np.mean(succ)),
+                "n_success": int(np.sum(succ)), "n_episodes": len(rows),
+                "max_coverage": float(np.mean([r["max_reward"] for r in rows])),
+                "mean_return": float(np.mean([r["return"] for r in rows])),
+                "episodes": [dict(r, episode=int(i)) for r, i in zip(rows, ep_idxs)]}
+
+    try:
+        deadline = None
+        while True:
+            done = set() if redo else {r.get("checkpoint") for r in read_rows(out_root)}
+            todo = [checkpoint] if checkpoint else [n for n in list_checkpoints(run_dir)
+                                                   if n not in done]
+            for name in todo:
+                step, res = score_one(name)
+                append_row(out_root, step, res)
+                print(f"{name:26s} success {res['success_rate']:.3f} "
+                      f"({res['n_success']}/{res['n_episodes']})  "
+                      f"coverage {res['max_coverage']:.3f}", flush=True)
+            if not watch or checkpoint:
+                break
+            if todo:
+                deadline = None
+            elif idle_exit_sec is not None:
+                deadline = deadline or time.time() + idle_exit_sec
+                if time.time() >= deadline:
+                    print(f"[INFO] no new checkpoint for {idle_exit_sec}s; exiting")
+                    break
+            time.sleep(poll_sec)
+    finally:
+        env.close()
+    print(f"[INFO] wrote {out_root}/success_rates.jsonl")
 
 
 if __name__ == "__main__":

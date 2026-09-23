@@ -45,6 +45,19 @@ and one value that is NOT in ``VALUE_FNS`` because it is not a function of one c
   the ranking within one step is meaningful. It is EVAL-ONLY and never a ``verifier_tag``;
   see ``check_verifier_value``.
 
+and two values that are not functions of the reached state at all, because nothing is
+simulated to reach one:
+
+* ``'q_sac_all'`` / ``'q_sac_106'`` -- a trained SAC chunk-Q, scored by
+  ``sac.score.PushTQVerifier`` in one forward pass over (current state, chunk). They live in
+  ``Q_VERIFIERS``, which binds each name to its checkpoint so a run directory reading
+  ``ver-q_sac_all`` cannot have been scored by something else. ``_normalize_value`` CANNOT
+  mirror these -- there is no reached state to mirror from -- so the search context comes
+  from ``PushTSearchMixin._normalize_q`` instead. Unlike everything above they are
+  **not <= 0**: the Q is a discounted sparse-reward success probability, so it runs 0..1 and
+  is largest at the goal rather than 0 there. Higher is still better, so ``argmax`` is
+  unaffected.
+
 where the two terms (both ``feedback_util`` functions, both independently callable):
 
 * ``d_T->goal`` = ``t_goal_distance`` = mean per-keypoint distance of the achieved T from
@@ -196,6 +209,7 @@ ARM_T_SPREAD = 52.1
 ARM_TN_CONTEXT_SCALE = 7.65
 
 
+
 def value_arm_t_norm(agent_pos, feedback):
     """``-(T-to-goal/13.6 + arm-to-T/52.1)`` -- both terms normalized. (n,) from (n,2),(n,16).
 
@@ -331,13 +345,91 @@ BASE_VALUE_FN = {
     'armTd': 'armTn',
 }
 
-# Every string `verifier_value` accepts, per-candidate and cross-candidate alike.
-VERIFIER_VALUES = tuple(VALUE_FNS) + tuple(CROSS_CANDIDATE_VALUES)
+# LEARNED values: a trained SAC chunk-Q, scored by `sac.score.PushTQVerifier`. Not a
+# VALUE_FNS entry, and the reason is structural rather than bookkeeping -- a VALUE_FNS entry
+# is a pure function of the state the SIM REACHED, and this verifier does not simulate. It
+# scores (current state, chunk) in one forward pass and has no reached state to offer, so
+# `_normalize_value` cannot mirror it and the search context comes from
+# `PushTSearchMixin._normalize_q` instead.
+#
+# THE NAME BINDS THE CHECKPOINT, here, in code. `verifier_tag` is interpolated into
+# `run_name`, so a run directory reading `ver-q_sac_all` is a claim about which Q scored it;
+# resolving the path from a separate config key would let those two disagree silently. Same
+# invariant the VALUE_FNS names hold, same reason.
+#
+# `q_sac_all` vs `q_sac_106` is the replay-buffer control and the only difference between
+# them: sac_keypoint ran with `demo_episodes: all`, so every episode of every split seeded
+# its buffer and NOTHING it scores is held out from it; the demos106 archive seeded from the
+# 106 train episodes of pusht_seed42_train106_val50.json only. Their command.txt are
+# byte-identical -- the difference lives in params/args.yaml.
+#
+# Value: (checkpoint, rung) where rung indexes the run's own `tau_ladder`. -1 is the
+# strictest rung (tau=0.95), which is the coverage threshold the success rate counts.
+_VALUE_ARMS = '/gscratch/robotics/harine/value_arms'
+#
+# THE PER-SPLIT ARMS are the only entries whose buffer holds out what they score. Each was
+# trained with `--demo-episodes train --split-file <manifest>`, so that manifest's 50 test
+# episodes are absent from its replay buffer by construction rather than by argument --
+# measured overlap 0, enforced at eval by `sac/score.py:assert_held_out`.
+#
+# THE STEP IS THE CHECKPOINT WITH THE HIGHEST HELD-OUT POLICY SUCCESS, chosen by hand from
+# `<run>/policy_eval/success_rates.jsonl` and written down here rather than computed: blq137
+# 0.78 (39/50) at 700k over 100 scored checkpoints, brd100 0.90 (45/50) at 1.2M over 73.
+# Both maxima are unique, no ties. NOTE this is selection ON the same 50 episodes the sweep
+# then scores, so a best-of-N number produced with these is not free of selection effects --
+# the Q is held out, the CHOICE of Q is not. Say so beside any result.
+Q_VERIFIERS = {
+    'q_sac_all': (f'{_VALUE_ARMS}/sac_keypoint/model_8500000_steps.zip', -1),
+    'q_sac_106': (f'{_VALUE_ARMS}/archive/sac_keypoint_demos106/model_3300000_steps.zip', -1),
+    'q_sac_blq137': (f'{_VALUE_ARMS}/sac_keypoint_blq137/model_700000_steps.zip', -1),
+    'q_sac_brd100': (f'{_VALUE_ARMS}/sac_keypoint_brd100/model_1200000_steps.zip', -1),
+}
+
+# Every string `verifier_value` accepts: per-candidate, cross-candidate and learned alike.
+VERIFIER_VALUES = tuple(VALUE_FNS) + tuple(CROSS_CANDIDATE_VALUES) + tuple(Q_VERIFIERS)
 
 
 def base_value_fn(value: str) -> str:
     """The VALUE_FNS key backing `value` -- itself, unless it is cross-candidate."""
     return BASE_VALUE_FN.get(value, value)
+
+
+def is_q_value(value: str) -> bool:
+    """Is this value a learned Q rather than a simulated distance heuristic?
+
+    One predicate, so the ~6 sites that must branch (verifier construction, the context
+    transform, `_normalize_value`'s refusal, the config check) cannot drift from each other
+    by each testing membership their own way.
+    """
+    return value in Q_VERIFIERS
+
+
+def q_verifier_spec(value: str):
+    """(checkpoint, rung) for a learned value, with the existence checks up front.
+
+    `params/args.yaml` is checked as well as the weights: `PushTQVerifier` reads `obs` and
+    `tau_ladder` out of it, and without it falls back to `sac.config.DEFAULTS` -- which
+    builds the net at the wrong observation width if the run was not a keypoint run. A
+    shape error at best, a silently wrong score if the widths ever coincide.
+    """
+    import os
+
+    if value not in Q_VERIFIERS:
+        raise ValueError(f'{value!r} is not a learned value; expected one of '
+                         f'{sorted(Q_VERIFIERS)} (pusht_verifier.Q_VERIFIERS).')
+    checkpoint, rung = Q_VERIFIERS[value]
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f'verifier {value!r} names {checkpoint}, which does not exist. The registry is '
+            f'the binding between the run name and the Q that scored it, so a missing file '
+            f'is a broken run identity, not something to fall back from.')
+    args = os.path.join(os.path.dirname(checkpoint), 'params', 'args.yaml')
+    if not os.path.exists(args):
+        raise FileNotFoundError(
+            f'verifier {value!r}: no params/args.yaml beside {checkpoint}. PushTQVerifier '
+            f'reads `obs` and `tau_ladder` from it and would otherwise build against '
+            f'sac.config.DEFAULTS -- the wrong observation width for a non-default arm.')
+    return checkpoint, rung
 
 
 def check_verifier_value(cfg):
@@ -374,10 +466,16 @@ def check_verifier_value(cfg):
             f'< k, so a statistic over all n does not exist yet when k is scored). Train '
             f'under {BASE_VALUE_FN[tag]!r} and evaluate with '
             f'`eval_search_pusht.py --verifier-value {tag}`.')
-    if tag not in VALUE_FNS:
+    if is_q_value(tag):
+        # Resolve now rather than at policy construction: a missing checkpoint or a missing
+        # params/args.yaml should stop the run at config time, not thirty minutes in once the
+        # dataset has loaded and the GPU is allocated.
+        q_verifier_spec(tag)
+    elif tag not in VALUE_FNS:
         raise ValueError(
             f'verifier_tag={tag!r} is not a known verifier value; expected one of '
-            f'{sorted(VALUE_FNS)} (pusht_verifier.VALUE_FNS).')
+            f'{sorted(VALUE_FNS)} (pusht_verifier.VALUE_FNS) or a learned '
+            f'{sorted(Q_VERIFIERS)} (pusht_verifier.Q_VERIFIERS).')
     declared = (cfg.get('policy', None) or {}).get('verifier_value', None)
     if declared is None:
         raise ValueError(
@@ -448,6 +546,15 @@ class PushTVerifier:
         """
         assert value in VERIFIER_VALUES, \
             f'value_fn must be one of {sorted(VERIFIER_VALUES)}, got {value!r}'
+        # A learned value is in VERIFIER_VALUES but is NOT something this class can score:
+        # it has no VALUE_FNS entry, so `_score_key` below would be a key that `rollout`
+        # KeyErrors on -- the exact late failure this setter exists to turn into an early
+        # one. `PushTQVerifier` is the object that scores these.
+        if is_q_value(value):
+            raise ValueError(
+                f'{value!r} is a LEARNED value and PushTVerifier simulates; it cannot score '
+                f'one. Build a sac.score.PushTQVerifier instead (PushTSearchMixin.'
+                f'_build_verifier does this automatically from verifier_value).')
         self._value_fn = value
         # What the SIM scores each chunk with. Identical to value_fn for every
         # per-candidate value; for a cross-candidate one it is the base scalar, because

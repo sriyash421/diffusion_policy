@@ -318,8 +318,16 @@ def train(args_cli):
                       "buffer, uniformly. Q numbers are not held out; say so beside them.")
             else:
                 _, train_idxs = states_from_manifest(cfg["split_file"], "train")
+                # Says what it DOES hold out, not what it used to fail to. This line read "does
+                # NOT hold out the geometric splits" back when `train` only ever meant the
+                # seed-42 manifest, which cuts the same 206 episodes crosswise to those. Pointed
+                # at a geometric manifest it holds that one's val and test out exactly; any
+                # OTHER manifest is a separate question, and sac/score.py:assert_held_out is
+                # what answers it per evaluation rather than guessing here.
                 print(f"[INFO] demo seeding restricted to {len(train_idxs)} TRAIN episodes of "
-                      f"{cfg['split_file']} -- this does NOT hold out the geometric splits")
+                      f"{cfg['split_file']}; that manifest's val and test are held out. "
+                      "Scoring any OTHER manifest is only held out where the two agree -- "
+                      "sac/eval.py checks it and refuses.")
             # the SAME crop_span the live env draws with, or the demo half of the buffer
             # would not match the space it is stored in -- see obs_from_zarr
             tr = demo_transitions(DEMO_ZARR, obs_type=cfg["obs"], gamma=cfg["gamma"],
