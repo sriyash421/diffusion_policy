@@ -34,6 +34,7 @@ from diffusion_policy.common.pytorch_util import (
     dict_apply, optimizer_to, trainable_parameters)
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.dataset.pusht_image_dataset import check_transition_filter_labels
 from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -49,6 +50,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # would train against the default t_goal while the run dir said ver-armTn. No-op
         # for the non-PushT configs, which declare no `verifier_tag`.
         check_verifier_value(cfg)
+        check_transition_filter_labels(cfg)
 
         # set seed
         seed = cfg.training.seed

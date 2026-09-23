@@ -221,6 +221,22 @@ class BaseWorkspace:
                 previous = json.loads(path.read_text())
             except Exception:
                 previous = None
+            # The TRANSITION filter, compared separately. `checksum` is over episode index
+            # lists only, so a run that changed which transitions inside those episodes it
+            # trains on would pass the check below while training on different data.
+            # `.get` on both sides means absent == no filter, so every splits.json written
+            # before this key existed still matches a filterless config.
+            if previous is not None:
+                was = (previous.get('transition_filter') or {}).get('checksum')
+                now = (splits.get('transition_filter') or {}).get('checksum')
+                if was != now:
+                    raise RuntimeError(
+                        f'{path} records transition filter {was} but this config resolves '
+                        f'to {now}. The set of TRANSITIONS changed underneath an existing '
+                        f'run -- the checkpoints here were built from different windows of '
+                        f'the same episodes, so resuming would silently mix the two. '
+                        f'Restore the original transition_file, or start a new run '
+                        f'directory.')
             if previous is not None and previous.get('checksum') != splits['checksum']:
                 raise RuntimeError(
                     f'{path} records checksum {previous.get("checksum")} but this config '

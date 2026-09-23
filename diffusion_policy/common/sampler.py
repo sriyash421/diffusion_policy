@@ -133,11 +133,20 @@ class SequenceSampler:
         keys=None,
         key_first_k=dict(),
         episode_mask: Optional[np.ndarray]=None,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        index_filter=None
         ):
         """
         key_first_k: dict str: int
             Only take first k data from these keys (to improve perf)
+        index_filter: optional (N,4) -> (N,) bool, applied to the window rows.
+
+            `episode_mask` selects whole episodes; this selects individual WINDOWS within
+            the ones it kept, which nothing else here can express. It is a callback rather
+            than a semantic flag on purpose -- deciding which windows matter needs the task's
+            own data (PushT reads block poses to find the transitions its verifier has signal
+            on), and this class must stay task-agnostic. Defaults to None, so every other
+            dataset sharing this sampler is unaffected.
         """
 
         super().__init__()
@@ -160,6 +169,12 @@ class SequenceSampler:
         else:
             indices = np.zeros((0,4), dtype=np.int64)
 
+        if index_filter is not None and len(indices):
+            keep = np.asarray(index_filter(indices), dtype=bool)
+            assert keep.shape == (len(indices),), (
+                f'index_filter returned {keep.shape}, expected {(len(indices),)}')
+            indices = indices[keep]
+
         # (buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx)
         self.indices = indices 
         self.keys = list(keys) # prevent OmegaConf list performance problem
@@ -170,6 +185,7 @@ class SequenceSampler:
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k
         self.return_sequences = return_sequences
+        self.index_filter = index_filter
     
     def __len__(self):
         return len(self.indices)

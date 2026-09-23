@@ -99,6 +99,22 @@ def _resolve_goal_mask_noise(cfg):
     return {'t': t, 'margin_px': m, 'exclude_block': bool(cfg.get('exclude_block', False))}
 
 
+def decision_frame(buffer_start_idx, sample_start_idx, n_obs_steps):
+    """Absolute frame a sampler window's DECISION step sits on -- its last observed frame.
+
+    A SequenceSampler row is (buffer_start, buffer_end, sample_start, sample_end); sample
+    index k maps to buffer_start + (k - sample_start). The decision step is sample index
+    n_obs_steps-1, and the max() clamps a window padded at the episode START, where
+    sample_sequence repeats the first real frame backwards -- a repeated frame is not one the
+    demonstrator visited.
+
+    Shared by the transition-manifest builders (scripts/moving_transitions_util.py) and by the
+    dataset filter that consumes their output, so "which frame is this window about" has one
+    answer. The row -> frame map is one-to-one within an episode.
+    """
+    return max(buffer_start_idx + (n_obs_steps - 1 - sample_start_idx), buffer_start_idx)
+
+
 def episode_frame_mask(episode_ends, episode_mask):
     """Expand a per-episode boolean mask to a per-frame boolean mask."""
     frame_mask = np.zeros(episode_ends[-1], dtype=bool)
@@ -160,6 +176,130 @@ def split_checksum(train, val, test) -> str:
          for name, idxs in zip(SPLIT_NAMES, (train, val, test))},
         sort_keys=True)
     return hashlib.md5(payload.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Transition manifest.
+#
+# The split manifest says which EPISODES a run sees. This says which TRANSITIONS inside them
+# it sees: the windows where the demonstrator's own T moves over the executed window, which
+# is where the `t_goal` verifier has any signal at all (it scores by where the T ends up, so
+# on a decision that moves nothing every candidate ties).
+#
+# It is a committed artifact for the same reason the split manifest is: derived once by
+# scripts/make_moving_transitions.py, checksummed, and read -- never recomputed at runtime
+# from a predicate that could quietly change underneath a half-trained run.
+#
+# IT STORES ABSOLUTE DECISION FRAMES, NOT WINDOW INDICES. A window index depends on `horizon`
+# and the pad settings, so it would silently mean something else under a different dataloader
+# config; a decision frame is a position in the zarr and does not.
+# ---------------------------------------------------------------------------
+
+
+def transition_checksum(splits) -> str:
+    """Fingerprint of a transition partition. `splits` is {split name: [frame, ...]}.
+
+    The `kind` discriminator is load-bearing: without it this payload is byte-identical to
+    `split_checksum`'s, so an episode manifest and a transition manifest holding the same
+    integers would fingerprint the same -- and a transition manifest would validate as a
+    split manifest. They index different things (frames, not episodes) and must not share a
+    hash space.
+    """
+    payload = json.dumps({'kind': 'transitions',
+                          **{k: sorted(int(i) for i in v) for k, v in splits.items()}},
+                         sort_keys=True)
+    return hashlib.md5(payload.encode()).hexdigest()
+
+
+def load_transition_manifest(transition_file, episode_ends, split_manifest,
+                             n_action_steps=None):
+    """Read a transition manifest and validate it hard. Never merges -- disagreement raises.
+
+    The load-bearing check is `source_split_checksum`: it pins this file to the exact episode
+    partition it was derived from, so a transition list can never be paired with a split it
+    does not describe. Without it the two manifests would be independently valid and jointly
+    meaningless.
+    """
+    import hydra.utils
+    path = pathlib.Path(hydra.utils.to_absolute_path(str(transition_file)))
+    if not path.is_file():
+        raise FileNotFoundError(f'transition_file not found: {path}')
+    manifest = json.loads(path.read_text())
+
+    for key in ('predicate', 'checksum', 'source_split_checksum'):
+        if key not in manifest:
+            raise ValueError(f'{path}: transition manifest is missing "{key}"')
+
+    idxs = {name: [int(i) for i in manifest.get(name, [])] for name in SPLIT_NAMES}
+    stored, actual = manifest['checksum'], transition_checksum(idxs)
+    if stored != actual:
+        raise ValueError(
+            f'{path}: checksum {stored} does not match its own index lists ({actual}). The '
+            f'file was hand-edited; regenerate with scripts/make_moving_transitions.py.')
+
+    expected = split_manifest.get('checksum')
+    if expected is not None and manifest['source_split_checksum'] != expected:
+        raise ValueError(
+            f'{path}: was derived from split checksum '
+            f'{manifest["source_split_checksum"]} but this run resolved {expected}. These '
+            f'two manifests describe different episode partitions, so the transition lists '
+            f'do not refer to the episodes being trained on.')
+
+    ck = manifest.get('episode_ends_checksum')
+    if ck is not None and episode_ends is not None:
+        actual_ck = episode_ends_checksum(np.asarray(episode_ends))
+        if ck != actual_ck:
+            raise ValueError(
+                f'{path}: episode_ends_checksum {ck} != {actual_ck} for the zarr on disk. '
+                f'The episode boundaries changed, so these frame indices no longer point at '
+                f'the same transitions.')
+
+    got = manifest['predicate'].get('n_action_steps')
+    if n_action_steps is not None and got != int(n_action_steps):
+        raise ValueError(
+            f'{path}: built for n_action_steps={got} but this config uses {n_action_steps}. '
+            f'The executed window is what the predicate reads, so the two disagree about '
+            f'which transitions move the T.')
+
+    n_frames = int(np.asarray(episode_ends)[-1]) if episode_ends is not None else None
+    if n_frames is not None:
+        bad = [i for v in idxs.values() for i in v if not (0 <= i < n_frames)]
+        if bad:
+            raise ValueError(
+                f'{path}: frame index(es) {sorted(bad)[:5]} out of range for {n_frames} '
+                f'frames.')
+    return manifest
+
+
+def check_transition_filter_labels(cfg):
+    """Refuse to start when `transition_file` and `split_suffix` disagree.
+
+    Same failure the gm_suffix / son_suffix guards exist for, and the costliest version of
+    it: run_name has no transition component of its own, so a filtered run at n_demos=176
+    with an empty split_suffix resolves to the SAME hydra.run.dir as an unfiltered one, and
+    `training.resume: True` continues it -- training on a different set of transitions than
+    the checkpoints in that directory were built from, with nothing in the name to show it.
+
+    No-op for configs that declare no `split_suffix` (the non-PushT ones).
+    """
+    if not (OmegaConf.is_config(cfg) and 'split_suffix' in cfg):
+        return
+    tf = cfg.get('transition_file', None)
+    suffix = str(cfg.get('split_suffix', '') or '')
+    tag = cfg.get('transition_tag', None)
+    if tf is not None and not suffix:
+        raise ValueError(
+            f'transition_file is set ({tf}) but split_suffix is empty. The run name would '
+            f'be identical to the unfiltered arm at the same n_demos, so this run would '
+            f'resume INTO it. Pass e.g. split_suffix=_split-mv.')
+    if tf is None and '-mv' in suffix:
+        raise ValueError(
+            f'split_suffix={suffix!r} claims a moving-transition filter but transition_file '
+            f'is null, so this run would train on every window under a name saying it did '
+            f'not. Set transition_file, or rename the suffix.')
+    if tf is not None and not str(tag or '').strip():
+        raise ValueError('transition_tag must be a non-empty wandb label when '
+                         'transition_file is set')
 
 
 def build_split_manifest(episode_ends, zarr_path, seed, n_test_episodes,
@@ -321,7 +461,8 @@ class PushTImageDataset(BaseImageDataset):
             split='train',
             return_sequences=False,
             split_file=None,
-            goal_mask_noise=None
+            goal_mask_noise=None,
+            transition_file=None
             ):
 
         super().__init__()
@@ -373,20 +514,57 @@ class PushTImageDataset(BaseImageDataset):
         self.zarr_path = zarr_path
         self.seed = seed
 
+        # ---- transition filter -------------------------------------------------------
+        # Which WINDOWS inside the kept episodes this run sees. Unlike goal_mask_noise this
+        # is not a training-time ablation but part of the dataset's definition, so it applies
+        # to every split and _split_copy carries it through rather than clearing it.
+        self.transition_file = transition_file
+        self._transitions = None
+        self._transition_frames = None
+        if transition_file is not None:
+            self._transitions = load_transition_manifest(
+                transition_file,
+                episode_ends=self.replay_buffer.episode_ends[:],
+                split_manifest=self._manifest,
+                n_action_steps=pad_after + 1)
+            pred = self._transitions['predicate']
+            # The manifest's frame list is only the right one for the geometry it was built
+            # under: a different horizon enumerates different windows, and a different
+            # n_obs_steps puts the decision step on a different frame.
+            if int(pred.get('horizon', horizon)) != int(horizon):
+                raise ValueError(
+                    f'{transition_file}: built at horizon {pred["horizon"]}, this config '
+                    f'uses {horizon}.')
+            if int(pred.get('n_obs_steps', pad_before + 1)) != int(pad_before + 1):
+                raise ValueError(
+                    f'{transition_file}: built at n_obs_steps {pred["n_obs_steps"]}, this '
+                    f'config uses {pad_before + 1}.')
+            self._transition_frames = {
+                name: np.asarray(self._transitions.get(name, []), dtype=np.int64)
+                for name in SPLIT_NAMES}
+            counts = ', '.join(f'{n} {self._transitions[f"{n}_kept"]}/'
+                               f'{self._transitions[f"{n}_total"]}' for n in SPLIT_NAMES)
+            print(f'PushTImageDataset: transition filter ON '
+                  f'({pathlib.Path(transition_file).name}) {counts}')
+
         episode_mask = {
             'train': self.train_used,
             'val': self.val_pool,
             'test': self.test_pool,
         }[split]
 
+        # Assigned BEFORE the sampler, because _index_filter below reads it.
+        self.n_obs_steps = pad_before + 1
         self.sampler = SequenceSampler(
             replay_buffer=self.replay_buffer,
             sequence_length=horizon,
             pad_before=pad_before,
             pad_after=pad_after,
             episode_mask=episode_mask,
-            return_sequences=return_sequences)
+            return_sequences=return_sequences,
+            index_filter=self._index_filter(split))
         self.episode_mask = episode_mask
+        self.split = split
         # PART-3 GOAL-ONLY CORRUPTION. Image-space, so it cannot reuse slot_obs_noise (which
         # noises the ENCODED vector and has no spatial structure). The goal pose is a
         # constant, so the mask is built once here; only the noise is redrawn per sample.
@@ -413,7 +591,27 @@ class PushTImageDataset(BaseImageDataset):
         self.pad_after = pad_after
         self.return_sequences = return_sequences
 
-    def _split_copy(self, episode_mask):
+    def _index_filter(self, split):
+        """The window filter for one split, or None when no transition manifest is loaded.
+
+        Maps each sampler row to its decision frame and keeps the row iff that frame is in
+        the split's list. `decision_frame` is shared with the manifest builders, so the two
+        sides cannot disagree about which frame a window is about.
+        """
+        if self._transition_frames is None:
+            return None
+        frames = self._transition_frames[split]
+        # self.n_obs_steps, not self.pad_before: __init__ calls this while BUILDING the
+        # sampler, and does not assign self.pad_before until after that.
+        n_obs = self.n_obs_steps
+
+        def keep(indices):
+            i = np.maximum(indices[:, 0] + (n_obs - 1) - indices[:, 2], indices[:, 0])
+            return np.isin(i, frames)
+
+        return keep
+
+    def _split_copy(self, episode_mask, split):
         """A shallow copy of this dataset whose sampler is restricted to episode_mask."""
         split_set = copy.copy(self)
         split_set.sampler = SequenceSampler(
@@ -422,11 +620,17 @@ class PushTImageDataset(BaseImageDataset):
             pad_before=self.pad_before,
             pad_after=self.pad_after,
             episode_mask=episode_mask,
-            return_sequences=self.return_sequences
+            return_sequences=self.return_sequences,
+            index_filter=self._index_filter(split)
             )
         split_set.episode_mask = episode_mask
+        split_set.split = split
         # val/test are evaluated CLEAN -- the goal corruption is a training-time ablation.
         # copy.copy is shallow, so without this the flag would be inherited.
+        #
+        # The TRANSITION filter is deliberately NOT cleared here: it is part of what this
+        # dataset IS, not a corruption applied only while training, and the held-out set is
+        # meant to be the held-out transitions. Hence the split-specific filter above.
         split_set._goal_mask_on = False
         return split_set
 
@@ -436,11 +640,11 @@ class PushTImageDataset(BaseImageDataset):
         With a 3-way split val is its own held-out set; with the legacy 2-way split
         val_pool == test_pool (validation runs on the test episodes, as before).
         """
-        return self._split_copy(self.val_pool)
+        return self._split_copy(self.val_pool, 'val')
 
     def get_test_dataset(self):
         """A dataset restricted to the held-out test episodes."""
-        return self._split_copy(self.test_pool)
+        return self._split_copy(self.test_pool, 'test')
 
     def get_test_reset_states(self):
         """Env reset states for the held-out test episodes."""
@@ -478,6 +682,20 @@ class PushTImageDataset(BaseImageDataset):
             out[f'{name}_frames'] = int(
                 episode_frame_mask(episode_ends, masks[name]).sum())
         out['checksum'] = split_checksum(out['train'], out['val'], out['test'])
+        # Which TRANSITIONS, not just which episodes. Recorded separately, and compared
+        # separately by BaseWorkspace.write_splits: `checksum` above is over episode lists
+        # only, so two runs differing solely in the filter would otherwise be
+        # indistinguishable to the resume guard. Absent means "no filter", which is what
+        # every run predating this key was.
+        if self._transitions is not None:
+            t = self._transitions
+            out['transition_filter'] = {
+                'transition_file': str(self.transition_file),
+                'checksum': t['checksum'],
+                'source_split_checksum': t['source_split_checksum'],
+                'predicate': t['predicate'],
+                **{f'{n}_{k}': t[f'{n}_{k}'] for n in SPLIT_NAMES for k in ('total', 'kept')},
+            }
         return out
 
     def get_video_episode_idxs(self, split, n=10):

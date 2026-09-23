@@ -170,6 +170,25 @@ goal_mask_noise: null            # e.g. {t: 800, margin_px: 3}
 gm_suffix: ''                    # e.g. '_gm-t800-T3px'
 goal_mask_tag: goal_only_mask    # wandb tag, applied only when goal_mask_noise is set
 
+# ---- transition filter -----------------------------------------------------------------
+# Which TRANSITIONS inside the split's episodes a run trains and is scored on, as a committed
+# manifest of absolute decision frames (scripts/make_moving_transitions.py). null = every
+# window, which is every run predating this key.
+#
+# It exists because `t_goal` scores a candidate by where the T ends up and nothing else, so
+# on a decision that moves the block nowhere every candidate ties and the verifier expresses
+# no preference -- 15-25% of decisions, measured. The `_moving_` manifests drop those.
+#
+# NOT TRAIN-ONLY, unlike goal_mask_noise above: this is part of what the dataset IS, so the
+# held-out split is the held-out TRANSITIONS and _split_copy carries it through.
+#
+# SET split_suffix WHENEVER THIS IS NON-NULL. Same hazard as gm_suffix: a filtered and an
+# unfiltered run at the same n_demos resolve to one hydra.run.dir, and `training.resume`
+# continues one under the other's data. check_transition_filter_labels refuses to start if
+# the two disagree.
+transition_file: null            # e.g. .../config/splits/transitions/..._moving_ta8.json
+transition_tag: t_goal_moving    # wandb tag, applied only when transition_file is set
+
 # Which verifier value the run is trained/evaluated against. Both a policy knob AND the run
 # IDENTITY: it selects the scoring rule in the code and names the run, so runs from either
 # side of the 2026-08-19 change are distinguishable on sight in the wandb name, the wandb

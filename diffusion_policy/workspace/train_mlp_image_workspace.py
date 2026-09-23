@@ -34,6 +34,7 @@ from diffusion_policy.common.pytorch_util import (
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 from diffusion_policy.common.sampler import get_collate_fn
+from diffusion_policy.dataset.pusht_image_dataset import check_transition_filter_labels
 from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -232,6 +233,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         _check_arm_label(cfg)
         _check_obs_noise_labels(cfg)
         check_verifier_value(cfg)
+        check_transition_filter_labels(cfg)
 
         # set seed
         seed = cfg.training.seed

@@ -118,6 +118,9 @@ dataset:
   # clean, so this is a training-time ablation, not a deployment condition.
   # `margin_px` is in IMAGE pixels (the 96px observation), NOT the 512px arena.
   goal_mask_noise: ${goal_mask_noise}
+  # Which windows of those episodes. Applies to EVERY split, unlike goal_mask_noise --
+  # the held-out set is meant to be the held-out transitions. See pusht_base.yaml.
+  transition_file: ${transition_file}
   # Load only the image frames the policy conditions on. Every consumer of the `image`
   # key slices [:, :n_obs_steps] before encoding, so at horizon 16 / n_obs_steps 2 this
   # reads and copies 8x fewer image bytes per window for a bit-identical batch. Null
