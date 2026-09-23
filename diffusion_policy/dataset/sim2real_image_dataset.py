@@ -17,6 +17,10 @@ from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
 from diffusion_policy.model.common.normalizer import (
     LinearNormalizer, SingleFieldLinearNormalizer)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
+# The manifest format and its validation already exist for pusht; reuse rather than
+# fork, so one file cannot drift into meaning two things.
+from diffusion_policy.dataset.pusht_image_dataset import (
+    load_split_manifest, masks_from_manifest)
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +62,8 @@ class Sim2RealImageDataset(BaseImageDataset):
         val_ratio=0.0,
         use_cache: bool = False,
         use_disk: bool = True,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        split_file: str = None
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
@@ -91,12 +96,24 @@ class Sim2RealImageDataset(BaseImageDataset):
             for key in self.rgb_keys + self.lowdim_keys + self.depth_keys:
                 key_first_k[key] = n_obs_steps
 
-        # Split train/val
-        val_mask = get_val_mask(
-            n_episodes=self.replay_buffer.n_episodes,
-            val_ratio=val_ratio,
-            seed=seed)
-        train_mask = ~val_mask
+        # Split train/val. A manifest names the episodes outright, and -- unlike
+        # val_ratio -- holds the test episodes out of BOTH masks, so nothing the policy
+        # trains on can be scored at eval.
+        if split_file is not None:
+            manifest = load_split_manifest(
+                split_file, episode_ends=self.replay_buffer.episode_ends[:])
+            train_mask, val_mask, test_mask = masks_from_manifest(
+                manifest, self.replay_buffer.n_episodes)
+            self.split_manifest = manifest
+            self.test_mask = test_mask
+        else:
+            val_mask = get_val_mask(
+                n_episodes=self.replay_buffer.n_episodes,
+                val_ratio=val_ratio,
+                seed=seed)
+            train_mask = ~val_mask
+            self.split_manifest = None
+            self.test_mask = np.zeros(self.replay_buffer.n_episodes, dtype=bool)
 
         # Create sampler
         self.sampler = SequenceSampler(
@@ -121,6 +138,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.val_mask = val_mask
         self.train_mask = train_mask
         self.return_sequences = return_sequences
+        self.split_file = split_file
 
     def _create_replay_buffer_from_zarr(
             self, dataset_path, shape_meta, use_cache=False, use_disk=True):
@@ -439,6 +457,7 @@ class StreamingMultiDataset(BaseImageDataset):
         use_disk: bool = False,
         samples_per_file_multiplier: float = 1.0,
         dataset_class=Sim2RealImageDataset,
+        split_file: str = None,
     ):
         super().__init__()
         self.dataset_class = dataset_class
@@ -460,8 +479,14 @@ class StreamingMultiDataset(BaseImageDataset):
             'seed': seed,
             'val_ratio': val_ratio,
             'use_cache': use_cache,
-            'use_disk': use_disk
+            'use_disk': use_disk,
+            'split_file': split_file,
         }
+        if split_file is not None and len(file_paths) != 1:
+            # Episode indices are relative to ONE zarr; applying them across several
+            # would silently select different episodes in each.
+            raise ValueError(
+                f'split_file needs exactly one zarr, found {len(file_paths)}: {file_paths}')
 
         # Calculate total epoch length and normalizer from all files in one pass
         print("Loading all datasets to compute epoch length and normalizer...")
@@ -785,7 +810,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         use_streaming: bool = False,
         samples_per_file_multiplier: float = 1.0,
         return_sequences: bool = False,
-        dataset_class=Sim2RealImageDataset
+        dataset_class=Sim2RealImageDataset,
+        split_file: str = None,
     ):
         super().__init__()
         if isinstance(dataset_class, str):
@@ -847,6 +873,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 use_disk=use_disk,
                 samples_per_file_multiplier=samples_per_file_multiplier,
                 dataset_class=dataset_class,
+                split_file=split_file,
             )
             self.is_streaming = True
             return
@@ -874,8 +901,14 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'val_ratio': val_ratio,
             'use_cache': use_cache,
             'use_disk': use_disk,
-            'return_sequences': return_sequences
+            'return_sequences': return_sequences,
+            'split_file': split_file,
         }
+        if split_file is not None and len(self.dataset_config) != 1:
+            # Episode indices are relative to ONE zarr; spreading them over several
+            # would silently select different episodes in each.
+            raise ValueError(
+                f'split_file needs exactly one dataset, got {len(self.dataset_config)}')
 
         for config in self.dataset_config:
             dataset_kwargs = {**common_kwargs}
