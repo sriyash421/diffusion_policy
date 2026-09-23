@@ -33,7 +33,7 @@ Nothing in this repo nominates a best checkpoint. Where a single number is quote
 | **BC-LSTM (keypoint)** | `..._lstm_bc_keypoint` | keypoint 20-d | none (flatten) | `pusht_keypoint_manifest` | val-selected, test reported | val 0.246 @ 28k → **test 0.262** |
 | **recurrent PPO** | `python -m recurrent_ppo.train` | keypoint / image | shared (image) | manifest episodes | — | **retraining** |
 | **plain PPO** (`--n-stack 1`) | `python -m recurrent_ppo.ppo.train` | keypoint / image | shared (image) | manifest episodes | — | **retraining** |
-| **SAC** | `python sac/runner.py` | kp / image | shared (image) | procedural (policy) / manifest (verifier) | — | **never run** |
+| **SAC** | `python sac/runner.py` | kp / image | shared (image) | procedural (policy) / manifest (verifier) | — | keypoint **10M done**, image running; per-split arms (blq137, brd100) training |
 
 "shared" = ResNet18 / IMAGENET1K_V1 / GroupNorm / 76px crop / 96px input / 512-d per frame,
 image-only. Verified identical across every image arm; see *The encoder* below.

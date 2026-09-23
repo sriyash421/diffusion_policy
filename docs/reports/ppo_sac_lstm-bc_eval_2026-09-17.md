@@ -256,7 +256,15 @@ dominates. Section 5's result was real and is not evidence that the value is usa
 
 ## 7. What is not yet measured
 
-- **Q, on anything.** No SAC run has completed; `sac_keypoint` is at 1.29M steps.
+- ~~**Q, on anything.** No SAC run has completed; `sac_keypoint` is at 1.29M steps.~~
+  **SUPERSEDED 2026-09-19.** `sac_keypoint` finished 10M (peak `eval/success_rate` 1.00 at
+  8.51M; the save grid is 100k, so the checkpoint is `model_8500000_steps.zip`, registered as
+  `q_sac_all`). Two things now run against it: the UNet BC best-of-N sweep on blq137/brd100
+  (`scripts/slurm/submit_q_bon_geometric.sh`) and 12 ST arms trained WITH the Q as their
+  verifier (`scripts/run_q_geometric.sh`, README §2.6) -- the latter because the arms in §6
+  were all trained on a `t_goal`-shaped context, so ranking them by Q measures the swap and
+  the distribution shift together. ⚠️ `demo_episodes: all`: nothing either evaluation scores
+  is held out from this Q.
 - **`coverage_now + V` as the ranker** — the repair section 6 identifies, untested.
 - **V from any arm but `ppo_plain_keypoint`** — the image and recurrent arms are still training.
   Every one of them trains under `--reward delta`, so the same inversion applies to all of them

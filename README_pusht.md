@@ -504,6 +504,200 @@ loss trained under. Everything else — the baselines and the `_gm-` arms — ha
 ladder, so the corrupt flag is a no-op and would record the same experiment twice; those get
 the two clean rows only. 74 watchers at full coverage.
 
+
+### 2.5 The `t_goal`-moving arms — 6 ST + 1 BC on the transitions the verifier can see
+
+The `t_contact_experiments` generation (wandb group). Every arm before this trained on all
+demo transitions, including the ones its own verifier is blind on: `t_goal` scores a candidate
+by where the T ends up and nothing else, so on a decision that moves the block nowhere every
+candidate ties. `docs/reports/ppo_sac_lstm-bc_eval_2026-09-17.md` §1 measures that at 15-25%
+of decisions. These arms drop those windows.
+
+**All 206 episodes**, 176 train / **0 val** / 30 test, and the 30 are *selected* so the
+**moving**-transition ratio is 100:20 — episodes hold 22 to 145 moving windows each, so which
+30 moves that ratio by several points. Filtered: **12,972 train / 2,595 test** windows.
+
+| arm | config | override |
+| --- | --- | --- |
+| UNet BC | `train_pusht_unet_bc` | — |
+| ST k=16 / k=4, uniform | `train_pusht_diffusion_search` | `n_candidates={16,4}` |
+| ST k=16 / k=4, flat400 | same | `slot_obs_noise.mode=list` + a K-length `[400]*K` |
+| ST k=16 / k=4, ramp400to200 | same | same, 400→200 linear over K |
+
+```bash
+python scripts/make_moving_ratio_split.py    # -> config/splits/pusht_seed42_train176.json
+python scripts/make_moving_transitions.py    # -> config/splits/transitions/..._moving_ta8.json
+bash scripts/run_tgoal_moving.sh             # dry run: 7 run names, where they land
+SUBMIT=1 bash scripts/run_tgoal_moving.sh    # ...and sbatch
+```
+
+**If an arm dies with `assert ports_found`, just re-run the launcher.** Two jobs starting on
+the same node at the same instant race in wandb's service startup and one loses; it has killed
+four runs in this project's history, always minutes in and always *after* the dataset has
+loaded, so it reads like a real failure and is not. `run_tgoal_moving.sh` skips arms already
+training or already finished, so `SUBMIT=1` a second time resubmits exactly what died.
+
+**Preflight before spending the GPU time.** A 50-step run exercises everything that can fail
+at startup — the K-length ladder assert, `check_transition_filter_labels`, the transition
+manifest's validation, the empty-val path, `write_splits` — in about ten minutes:
+
+```bash
+python train.py --config-name=train_pusht_diffusion_search n_candidates=4 \
+  slot_obs_noise.mode=list +slot_obs_noise.timesteps='[400,333,267,200]' \
+  son_suffix=_son-ramp400to200 son_tag=ramp-400-200 obs_noise_tag=obs_noised \
+  n_demos=176 split_suffix=_split-mv \
+  transition_file=diffusion_policy/config/splits/transitions/pusht_seed42_train176_moving_ta8.json \
+  training.max_gradient_steps=50 training.checkpoint_every=50
+```
+
+Point `DP_OUTPUT_ROOT` at a scratch tree first: a preflight writing into the real run
+directory leaves a `splits.json` and checkpoints there that the real run then resumes from.
+And it is **`max_gradient_steps`**, not `max_train_steps` — the latter caps batches per
+*epoch* and does not end the run (`pusht_base.yaml` calls it "SAFETY BOUND ONLY"). Setting
+the wrong one and walking away costs a GPU-hour and ~8 GB of checkpoints.
+
+**Two manifests, and the second is pinned to the first.** The split manifest says which
+EPISODES; `config/splits/transitions/` says which TRANSITIONS inside them, as absolute
+decision frames (not window indices — those depend on `horizon` and the pad settings, a frame
+does not). `load_transition_manifest` refuses to start unless the transition file's
+`source_split_checksum` matches the episode manifest actually loaded, so the two can never be
+paired wrongly. They live in a subdirectory because `unit_tests/test_splits.py` globs
+`config/splits/*.json` and loads every hit as an episode manifest.
+
+**Not train-only, unlike `goal_mask_noise`.** The filter is part of what the dataset IS, so
+`_split_copy` carries it through and the held-out split is the held-out *transitions*. The
+consequence: `val_loss` is absent (there is no val split) and the test windows are a different
+population from every earlier arm's, so **no number here is comparable with §2.3/§2.4**.
+
+**`split_suffix` is load-bearing, again.** `run_name` has no transition component, so a
+filtered arm with an empty suffix resolves to the same `hydra.run.dir` as an unfiltered one at
+the same `n_demos` and `training.resume: True` continues it.
+`check_transition_filter_labels` refuses to start when the two disagree, in both training
+workspaces. `BaseWorkspace.write_splits` compares the filter's checksum separately from the
+episode checksum, because the episode lists are identical between a filtered and an unfiltered
+run — absent means "no filter", so every pre-existing `splits.json` still resumes.
+
+**The K=4 ladders are not the K=16 ladders.** `_slot_obs_profile` requires
+`len(timesteps) == max_actions`, so the launcher builds each profile at the arm's own K.
+Both span 400→200, but at 4 points versus 16 — endpoints matched, granularity not.
+
+**No in-training rollouts.** The runner resets to the held-out val+test episodes, which with
+no val split is the test episodes. This generation reports no success rate at all, so the
+launcher sets `training.rollout_every_steps` past the end of training rather than scoring the
+held-out set five times per run for a number nobody reads.
+
+**Eval.** Three readouts, every one at the 10k checkpoint grid, and no rollout success curve:
+
+```bash
+N_STEPS=10 SUBMIT=1 bash attention_analysis/submit_all.sh     # context share per slot
+WANT_STEPS=10000,20000,30000,40000,50000,60000,70000,80000,90000,100000 \
+  SUBMIT=1 bash mode_analysis/submit_all.sh                   # candidate dispersion per slot
+
+# candidate ranking, twice: paired across widths at n=4, then the k=16 arms at full width
+python scripts/rank_arms_by_blockmotion.py --arms moving4  --n 4  --step <STEP> --out <out>.json
+python scripts/rank_arms_by_blockmotion.py --arms moving16 --n 16 --step <STEP> --out <out>.json
+```
+
+`rank_arms_by_blockmotion` already stratifies by `expert_moved` — the SAME predicate the
+filter is built from — so its `block_moving` rows are the readout on the held-out moving
+transitions and `block_still` is a free off-distribution readout. **Two arm sets because a
+K=4 arm cannot contribute 16 candidates**; mixing widths in one pool would give the wider arms
+more entries and bias every mid-rank toward them.
+
+Attention analysis probes **held-out transitions**, not episode t=0 (`--states`, defaulting to
+`test-windows` exactly when the run has a `transition_file`). At t=0 the T has not been touched,
+so every probe state would be one of the `still` states these arms never trained on. Arms
+without a filter keep the episode-t=0 probe, so their existing `attention.json` numbers stand.
+BC has no cross-attention at all (`ConditionalUnet1D`, FiLM) and is absent from that readout by
+construction; it IS included in mode analysis, but only by hand —
+`PushTUNetSearchPolicy.max_actions` is `None`, so `--n-actions 16` has to be passed explicitly.
+
+### 2.6 The learned-Q arms — 12 ST trained against a SAC chunk-Q
+
+Every arm before this trained on a `t_goal`-shaped search context. That is exactly why
+`sac/score.py` swaps the Q into the **ranking** only and leaves the context alone: handing a
+`t_goal`-trained arm a Q-shaped context confounds "Q ranks better" with "ST was given an input
+it has never seen". The only way out of the confound is to train arms whose context is Q, which
+is what these are. 2 widths × 3 ladders × 2 geometric splits = **12 runs to 100k**.
+
+```bash
+bash scripts/run_q_geometric.sh                              # dry run, 12 arms
+SUBMIT=1 bash scripts/run_q_geometric.sh                     # ...and sbatch
+VERIFIER=q_sac_106 SUBMIT=1 bash scripts/run_q_geometric.sh  # the leak control
+SUBMIT=1 bash scripts/slurm/submit_q_bon_geometric.sh        # the BC best-of-n sweep
+```
+
+**THE NAME IS THE CHECKPOINT.** `verifier_tag=q_sac_all` resolves through
+`pusht_verifier.Q_VERIFIERS` to a specific SAC checkpoint and lands in `run_name` as `ver-q_sac_all`.
+There is deliberately no path override: a directory that says which Q scored it and a config
+key that could say otherwise are two things that drift. `q_sac_all` is `sac_keypoint`'s 8.5M
+checkpoint (`demo_episodes: all`); `q_sac_106` is the demos106 archive at 3.3M, the control.
+
+| | `t_goal` | `q_sac_all` |
+| --- | --- | --- |
+| scores | the state the sim **reached** | `(current state, chunk)`, one forward pass |
+| costs | 8 sim steps × a 32-process pool | a matmul — **no pool is ever forked** |
+| context | `_normalize_value`, a torch mirror of the value | `_normalize_q`, a running z-score |
+| blind on | 15–25% of decisions (§2.5) | `bon/q_spread_zero_frac` 0.0 at every probe |
+
+**The context cannot be the raw Q, and the reason is measured.** Over 512 real decisions on
+both splits (`scripts/measure_q_spread.py` → `analysis/q_spread.json`) the Q runs 0.34–0.93 with
+mean 0.77, while its spread *across the 16 candidates of one decision* is **0.0011**. Beside an
+O(1) embedding in `action_value_emb` that is a dead input: it would train, teach nothing, and no
+loss or metric would report it. `PushTSearchMixin._normalize_q` makes it a running z-score
+instead — EMA mean/var at `Q_NORM_DECAY = 0.995` (matching `ema_decay`), clamped to ±5.
+
+Four things about that normalizer are load-bearing:
+
+- **Stale statistics, always.** They are applied first and updated after. Normalizing by the
+  batch's own mean and std is the BatchNorm trap — at deployment the batch is one episode, so
+  every statistic is taken over a single sample and the feature collapses to exactly 0. It
+  would look fine for all of training and be identically zero where it matters.
+- **Not gated on `self.training`.** The outer/inner trainer generates its context under
+  `policy.eval()` (`_fill_context_buffer`), which is precisely when it must update. The
+  workspace says so explicitly via `set_value_norm_training`, and that flag is **off by
+  default**, so any eval or analysis script normalizes with the statistics the arm trained
+  under and cannot drift them with its own ordering.
+- **One normalizer for every slot.** All slots' Q estimates the same quantity — the return of a
+  chunk from the same state. Per-slot statistics would subtract a different mean per slot and
+  manufacture a slot-index signal out of nothing.
+- **`EMAModel` never copies buffers.** It averages `parameters(recurse=False)`, so without
+  `sync_value_norm_from` (called beside `ema.step` in all three workspaces) the EMA copy — the
+  copy evaluation scores — would keep its construction-time `(0, 1)`. A silent, total
+  train/eval mismatch that nothing reports.
+
+The clamp is not tidiness: before the EMA has seen much, the running variance is a poor estimate
+and one outlying Q lands many sigma out, and unclamped that spike reaches every downstream head.
+
+**WHAT THE RUNNING NORMALIZER IS AND IS NOT TELLING THE MODEL.** It divides by the spread of Q
+across STATES, not across the candidates of one decision, and those are different numbers. On a
+freshly built arm the end-to-end check reads a context of mean +0.37, **std 0.96**, range
+−2.11…+3.53 — O(1), which is what it is for — while the raw Q's spread within one decision is
+0.020 against a running std of 0.027. So most of the context's range says *this state is
+promising*, and candidates within one decision are separated by the ratio of the two. On a
+TRAINED arm's candidates that within-decision spread falls to 0.0011 (§`analysis/q_spread.json`),
+so the per-candidate separation is the part to watch: in a decision where every candidate sits
+near the running mean, every slot reads ≈ the same number. That is the accepted cost of global
+statistics over per-decision ones, and the first checkpoints are where to check it is not the
+whole story.
+
+**`_normalize_value` raises on a learned value** rather than falling through. Everything in it
+recomputes the value from the state the sim *reached*; a Q does not simulate, so `state` is the
+CURRENT state and every branch would return the same number for every candidate — a constant
+context, which trains and teaches nothing. `search_context` must be `value` for the same reason,
+asserted at construction (`_check_learned_value_contract`): a Q reaches nothing, so there is no
+observation for a subgoal context to encode.
+
+⚠️ **NOTHING IS HELD OUT FROM `q_sac_all`.** `demo_episodes: all` means all 206 episodes seeded
+its replay buffer, including all 50 test episodes of both splits. `sac/score.py::assert_held_out`
+refuses this by design; `--allow-contaminated` is how the number gets taken anyway, and it is
+**recorded** in `bon_curves.json` rather than merely permitted, so a contaminated curve stays
+distinguishable from a clean one on a shared plot.
+
+⚠️ **THE CONTROLS ARE PARTIAL.** Under `t_goal` only blq137 k16 {uniform, flat400, ramp400to200}
+exist at 100k, plus brd100 k16 uniform. The k=4 arms on both splits and the brd100 ladders have
+**no matched twin** — those comparisons are across generations and must be labelled unpaired.
+
 ---
 
 ## 3. How to train and evaluate the current arms

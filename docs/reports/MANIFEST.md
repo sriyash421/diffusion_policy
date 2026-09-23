@@ -21,6 +21,17 @@ Two kinds of thing are excluded, for two different reasons:
   them would contradict that and bloat the history permanently.
 * **Checkpoints, videos and replay buffers** -- too large, and none of them is a result.
 
+## Shortcuts that point out of the repo
+
+`docs/reports/from-modes-figures/` is a **symlink** to
+`/gscratch/robotics/harine/mode_analysis/figures_tgoal_moving/` -- the 50 mode-analysis
+figures for `tgoal_moving_arms_2026-09-19.md` §6. The link is tracked; the 9 MB of PNGs it
+points at are not, for the same reason as everything else on this page: they are regenerable
+(`bash scripts/collect_mv_figures.sh`). It carries the `from-` prefix for the reason above --
+`from-modes-figures` is trackable where `modes-figures` would be, but a bare `modes/` would not.
+Following it off this machine gives a dangling link, which is the honest failure: the figures
+are on `/gscratch` and nowhere else.
+
 ## Locations
 
 | path in repo | resolves to | size |
