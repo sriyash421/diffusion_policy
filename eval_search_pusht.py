@@ -64,7 +64,8 @@ from diffusion_policy.common.stats_util import wilson_interval
 from diffusion_policy.dataset.pusht_image_dataset import (
     get_split_masks_3way, get_episode_init_states,
     load_split_manifest, masks_from_manifest)
-from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN
+from diffusion_policy.env.pusht.pusht_verifier import (DEFAULT_VALUE_FN, is_q_value,
+                                                       q_verifier_spec)
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
@@ -165,7 +166,11 @@ def load_policy(checkpoint, device, num_inference_steps=None, noise_scheduler=No
 
 
 def get_split_states(cfg, split, run_dir=None):
-    """Reset states for 'val' or 'test' -- the SAME split the checkpoint was trained under.
+    """Reset states for 'train', 'val' or 'test' -- the SAME split the checkpoint trained under.
+
+    'train' is here so an analysis can be run on the episodes the policy DID see, as the
+    in-distribution reference for the same measurement on held-out ones. It is never a
+    result on its own: anything reported from it is a fit number, not a generalisation one.
 
     `cfg` comes out of the checkpoint payload, so the split parameters are the training
     run's own. When the config names a split_file, that manifest is the source of truth;
@@ -175,7 +180,7 @@ def get_split_states(cfg, split, run_dir=None):
     indices are cross-checked against it, so an eval can never silently score a checkpoint
     against a different partition than the one it was trained on.
     """
-    assert split in ('val', 'test')
+    assert split in ('train', 'val', 'test')
     ds = cfg.task.dataset
     replay_buffer = ReplayBuffer.copy_from_path(
         ds.zarr_path, keys=['agent_pos', 'block_pos'])
@@ -189,7 +194,7 @@ def get_split_states(cfg, split, run_dir=None):
                 'val': ds.get('n_val_episodes', None) or None,
                 'train': ds.get('n_train_episodes', None),
             })
-        _, val_mask, test_mask = masks_from_manifest(
+        train_mask, val_mask, test_mask = masks_from_manifest(
             manifest, replay_buffer.n_episodes)
     else:
         # KEPT, unlike the dataset's and the runner's fallbacks, which were deleted on
@@ -197,13 +202,13 @@ def get_split_states(cfg, split, run_dir=None):
         # from before the manifest existed carry no split_file -- this branch is what keeps
         # them evaluable on the episodes they were actually held out from. Nothing trained
         # from now on can reach it: PushTImageDataset raises without a split_file.
-        _, val_mask, test_mask = get_split_masks_3way(
+        train_mask, val_mask, test_mask = get_split_masks_3way(
             n_episodes=replay_buffer.n_episodes,
             n_test_episodes=ds.n_test_episodes,
             n_val_episodes=ds.get('n_val_episodes', 0),
             seed=ds.seed,
             n_train_episodes=ds.get('n_train_episodes', None))
-    mask = val_mask if split == 'val' else test_mask
+    mask = {'train': train_mask, 'val': val_mask, 'test': test_mask}[split]
     idxs = np.nonzero(mask)[0]
 
     if run_dir is not None:
@@ -273,7 +278,8 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
     That is the ORIGINAL Diffusion Policy protocol (test_start_seed=100000), as distinct
     from ours, which replays the initial state of a held-out dataset episode.
 
-    Returns (max, final, discounted) reward arrays, one entry per env. The name is kept
+    Returns (max, final, discounted, coverage) arrays, one entry per env -- the first three
+    rewards, the last RAW goal coverage, which reward saturates away above 0.95. The name is kept
     because `max` remains the primary series -- success is defined on it.
 
     ``score_sink``: optional list. When given, every policy call appends
@@ -332,7 +338,10 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
         step_i += 1
     rewards = env.call('get_attr', 'reward')
     red = np.array([_reduce_episode_rewards(r) for r in rewards])   # (n_envs, 3)
-    return red[:, 0], red[:, 1], red[:, 2]
+    # Same channel as `reward`: an attribute the base env accumulates over the episode, read
+    # once at the end. `get_attr` falls through the wrapper stack to PushTEnv.
+    coverage = np.asarray(env.call('get_attr', 'max_coverage'), dtype=float)
+    return red[:, 0], red[:, 1], red[:, 2], coverage
 
 
 def _episode_seed(seed, n, episode_idx):
@@ -368,7 +377,10 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     # reset at every (split, n), so neither split's stream can reach the other.
     torch.manual_seed(seed)
     np.random.seed(seed)
-    out = {k: np.full(n_resets, np.nan) for k in REWARD_KINDS}
+    # 'coverage' rides alongside the three reward kinds but is NOT one of them: REWARD_KINDS is
+    # what success and the per-kind reporting are defined over, and adding it there would make
+    # coverage look like a reward that could be thresholded at SUCCESS_REWARD.
+    out = {k: np.full(n_resets, np.nan) for k in REWARD_KINDS + ('coverage',)}
     for start in tqdm.tqdm(range(0, n_resets, n_envs),
             desc=f'{label} n={n}', leave=False):
         chunk_states = list(states[start:start + n_envs])
@@ -400,7 +412,7 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
                 if env_i < n_envs - pad:
                     score_sink.append({'episode': start + env_i, 'step': st,
                                        'scores': [round(v, 6) for v in scores]})
-        for kind, arr in zip(REWARD_KINDS, chunk):
+        for kind, arr in zip(REWARD_KINDS + ('coverage',), chunk):
             out[kind][start:start + n_envs - pad] = arr[:n_envs - pad]
         tqdm.tqdm.write(f'  {label} n={n} chunk {start}: {dt:.1f}s')
     assert not any(np.isnan(v).any() for v in out.values())
@@ -410,7 +422,8 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     ci = wilson_interval(k, n_resets)
     print(f'{label} n={n}: success_rate={sr:.3f}  95% CI [{ci[0]:.3f}, {ci[1]:.3f}]  '
           f'({k}/{n_resets})  mean reward max={out["max"].mean():.3f} '
-          f'final={out["final"].mean():.3f} disc={out["discounted"].mean():.3f}')
+          f'final={out["final"].mean():.3f} disc={out["discounted"].mean():.3f} '
+          f'mean max coverage={out["coverage"].mean():.3f}')
     return float(sr), ci, out
 
 
@@ -536,6 +549,25 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # which value ranked the candidates; recorded so a curve is self-describing and cannot
     # be merged with one measured under the other verifier (see _IDENTITY)
     verifier_value_used = _verifier_value_of(policy)
+    # A LEARNED Q HAS A TRAINING SET; the simulated heuristics do not. Nothing here used to
+    # check that the episodes about to be scored are absent from that Q's replay buffer, and
+    # the failure is silent and flattering: the Q has already seen the transitions it is
+    # being asked to rank, while `t_goal` has seen nothing, so the comparison reads as a win
+    # for the wrong reason. `q_sac_all` seeds from ALL 206 episodes, so EVERY split's test
+    # set is inside it; the per-split arms are the ones that hold their own manifest out.
+    # Reported, not raised: unlike sac/eval.py this script's job is to produce the curve it
+    # was asked for, and a contaminated curve is still worth having as a ceiling -- but it
+    # must say so, and `held_out` rides into the curve JSON below.
+    held_out_used = None
+    if is_q_value(verifier_value_used):
+        from sac.score import held_out_report
+
+        scored = [int(i) for i in test_idxs] + [int(i) for i in val_idxs]
+        held_out_used = held_out_report(q_verifier_spec(verifier_value_used)[0], scored)
+        flag = 'HELD OUT' if held_out_used['held_out'] else (
+            f"NOT HELD OUT -- {held_out_used['n_overlap']} of {len(scored)} scored episodes "
+            f"are in this Q's replay buffer")
+        print(f'  verifier hold-out: {flag}')
     n_extra = 0
     temperature = getattr(policy, 'selection_temperature', None)
 
@@ -556,6 +588,8 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             'selection_index': (getattr(policy, 'selection_index', None)
                                 if selection == 'index' else None),
             'verifier_value': verifier_value_used,
+            # None for a simulated verifier, which has no training set to be held out from
+            'held_out': held_out_used,
             # None == the checkpoint's own setting was used, which is what a curve written
             # before this key existed means too.
             'corrupt_obs_eval': corrupt_obs_eval,
@@ -580,6 +614,16 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             # the other never touches it. Reported next to success, never selected on (val
             # is). Derived, not measured: `per_n_rewards` already held it, so every curve
             # written before this field existed can be -- and was -- backfilled exactly.
+            # RAW GOAL COVERAGE, uncensored. `mean_reward` above is
+            # `clip(coverage / 0.95, 0, 1)` (pusht_env.py:133) and success is
+            # `coverage > 0.95`, so the reward is an exact affine image of coverage BELOW the
+            # threshold and saturates at 1.0 above it -- right-censored on exactly the solved
+            # episodes, which is where a reader most wants to tell two arms apart. `coverage`
+            # already rode in the rewards dict and was dropped on the floor here; storing it
+            # costs one float per n and makes "how close did it get" answerable at any success
+            # rate. Absent from every curve written before 2026-09-21; readers must treat a
+            # missing key as unknown rather than zero.
+            'mean_coverage': [float(np.mean(test_rewards[n]['coverage'])) for n in done],
             'mean_reward': [float(np.mean(test_rewards[n]['max'])) for n in done],
             'mean_reward_final': [float(np.mean(test_rewards[n]['final'])) for n in done],
             'mean_reward_discounted': [
@@ -678,6 +722,7 @@ def plot_curve(curve, out_path):
 
 # per-n lists that must stay index-aligned with curve['n'] whenever two curves are merged
 _PER_N_LISTS = ('success_rate', 'success_ci',
+                'mean_coverage',
                 'mean_reward', 'mean_reward_final', 'mean_reward_discounted',
                 'val_success_rate', 'val_success_ci',
                 'val_mean_reward', 'val_mean_reward_final', 'val_mean_reward_discounted')
@@ -894,6 +939,11 @@ def _row_from_curve(step, checkpoint, curve):
         'n_generations': curve.get('n_generations'),
         'success_rate': curve['success_rate'],
         'success_ci': curve.get('success_ci'),
+        # RAW coverage, uncensored -- `mean_reward` is clip(coverage/0.95, 0, 1) and so is
+        # right-censored on exactly the solved episodes. Listed HERE as well as in the curve:
+        # this dict is the whitelist the docstring above warns about, and a key added to the
+        # curve alone reaches success_curve.json but never the run-level jsonl.
+        'mean_coverage': curve.get('mean_coverage'),
         'mean_reward': curve.get('mean_reward'),
         'mean_reward_final': curve.get('mean_reward_final'),
         'mean_reward_discounted': curve.get('mean_reward_discounted'),
