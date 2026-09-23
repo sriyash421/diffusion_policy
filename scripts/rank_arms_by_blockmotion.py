@@ -75,13 +75,87 @@ from scripts.astar_uniform_walk import (
 from scripts.verifier_ranks_expert import MOVE_EPS_PX, classify
 
 TASK_SUB = 'pusht_search/pusht_image_search_imgonly'
-# subdir | run stem | label.  BC first: its checkpoint is ~4.4GB, so a memory failure should
-# happen immediately rather than after four successful loads.
-ARMS = [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
-        ('offline', 'value_k1_ver-t_goal', 'ST k=1'),
-        ('outer_inner', 'value_k16_ver-t_goal', 'ST k=16'),
-        ('outer_inner', 'value_k16_ver-t_goal_son-flat400', 'flat t=400'),
-        ('outer_inner', 'value_k16_ver-t_goal_son-ramp400to200', 'ramp 400->200')]
+# subdir | run stem | label.  BC first in every set: its checkpoint is ~4.4GB, so a memory
+# failure should happen immediately rather than after four successful loads.
+#
+# NAMED SETS, because the pool is only meaningful when every arm in it contributes the same
+# number of candidates. A K=4 arm cannot produce 16, so the widths are read in two passes:
+# `moving4` pairs all seven arms at n=4, and `moving16` reads the k=16 arms plus BC at full
+# width (and is the set directly comparable with the blq137 numbers in
+# docs/reports/archive/ARM_RANKING_BY_BLOCKMOTION.md). Mixing widths in one pool would give
+# the wider arms more entries and bias every mid-rank toward them.
+ARM_SETS = {
+    # the 2026-09-04 geometric generation, unfiltered; the default, so existing calls are
+    # unchanged
+    'blq137': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+               ('offline', 'value_k1_ver-t_goal', 'ST k=1'),
+               ('outer_inner', 'value_k16_ver-t_goal', 'ST k=16'),
+               ('outer_inner', 'value_k16_ver-t_goal_son-flat400', 'flat t=400'),
+               ('outer_inner', 'value_k16_ver-t_goal_son-ramp400to200', 'ramp 400->200')],
+    # the t_goal-moving generation: run at --n 16
+    'moving16': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+                 ('outer_inner', 'value_k16_ver-t_goal', 'k16 uniform'),
+                 ('outer_inner', 'value_k16_ver-t_goal_son-flat400', 'k16 flat400'),
+                 ('outer_inner', 'value_k16_ver-t_goal_son-ramp400to200', 'k16 ramp400to200')],
+    # ...and at --n 4, where all seven are paired
+    'moving4': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+                ('outer_inner', 'value_k16_ver-t_goal', 'k16 uniform'),
+                ('outer_inner', 'value_k16_ver-t_goal_son-flat400', 'k16 flat400'),
+                ('outer_inner', 'value_k16_ver-t_goal_son-ramp400to200', 'k16 ramp400to200'),
+                ('outer_inner', 'value_k4_ver-t_goal', 'k4 uniform'),
+                ('outer_inner', 'value_k4_ver-t_goal_son-flat400', 'k4 flat400'),
+                ('outer_inner', 'value_k4_ver-t_goal_son-ramp400to200', 'k4 ramp400to200')],
+    # the 2026-09-19 follow-up pair, at t=600. Both widths together at n=4 (paired), and the
+    # k=16 half at n=16. BC and the uniform arms ride along as the reference the 400-level
+    # generation is already read against.
+    'moving600_16': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+                     ('outer_inner', 'value_k16_ver-t_goal', 'k16 uniform'),
+                     ('outer_inner', 'value_k16_ver-t_goal_son-flat600', 'k16 flat600'),
+                     ('outer_inner', 'value_k16_ver-t_goal_son-ramp600to200', 'k16 ramp600to200')],
+    'moving600_4': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+                    ('outer_inner', 'value_k16_ver-t_goal', 'k16 uniform'),
+                    ('outer_inner', 'value_k16_ver-t_goal_son-flat600', 'k16 flat600'),
+                    ('outer_inner', 'value_k16_ver-t_goal_son-ramp600to200', 'k16 ramp600to200'),
+                    ('outer_inner', 'value_k4_ver-t_goal', 'k4 uniform'),
+                    ('outer_inner', 'value_k4_ver-t_goal_son-flat600', 'k4 flat600'),
+                    ('outer_inner', 'value_k4_ver-t_goal_son-ramp600to200', 'k4 ramp600to200')],
+    # ALL ELEVEN arms in one pool, at n=4 -- the only width every arm can contribute, so the
+    # pool is paired. Used for the per-checkpoint sweep that picks which arms and which
+    # checkpoint to carry into the OOD evals.
+    'moving_all': [('unet_bc', 'unetbc_ver-t_goal', 'BC'),
+                   ('outer_inner', 'value_k16_ver-t_goal', 'k16 uniform'),
+                   ('outer_inner', 'value_k16_ver-t_goal_son-flat400', 'k16 flat400'),
+                   ('outer_inner', 'value_k16_ver-t_goal_son-ramp400to200', 'k16 ramp400'),
+                   ('outer_inner', 'value_k16_ver-t_goal_son-flat600', 'k16 flat600'),
+                   ('outer_inner', 'value_k16_ver-t_goal_son-ramp600to200', 'k16 ramp600'),
+                   ('outer_inner', 'value_k4_ver-t_goal', 'k4 uniform'),
+                   ('outer_inner', 'value_k4_ver-t_goal_son-flat400', 'k4 flat400'),
+                   ('outer_inner', 'value_k4_ver-t_goal_son-ramp400to200', 'k4 ramp400'),
+                   ('outer_inner', 'value_k4_ver-t_goal_son-flat600', 'k4 flat600'),
+                   ('outer_inner', 'value_k4_ver-t_goal_son-ramp600to200', 'k4 ramp600')],
+    # the 2026-09-21 blq137-FILTERED generation: the same four 600-level ladders as
+    # moving600_*, trained on blq137's own moving transitions and scored on its 50
+    # bottom-left-quadrant test episodes. Paired at --n 4; the k=16 pair also runs at --n 16.
+    # No BC and no uniform arm: neither exists at split-blq-mv, so the pool here is the four
+    # trained arms plus the block-directed uniform samples and a*.
+    'blqmv4': [('outer_inner', 'value_k16_ver-t_goal_son-flat600', 'k16 flat600'),
+               ('outer_inner', 'value_k16_ver-t_goal_son-ramp600to200', 'k16 ramp600'),
+               ('outer_inner', 'value_k4_ver-t_goal_son-flat600', 'k4 flat600'),
+               ('outer_inner', 'value_k4_ver-t_goal_son-ramp600to200', 'k4 ramp600')],
+    'blqmv16': [('outer_inner', 'value_k16_ver-t_goal_son-flat600', 'k16 flat600'),
+                ('outer_inner', 'value_k16_ver-t_goal_son-ramp600to200', 'k16 ramp600')],
+}
+# The default dataset for each set, so --arms carries its own splits rather than needing
+# three flags kept in step by hand.
+ARM_SET_DATA = {'blq137': (137, 'split-blq'),
+                'moving16': (176, 'split-mv'),
+                'moving4': (176, 'split-mv'),
+                'moving600_16': (176, 'split-mv'),
+                'moving600_4': (176, 'split-mv'),
+                'moving_all': (176, 'split-mv'),
+                'blqmv4': (137, 'split-blq-mv'),
+                'blqmv16': (137, 'split-blq-mv')}
+ARMS = ARM_SETS['blq137']
 UNIFORM, ASTAR = 'uniform', 'a*'
 SUBSETS = ('block_moving', 'block_still')
 
@@ -165,7 +239,8 @@ def rmse_to_star(cand, star, sl):
     return rmse, euclid
 
 
-def load_arms(root, step, device, shared, n_demos=137, tag='split-blq', enc='enc-resnet18'):
+def load_arms(root, step, device, shared, n_demos=137, tag='split-blq', enc='enc-resnet18',
+              arms=None):
     """Load every arm and point them all at ONE verifier. -> [(label, policy, cfg)]
 
     The injection is not cosmetic. `PushTUNetSearchPolicy.verifier` is a read-only property
@@ -174,7 +249,7 @@ def load_arms(root, step, device, shared, n_demos=137, tag='split-blq', enc='enc
     The transformer arms hold `verifier` as a plain attribute and are assigned directly.
     """
     out = []
-    for sub, stem, label in ARMS:
+    for sub, stem, label in (ARMS if arms is None else arms):
         run = f'{stem}_{enc}_demos-{n_demos}_{tag}_seed-42'
         ckpt = pathlib.Path(root) / TASK_SUB / sub / run / 'checkpoints' / f'step_{step:07d}.ckpt'
         assert ckpt.is_file(), f'missing {ckpt}'
@@ -313,18 +388,45 @@ def summarise(v, rm, eu, src, cls, n_pool, labels):
               help='candidates per arm; the uniform budget matches it')
 @click.option('--episodes', default=50, show_default=True)
 @click.option('--sectors', default=16, show_default=True)
-@click.option('--split', type=click.Choice(['val', 'test']), default='test', show_default=True)
+@click.option('--split', type=click.Choice(['train', 'val', 'test']), default='test', show_default=True)
 @click.option('--batch', default=32, show_default=True,
               help='decisions per verifier call; 32 matches verifier_n_envs so no sim is wasted')
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
 @click.option('--out', default=None, help='write the stats as JSON here')
-def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, out):
+@click.option('--arms', 'arm_set', type=click.Choice(sorted(ARM_SETS)), default='blq137',
+              show_default=True,
+              help='which named arm set to pool; each carries its own n_demos/tag')
+@click.option('--n-demos', default=None, type=int, help='override the set default')
+@click.option('--tag', default=None, help='split tag, e.g. split-mv; overrides the set default')
+@click.option('--corrupt-obs-eval/--no-corrupt-obs-eval', 'corrupt_obs_eval', default=False,
+              show_default=True,
+              help='evaluate each ladder arm under the conditional it was FITTED to. '
+                   'load_policy calls policy.eval(), and the PushT config leaves '
+                   'corrupt_obs_eval null, so by default the slot ladder is the identity '
+                   'here and every arm is read on CLEAN observations. A no-op on an arm '
+                   'with no ladder, exactly as in eval_search_pusht.')
+def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, out,
+         arm_set, n_demos, tag, corrupt_obs_eval):
     # OWNED HERE, never by a policy: policy.close() force_closes the pool, which with one
     # shared instance would tear it down for every other arm mid-run.
+    arms_spec = ARM_SETS[arm_set]
+    d_demos, d_tag = ARM_SET_DATA[arm_set]
+    n_demos = n_demos if n_demos is not None else d_demos
+    tag = tag if tag is not None else d_tag
     shared = PushTVerifier(n_envs=32, value_fn='t_goal', use_async=True)
     print(f'shared verifier: t_goal, 32 envs')
-    arms = load_arms(root, step, device, shared)
+    print(f'arm set {arm_set}: {len(arms_spec)} arms on demos-{n_demos}_{tag}, n={n_actions}')
+    arms = load_arms(root, step, device, shared, n_demos=n_demos, tag=tag, arms=arms_spec)
+    if corrupt_obs_eval:
+        # Set on the POLICY, after load_policy's .eval(), the same way eval_search_pusht
+        # does it. corrupt_obs_features_slotwise gates on `not self.training and not
+        # self.corrupt_obs_eval`, so without this the ladder is the identity at eval.
+        laddered = 0
+        for lab, pol, _ in arms:
+            pol.corrupt_obs_eval = True
+            laddered += bool(getattr(pol, 'slot_ladder_on', False))
+        print(f'corrupt-obs-eval ON: {laddered}/{len(arms)} arms have a ladder to apply')
     labels = [a[0] for a in arms] + [UNIFORM, ASTAR]
 
     cfg = arms[0][2]
@@ -334,8 +436,8 @@ def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, o
         assert (pol.n_obs_steps, pol.n_action_steps, c.policy.horizon) == (To, Ta, H), \
             f'{lab} has a different window; states would not align'
 
-    run_dir = pathlib.Path(root) / TASK_SUB / ARMS[0][0] / (
-        f'{ARMS[0][1]}_enc-resnet18_demos-137_split-blq_seed-42')
+    run_dir = pathlib.Path(root) / TASK_SUB / arms_spec[0][0] / (
+        f'{arms_spec[0][1]}_enc-resnet18_demos-{n_demos}_{tag}_seed-42')
     _, ep_idxs = get_split_states(cfg, split, run_dir=str(run_dir))
     ep_idxs = list(ep_idxs)[:episodes]
     rb = ReplayBuffer.copy_from_path(cfg.task.dataset.zarr_path,
@@ -417,7 +519,9 @@ def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, o
     res = {'step': step, 'split': split, 'n_per_arm': n_actions, 'pool_size': n_pool,
            'n_decisions': int(len(v)), 'n_episodes': int(len(set(EP))),
            'r_max_px': r_max, 'sectors': sectors, 'seed': seed,
-           'verifier_value': 't_goal', 'arm_labels': labels, 'subsets': {}}
+           'verifier_value': 't_goal', 'arm_labels': labels,
+           # WHICH READOUT. Absent in files written before 2026-09-21, which were all clean.
+           'corrupt_obs_eval': bool(corrupt_obs_eval), 'subsets': {}}
     for name, m in (('block_moving', phase), ('block_still', ~phase)):
         if not m.any():
             continue
@@ -430,11 +534,18 @@ def main(step, root, n_actions, episodes, sectors, split, batch, device, seed, o
         pol_cols = np.array([s not in (UNIFORM, ASTAR) for s in src])
         cls, _, _ = classify(t[m][:, pol_cols, 0], ref[m])
         res['subsets'][name] = summarise(v[m], rm[m], eu[m], src, cls, n_pool, labels)
-    report(res)
+    # WRITE FIRST, REPORT SECOND. These runs cost ~2 GPU-hours and load seven policies; on
+    # 2026-09-19 a hardcoded width in report() raised IndexError at --n 4 and threw the whole
+    # completed result away. Formatting must never be able to destroy a measurement.
     if out:
         pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
         pathlib.Path(out).write_text(json.dumps(res, indent=2))
         print(f'\n-> {out}')
+    try:
+        report(res)
+    except Exception as e:
+        print(f'\nreport() failed ({type(e).__name__}: {e}) -- the JSON above is complete '
+              f'and unaffected.')
 
 
 def report(res):
@@ -468,7 +579,10 @@ def report(res):
               f'  out of {P} (chance {(P-1)/2:.1f}); RMSE rank excludes a* so it is out of {P-1}.')
         bs = s.get('by_slot') or {}
         if bs:
-            NS = [1, 2, 4, 8, 16]
+            # Derived from the data, not hardcoded: a --n 4 pool has four slots, and
+            # [1,2,4,8,16] indexes slot 15 of a length-4 list.
+            width = min(len(d['final_value']) for d in bs.values() if d)
+            NS = [n for n in (1, 2, 4, 8, 16, 32, 64) if n <= width]
             print(f'\n  FINAL CANDIDATE vs BEST-OF-N, as search width n grows')
             print(f'  final(n) = slot n-1, the most-conditioned draw, executed WITHOUT '
                   f'consulting the verifier.\n  best(n) = max over slots 0..n-1, what argmax '

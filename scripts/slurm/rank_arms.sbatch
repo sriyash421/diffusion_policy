@@ -26,7 +26,11 @@ set -u
 cd /mmfs1/home/harine/diffusion_policy_standalone
 
 STEPS=(10000 50000 100000)
-STEP="${STEPS[${SLURM_ARRAY_TASK_ID:-${TASK_ID:-0}}]}"
+# STEP_OVERRIDE names the step directly, for sweeps that are not one of the three below.
+# Without it the OUT filename is built from the array entry, so a job asked for step 20000 via
+# an extra --step arg still wrote step_0100000.json -- a file whose name contradicts its
+# contents, which is worse than no file.
+STEP="${STEP_OVERRIDE:-${STEPS[${SLURM_ARRAY_TASK_ID:-${TASK_ID:-0}}]}}"
 OUTDIR="${OUTDIR:-analysis/arm_ranking}"
 OUT="$OUTDIR/$(printf 'step_%07d.json' "$STEP")"
 

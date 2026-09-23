@@ -72,6 +72,14 @@ COMMON="--reward delta --seed $SEED --video-freq 0"
 # --eval-curriculum off so eval/ stays the real uniform task, directly comparable to the four
 # arms already finished, and best_model tracks it rather than the curriculum. The curriculum
 # number is still logged, as eval_train/.
+# sac_keypoint_blq137 / _brd100 are the same arm as sac_keypoint with its demo seeding
+# restricted to ONE geometric manifest's train episodes, which is what makes that manifest's 50
+# test episodes genuinely held out from the Q. sac_keypoint itself seeds from all 206 on purpose
+# -- seed-42's 106 train episodes cover 27 of blq137's test episodes and 24 of brd60's, so the
+# old restriction bought a half-clean hold-out, and uniform-and-declared beat partial-and-hidden.
+# Restricting to the geometric manifest instead removes the overlap rather than spreading it.
+# No brd60 arm: brd60.train is a strict subset of brd100.train and their test sets are the SAME
+# 50 episodes, so the brd100 Q holds out brd60's test set too and a third run would add nothing.
 # label | entry | args
 ARMS_ALL="
 bc_keypoint            | -m recurrent_ppo.bc         | --obs keypoint
@@ -85,6 +93,8 @@ ppo_lstm_keypoint_bc   | -m recurrent_ppo.train      | --obs keypoint --bc-init 
 ppo_lstm_image_bc      | -m recurrent_ppo.train      | --obs image --lstm-hidden-size 256 --bc-init BC/bc_image/bc_best.zip
 sac_keypoint           | sac/runner.py               | --obs keypoint
 sac_image              | sac/runner.py               | --obs image
+sac_keypoint_blq137    | sac/runner.py               | --obs keypoint --demo-episodes train --split-file diffusion_policy/config/splits/pusht_blockquad_bottomleft_train137.json
+sac_keypoint_brd100    | sac/runner.py               | --obs keypoint --demo-episodes train --split-file diffusion_policy/config/splits/pusht_blockborder_train100_core50.json
 "
 
 WANT="${ARMS:-}"
@@ -182,14 +192,18 @@ while IFS='|' read -r label entry extra; do
     out="$LOGS/$label"
     extra="${extra//BC\//$LOGS/}"                    # --bc-init resolves against this LOGS root
 
+    # $SPLIT BEFORE $extra on both demonstration-reading entries. argparse is last-wins, so with
+    # the default after it an arm naming its own --split-file was accepted, printed in the dry
+    # run, and then silently trained on the wrong manifest. This way $SPLIT is the default and a
+    # per-arm manifest overrides it, which is what the printed command says happened.
     case "$entry" in
         *recurrent_ppo.bc)
             # the BC stage takes no --reward/--video-freq; it trains on demonstrations
-            cmd="python $entry $extra --split-file $SPLIT --seed $SEED --out $out"
+            cmd="python $entry --split-file $SPLIT $extra --seed $SEED --out $out"
             ;;
         *sac/runner.py)
             # SAC's action is an absolute chunk, so --reward delta does not apply to it
-            cmd="python $entry $extra --seed $SEED --split-file $SPLIT --total-timesteps $STEPS --log-dir $out"
+            cmd="python $entry --split-file $SPLIT $extra --seed $SEED --total-timesteps $STEPS --log-dir $out"
             ;;
         *)
             cmd="python $entry $extra $COMMON --total-timesteps $STEPS --log-dir $out"
