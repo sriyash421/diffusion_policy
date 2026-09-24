@@ -11,8 +11,7 @@ from diffusion_policy.policy.diffusion_transformer_search_policy import (
 
 class MazeDiffusionSearchPolicy(DiffusionTransformerSearchPolicy):
     def _build_verifier(self, **kwargs):
-        """`l2s` is imported here so the base module stays importable without it."""
-        from l2s.verifier import MazeVerifier
+        from diffusion_policy.common.maze_verifier import MazeVerifier
         return MazeVerifier(
             maze_path=kwargs.get('maze_path', None),
             device=kwargs.get('device', 'cpu'),

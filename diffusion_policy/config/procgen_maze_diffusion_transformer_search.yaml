@@ -52,7 +52,7 @@ policy:
   corrupt_obs: False
 
   max_actions: 16
-  maze_path: null
+  maze_path: data/procgen_maze_expert_maze1/maze.npy
   device: ${training.device}
 
 dataloader:
