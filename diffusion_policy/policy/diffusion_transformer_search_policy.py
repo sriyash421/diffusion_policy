@@ -11,7 +11,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from l2s.verifier import MazeVerifier
+from diffusion_policy.common.maze_verifier import MazeVerifier
 
 
 class SearchTransformerForDiffusion(nn.Module):

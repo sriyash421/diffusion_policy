@@ -11,7 +11,7 @@ from torch.distributions import Normal
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import GPT2Config, GPT2Model
 
-from l2s.verifier import MazeVerifier
+from diffusion_policy.common.maze_verifier import MazeVerifier
 
 class SearchPolicy(BaseImagePolicy):
     def __init__(self,

@@ -1,5 +1,10 @@
 # Diffusion Policy
 
+> **Fork note:** this fork adds the Learning-to-Search (L2S) Procgen maze experiments —
+> verifier-in-the-loop search policies and test-time compute scaling.
+> See [`README_search.md`](README_search.md) for setup, training commands, hyperparameters,
+> and verifier documentation.
+
 [[Project page]](https://diffusion-policy.cs.columbia.edu/)
 [[Paper]](https://diffusion-policy.cs.columbia.edu/#paper)
 [[Data]](https://diffusion-policy.cs.columbia.edu/data/)
