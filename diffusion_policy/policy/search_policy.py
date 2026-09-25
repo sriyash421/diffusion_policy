@@ -11,7 +11,7 @@ from torch.distributions import Normal
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import GPT2Config, GPT2Model
 
-from l2s.verifier import MazeVerifier
+from diffusion_policy.common.l2s_maze_verifier import MazeVerifier
 
 class SearchPolicy(BaseImagePolicy):
     def __init__(self,
@@ -42,6 +42,7 @@ class SearchPolicy(BaseImagePolicy):
             maze_path=kwargs.get('maze_path', None),
             device=kwargs.get('device', 'cpu'),
             noise=kwargs.get('verifier_noise', 0.0),
+            start_offset=n_obs_steps - 1,
         )
         self.kwargs = kwargs
         self.mask_obs = mask_obs

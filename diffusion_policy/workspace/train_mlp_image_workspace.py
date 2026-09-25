@@ -182,6 +182,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         break
                 step_log = dict()
                 # ========= train for this epoch ==========
+                # the end-of-epoch eval block leaves the policy in eval mode (dropout off)
+                self.accelerator.unwrap_model(self.model).train()
                 if cfg.training.freeze_encoder:
                     self.accelerator.unwrap_model(self.model).obs_encoder.eval()
                     self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
@@ -316,7 +318,14 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
-        self.accelerator.end_training()
+        # final weights: periodic checkpoints can lag the last step
+        if self.accelerator.is_main_process:
+            self.model = self.accelerator.unwrap_model(self.model)
+            if cfg.checkpoint.save_last_ckpt:
+                self.save_checkpoint()
+        # accelerate<0.14 only defines .trackers in init_trackers(), which is never called
+        if hasattr(self.accelerator, 'trackers'):
+            self.accelerator.end_training()
 
 @hydra.main(
     version_base=None,
