@@ -31,7 +31,7 @@ Four configs define the comparison:
 | `procgen_maze_diffusion_transformer_search.yaml` | `DiffusionTransformerSearchPolicy` | Diffusion search transformer, verifier in the loop |
 
 The maze layout generation, expert data collection, evaluation and plotting scripts live in
-the companion [L2S repo](https://github.com/sriyash421/L2S) (`l2s/generate_procgen_mazes.py`,
+the companion [L2S repo](https://github.com/WEIRDLabUW/L2S) (`l2s/generate_procgen_mazes.py`,
 `l2s/maze.py`, `l2s/eval_bc.py`, `l2s/plot_test_time_compute.py`, `l2s/visualize_*.py`).
 Only the verifier is vendored here so that training in this repo has no `l2s` dependency
 — see [§5](#5-the-verifier).
@@ -50,7 +50,7 @@ Training the search policies needs only this repo. Data generation and evaluatio
 additionally need the L2S repo on your `PYTHONPATH`:
 
 ```bash
-git clone https://github.com/sriyash421/L2S && pip install -e L2S
+git clone https://github.com/WEIRDLabUW/L2S && pip install -e L2S
 ```
 
 ### Data
