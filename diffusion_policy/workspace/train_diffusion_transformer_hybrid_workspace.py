@@ -310,7 +310,9 @@ class TrainDiffusionTransformerHybridWorkspace(BaseWorkspace):
                     json_logger.log(step_log)
                 self.global_step += 1
                 self.epoch += 1
-        self.accelerator.end_training()
+        self.join_saving_thread()
+        if getattr(self.accelerator, 'trackers', None):
+            self.accelerator.end_training()
 
 @hydra.main(
     version_base=None,

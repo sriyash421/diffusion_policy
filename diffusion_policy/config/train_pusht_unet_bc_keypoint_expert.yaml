@@ -1,0 +1,93 @@
+# PushT UNet BC (KEYPOINT) on the full demonstration set -- the image expert's twin.
+#
+# Inherits train_pusht_unet_bc_expert so the two arms share the split, the split geometry,
+# the step budget, the lr schedule, EMA and the UNet architecture, and differ ONLY in the
+# observation. Anything set here is something that cannot be true of both arms.
+defaults:
+  - train_pusht_unet_bc_expert
+  - _self_
+  # replaces pusht_base's `task: pusht_image_search_imgonly`
+  - override task: pusht_keypoint_manifest
+
+name: train_pusht_unet_bc_keypoint_expert
+
+# The backbone axis is meaningless without an image, so it must not appear in the run name.
+enc_suffix: ''
+run_name: unetbckp_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+# NO VERIFIER on this arm, so no `ver-` component. check_verifier_value requires
+# policy.verifier_value whenever verifier_tag is set; null is its documented escape hatch,
+# and it is the truth here -- this policy scores nothing. Same choice train_pusht_lstm_bc
+# makes, for the same reason.
+verifier_tag: null
+logging:
+  # pusht_base's template ends in `ver-${verifier_tag}`, which would read `ver-None`.
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+# A SIBLING of pusht_base's `obs_encoder`, not an override of it -- `policy.obs_encoder` must
+# be RE-POINTED rather than rewritten. See train_pusht_lstm_bc_keypoint.yaml for the full
+# argument: assigning a dict to a key holding `${obs_encoder}` MERGES into the ResNet block
+# instead of replacing it.
+#
+# Parameter-free, and NOT MultiImageObsEncoder: that appends low_dim tensors raw, so the
+# (B,9,2) keypoint entry would survive the concat as (B,9,2) instead of flattening to 18.
+obs_encoder_keypoint:
+  _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+  shape_meta: ${shape_meta}
+
+# THE POLICY IS REPLACED WHOLESALE, and it has to be.
+#
+# The parent is PushTUNetSearchPolicy, which cannot run here for two independent reasons:
+#   1. PushTSearchMixin._check_obs_contract REFUSES to construct when shape_meta declares any
+#      low_dim observation key. `keypoint` and `agent_pos` are both low_dim, so the assert
+#      fires at startup -- by design, not by accident.
+#   2. Even setting that aside, DiffusionUnetImagePolicy stores its leftover **kwargs and
+#      forwards them to `noise_scheduler.step(**self.kwargs)`. The parent's verifier and crop
+#      keys are not DDIMScheduler arguments, so inheriting that block would raise a TypeError
+#      inside the sampler rather than being harmlessly ignored.
+#
+# So `policy` is pointed at the sibling node below. Merging a dict onto the parent's literal
+# dict would keep all nine verifier keys; pointing the key at an interpolation replaces the
+# node outright. VERIFIED by composing this config and asserting no verifier_* key survives
+# (unit_tests/test_bc_expert_configs.py).
+policy: ${policy_keypoint}
+
+policy_keypoint:
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
+  shape_meta: ${shape_meta}
+  obs_encoder: ${obs_encoder_keypoint}
+  # THESE SIX ARCHITECTURE KEYS AND THE SCHEDULER ARE A DELIBERATE COPY of the image arm's
+  # policy block, and they are copies only because they CANNOT be interpolated: `policy` is
+  # replaced wholesale above, so the node that held the originals no longer exists in this
+  # config. The two arms are a clean observation ablation only if the UNet is the same width
+  # and depth and the sampler is the same, so the copy is pinned by a test --
+  # unit_tests/test_bc_expert_configs.py composes both configs and fails if any of them
+  # diverges. Change a value there and the test tells you to change it here.
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 8
+  obs_as_global_cond: ${obs_as_global_cond}
+  diffusion_step_embed_dim: 256
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+  # NO crop_shape / random_crop: there is no image to crop, and this policy has no
+  # CropScopeMixin, so either key would fall through to `noise_scheduler.step(**kwargs)`
+  # and raise.
+
+# No ResNet means no image activations, so the keypoint arm could run a much larger batch
+# than the image arm. It deliberately does NOT: batch size is an optimisation knob, and
+# holding it at the image arm's value keeps the two arms' gradient noise comparable so the
+# difference between them is the observation.

@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 import pathlib
+import datetime
 import hydra
 import copy
 from hydra.core.hydra_config import HydraConfig
@@ -57,6 +58,21 @@ def set_initial_lr(optimizer):
         group.setdefault('initial_lr', group['lr'])
 
 
+def check_pusht_config(cfg):
+    """PushT run-identity guards (verifier value, transition filter).
+
+    Imported lazily: both checks are no-ops unless the config declares ``verifier_tag`` or
+    ``split_suffix``, and importing the PushT env pulls in gym, which the Simpler and maze
+    envs do not all have.
+    """
+    if cfg.get('verifier_tag', None) is None and 'split_suffix' not in cfg:
+        return
+    from diffusion_policy.dataset.pusht_image_dataset import check_transition_filter_labels
+    from diffusion_policy.env.pusht.pusht_verifier import check_verifier_value
+    check_verifier_value(cfg)
+    check_transition_filter_labels(cfg)
+
+
 class BaseWorkspace:
     include_keys = tuple()
     exclude_keys = tuple()
@@ -109,28 +125,173 @@ class BaseWorkspace:
                         payload['state_dicts'][key] = value.state_dict()
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
+        def _atomic_save():
+            """Write to a sibling .tmp then rename into place.
+
+            The rename is atomic on POSIX, so a reader never observes a partial file. Two
+            consumers depend on this: the eval watcher globs `step_*.ckpt` on existence
+            alone and would otherwise torch.load a half-written file, and `latest.ckpt` --
+            which `training.resume` reads -- was a truncate-then-write that a preemption
+            mid-save could leave truncated.
+            """
+            tmp = path.with_suffix(path.suffix + '.tmp')
+            with tmp.open('wb') as f:
+                torch.save(payload, f, pickle_module=dill)
+            os.replace(tmp, path)
+
         if use_thread:
-            # Join the previous save before starting another. Without this, two saves
-            # close together (e.g. latest.ckpt then step_*.ckpt on the same step) run
-            # concurrently and race on the same file, and the handle was never joined at
-            # all -- so a run could exit with its last checkpoint truncated.
+            # A previous save may still be writing (possibly to this same path, e.g. two
+            # `latest.ckpt` saves within one epoch). Joining first serializes the writes so
+            # they cannot interleave and truncate each other.
             self.join_saving_thread()
-            self._saving_thread = threading.Thread(
-                target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
+            self._saving_thread = threading.Thread(target=_atomic_save)
             self._saving_thread.start()
         else:
-            torch.save(payload, path.open('wb'), pickle_module=dill)
+            _atomic_save()
         return str(path.absolute())
 
     def join_saving_thread(self):
         """Block until any in-flight threaded checkpoint save has finished.
 
-        Call at the end of ``run()``: the process exiting while a save is still writing
-        leaves that checkpoint truncated on disk.
+        Must be called before the process exits, otherwise the last checkpoint can be
+        left truncated on disk.
         """
-        if self._saving_thread is not None:
-            self._saving_thread.join()
+        thread = getattr(self, '_saving_thread', None)
+        if thread is not None:
+            thread.join()
             self._saving_thread = None
+
+
+    def write_manifest(self):
+        """Record run identity in <output_dir>/run.json, appending one entry per launch.
+
+        Nothing else on disk ties a run directory to the code and job that produced it:
+        the git sha existed only incidentally inside wandb's metadata, and there was no
+        back-pointer from a SLURM job id to a run dir at all -- which is why the reporting
+        scripts had to hand-maintain arm->path->jobid tables that drifted apart.
+
+        Appending rather than overwriting means requeues and resumes stay visible, so a
+        run that restarted three times is distinguishable from one that ran straight
+        through.
+        """
+        import json
+        import subprocess
+
+        def _git(*args):
+            try:
+                return subprocess.run(
+                    ['git', *args], cwd=os.path.dirname(os.path.abspath(__file__)),
+                    capture_output=True, text=True, timeout=10).stdout.strip()
+            except Exception:
+                return None
+
+        path = pathlib.Path(self.output_dir).joinpath('run.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cfg = self.cfg
+        launch = {
+            'started_at': datetime.datetime.now().isoformat(timespec='seconds'),
+            'slurm_job_id': os.environ.get('SLURM_JOB_ID'),
+            'hostname': os.environ.get('SLURMD_NODENAME') or os.uname().nodename,
+            'git_sha': _git('rev-parse', 'HEAD'),
+            'git_dirty': bool(_git('status', '--porcelain')),
+            'global_step': int(getattr(self, 'global_step', 0)),
+        }
+        payload = {}
+        if path.is_file():
+            try:
+                payload = json.loads(path.read_text())
+            except Exception:
+                payload = {}
+        payload.update({
+            'name': cfg.get('name'),
+            'exp_name': cfg.get('exp_name'),
+            'trainer': cfg.get('trainer'),
+            'task_name': cfg.get('task_name'),
+            'search_context': cfg.get('search_context'),
+            'corrupt_obs': cfg.get('corrupt_obs'),
+            'seed': cfg.training.get('seed'),
+            'zarr_path': cfg.task.dataset.get('zarr_path'),
+            'split_file': cfg.task.dataset.get('split_file'),
+            'target': cfg.get('_target_'),
+            # The POLICY class, not just the workspace. `target` above is the workspace, and
+            # workspaces are shared: TrainDiffusionUnetImageWorkspace serves both the
+            # PushTUNetSearchPolicy arm (best-of-n, crop shared across the obs frames) and the
+            # upstream DiffusionUnetImagePolicy arm (neither). Two run directories can
+            # therefore differ in what the checkpoint IS while agreeing on every other key
+            # here, and the only thing distinguishing them was the config `name` -- which is an
+            # inference about what a config pointed at, not a record of what was built.
+            'policy_target': cfg.get('policy', {}).get('_target_'),
+        })
+        payload.setdefault('launches', []).append(launch)
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, path)
+        return str(path)
+
+    def write_splits(self, dataset):
+        """Record the exact episodes this run trains/validates/tests on.
+
+        Nothing on disk used to say which episodes a checkpoint had been trained on: the
+        three splits were derived at runtime, independently, in the dataset, the env runner
+        and the eval script, from five config keys. Changing any one of them silently
+        repartitioned the data -- which is how a `n_val_episodes` 10 -> 30 change quietly
+        cut the training budget from 29 to 25 episodes.
+
+        On resume this ALSO acts as a guard: if the run directory already has a splits.json
+        whose checksum differs from what the current config resolves to, the data changed
+        underneath an in-flight experiment and we refuse rather than continue. That guard is
+        the main reason this method exists.
+
+        No-op for datasets that do not implement `get_split_indices` (the maze/robomimic
+        ones), so it is safe to call unconditionally.
+        """
+        import json
+
+        get_indices = getattr(dataset, 'get_split_indices', None)
+        if get_indices is None:
+            return None
+        splits = get_indices()
+
+        path = pathlib.Path(self.output_dir).joinpath('splits.json')
+        if path.is_file():
+            try:
+                previous = json.loads(path.read_text())
+            except Exception:
+                previous = None
+            # The TRANSITION filter, compared separately. `checksum` is over episode index
+            # lists only, so a run that changed which transitions inside those episodes it
+            # trains on would pass the check below while training on different data.
+            # `.get` on both sides means absent == no filter, so every splits.json written
+            # before this key existed still matches a filterless config.
+            if previous is not None:
+                was = (previous.get('transition_filter') or {}).get('checksum')
+                now = (splits.get('transition_filter') or {}).get('checksum')
+                if was != now:
+                    raise RuntimeError(
+                        f'{path} records transition filter {was} but this config resolves '
+                        f'to {now}. The set of TRANSITIONS changed underneath an existing '
+                        f'run -- the checkpoints here were built from different windows of '
+                        f'the same episodes, so resuming would silently mix the two. '
+                        f'Restore the original transition_file, or start a new run '
+                        f'directory.')
+            if previous is not None and previous.get('checksum') != splits['checksum']:
+                raise RuntimeError(
+                    f'{path} records checksum {previous.get("checksum")} but this config '
+                    f'resolves to {splits["checksum"]}. The train/val/test partition '
+                    f'changed underneath an existing run -- resuming would train on '
+                    f'different data than the checkpoints in this directory were built '
+                    f'from, and every metric would silently mix the two. Restore the '
+                    f'original split settings, or start a new run directory.\n'
+                    f'  before: '
+                    f'{ {k: len(previous.get(k, [])) for k in ("train", "val", "test")} }\n'
+                    f'  now:    '
+                    f'{ {k: len(splits[k]) for k in ("train", "val", "test")} }')
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(splits, indent=2) + '\n')
+        os.replace(tmp, path)
+        return str(path)
 
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
@@ -157,11 +318,66 @@ class BaseWorkspace:
         else:
             path = pathlib.Path(path)
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
-        self.load_payload(payload, 
-            exclude_keys=exclude_keys, 
+        self.load_payload(payload,
+            exclude_keys=exclude_keys,
             include_keys=include_keys)
         return payload
-    
+
+    def assert_ema_payload(self, payload, path):
+        """Refuse to resume a pre-EMA checkpoint into a run with ``use_ema: True``.
+
+        ``load_payload`` only restores keys the PAYLOAD actually has, so resuming a
+        checkpoint written before EMA existed leaves ``ema_model`` at its RANDOM
+        initialization while ``model`` receives the trained weights. Since the EMA copy is
+        what gets rolled out, validated and shipped in the checkpoint, every metric until
+        the average converges (~200 steps at decay 0.995) would be silently wrong -- and the
+        checkpoints written in that window ship a partly-random policy.
+
+        Called from every workspace's resume block. It lives here rather than in one
+        workspace because each of the three overrides ``run()`` and so has its own resume
+        path; the guard existed only in TrainMLPImageWorkspace, which meant the search arms
+        (TrainSearchOuterInnerWorkspace, the default search trainer since 5294c31) and the
+        diffusion-UNet arm ran without it.
+
+        No-op when the workspace has no ``ema_model`` (``use_ema: False``).
+        """
+        if getattr(self, 'ema_model', None) is None:
+            return
+        if 'ema_model' in payload.get('state_dicts', {}):
+            return
+        raise RuntimeError(
+            f'{path} predates EMA (no ema_model in the payload) but training.use_ema is '
+            f'True. Resuming would evaluate and ship a randomly-initialized EMA copy. '
+            f'Start a new run directory, or set use_ema: False to continue this one.')
+
+    def _close_worker_pools(self, env_runner=None):
+        """Release the subprocess pools held by the policy's verifier and the env runner.
+
+        Both the search verifier and the env runner hold pools of worker SUBPROCESSES that
+        garbage collection will not reap, so they must be closed explicitly -- register this
+        on an ExitStack so it runs on normal exit and on exceptions alike.
+
+        Best-effort: this runs during teardown (including after an exception), so a failure
+        to close must not mask the original error.
+        """
+        owners = [getattr(self, 'model', None)]
+        accelerator = getattr(self, 'accelerator', None)
+        if accelerator is not None and owners[0] is not None:
+            owners[0] = accelerator.unwrap_model(owners[0])
+        if env_runner is not None:
+            owners.append(env_runner)
+        for owner in owners:
+            if owner is None:
+                continue
+            close = getattr(owner, 'close', None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception as e:
+                print(f'warning: failed to close {type(owner).__name__}: {e}')
+
+
     @classmethod
     def create_from_checkpoint(cls, path, 
             exclude_keys=None, 

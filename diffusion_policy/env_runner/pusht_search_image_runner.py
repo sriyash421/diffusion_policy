@@ -1,0 +1,300 @@
+"""Env runner for the offline PushT diffusion-search policy.
+
+Differs from ``PushTImageRunner`` in two ways:
+1. It rolls out on BOTH the held-out **val** and **test** splits (3-way seeded split),
+   with ``val/`` and ``test/`` prefixes.
+2. It drives the search policy via ``policy.predict_action_best(obs_dict)`` (argmax over
+   the verifier-scored candidates), since the search policy's ``predict_action`` has a
+   different signature (``obs_dict, verifier, n_actions``) than the standard one.
+
+Metrics per split: ``mean_score`` (mean max reward), ``success_rate`` (fraction with max
+coverage >= threshold, i.e. max reward >= 1.0), and the final-step distances read from
+``obs['agent_pos']`` / ``obs['feedback']``:
+
+* ``T_goal_distance`` -- mean per-keypoint distance of the achieved T from the goal T.
+  (Logged as ``T_distance`` before 2026-08-19; renamed when the verifier value gained the
+  approach term, so a panel cannot silently mix the two eras.)
+* ``arm_T_distance`` -- distance from the arm to the centre of the achieved T.
+* ``verifier_distance`` -- their sum, i.e. exactly ``-value`` under the ``armT`` verifier
+  (under ``t_goal`` the value is ``-T_goal_distance`` alone; see pusht_verifier.VALUE_FNS).
+
+All three are logged in BOTH verifier modes -- they are facts about the final state, not
+about the scoring rule -- so the components stay comparable across the 2026-08-19 cutover
+even though the value built from them does not.
+
+The best-of-N-search *success curve* (n=1..64) is a separate, test-only artifact produced
+by ``eval_search_pusht.py`` -- not here.
+"""
+import wandb
+import numpy as np
+import torch
+import collections
+import pathlib
+import tqdm
+import dill
+import math
+import wandb.sdk.data_types.video as wv
+
+from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
+from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
+from diffusion_policy.env.pusht.feedback_util import (
+    t_goal_distance, arm_to_t_distance)
+from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
+from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
+from diffusion_policy.gym_util.video_recording_wrapper import (
+    VideoRecordingWrapper, VideoRecorder)
+from diffusion_policy.policy.base_image_policy import BaseImagePolicy
+from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.dataset.pusht_image_dataset import (
+    get_episode_init_states,
+    load_split_manifest, masks_from_manifest)
+from diffusion_policy.env_runner.pusht_image_runner import PushTImageRunner
+
+
+class PushTSearchImageRunner(PushTImageRunner):
+    def __init__(self,
+            output_dir,
+            zarr_path,
+            seed=42,
+            n_test_episodes=50,
+            n_val_episodes=10,
+            n_train_episodes=None,
+            n_vis=5,
+            legacy=False,
+            max_steps=300,
+            n_obs_steps=2,
+            n_action_steps=8,
+            n_search_actions=None,
+            fps=10,
+            crf=22,
+            render_size=96,
+            past_action=False,
+            tqdm_interval_sec=5.0,
+            n_envs=None,
+            split_file=None,
+        ):
+        # NOTE: intentionally does NOT call PushTImageRunner.__init__ (that one builds a
+        # test-only set); we reimplement init to cover val+test. BaseImageRunner.__init__
+        # only stores output_dir.
+        from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
+        BaseImageRunner.__init__(self, output_dir)
+
+        # number of candidates per decision at eval time (best is executed).
+        self.n_search_actions = n_search_actions
+
+        replay_buffer = ReplayBuffer.copy_from_path(
+            zarr_path, keys=['agent_pos', 'block_pos'])
+        # REQUIRED, matching PushTImageDataset. The derive-from-seed fallback that used to
+        # sit here was the second of two independent answers to "which episodes are val?",
+        # agreeing with the dataset only by convention -- exactly what the manifest exists to
+        # replace. Both now read the SAME file (the task config interpolates split_file from
+        # task.dataset), so a rollout split cannot drift from the training split.
+        if split_file is None:
+            raise ValueError(
+                'PushTSearchImageRunner requires split_file: it must roll out on the same '
+                'manifest the dataset trained on. Pass ${task.dataset.split_file}.')
+        manifest = load_split_manifest(
+            split_file,
+            episode_ends=replay_buffer.episode_ends[:],
+            expected_counts={
+                'test': n_test_episodes,
+                'val': n_val_episodes if n_val_episodes else None,
+                'train': n_train_episodes,
+            })
+        _, val_mask, test_mask = masks_from_manifest(
+            manifest, replay_buffer.n_episodes)
+
+        splits = [('val/', val_mask), ('test/', test_mask)]
+
+        steps_per_render = max(10 // fps, 1)
+        def env_fn():
+            return MultiStepWrapper(
+                VideoRecordingWrapper(
+                    PushTFeedbackWrapper(
+                        PushTImageEnv(legacy=legacy, render_size=render_size)
+                    ),
+                    video_recoder=VideoRecorder.create_h264(
+                        fps=fps, codec='h264', input_pix_fmt='rgb24', crf=crf,
+                        thread_type='FRAME', thread_count=1),
+                    file_path=None,
+                    steps_per_render=steps_per_render
+                ),
+                n_obs_steps=n_obs_steps,
+                n_action_steps=n_action_steps,
+                max_episode_steps=max_steps
+            )
+
+        env_seeds = list()
+        env_prefixs = list()
+        env_init_fn_dills = list()
+        for prefix, mask in splits:
+            reset_states = get_episode_init_states(replay_buffer, mask)
+            episode_idxs = np.nonzero(mask)[0]
+            for i in range(len(reset_states)):
+                state = reset_states[i]
+                episode_idx = int(episode_idxs[i])
+                enable_render = i < n_vis
+
+                def init_fn(env, state=state, episode_idx=episode_idx,
+                            enable_render=enable_render):
+                    assert isinstance(env.env, VideoRecordingWrapper)
+                    env.env.video_recoder.stop()
+                    env.env.file_path = None
+                    if enable_render:
+                        filename = pathlib.Path(output_dir).joinpath(
+                            'media', wv.util.generate_id() + ".mp4")
+                        filename.parent.mkdir(parents=False, exist_ok=True)
+                        env.env.file_path = str(filename)
+                    assert isinstance(env.unwrapped, PushTImageEnv)
+                    env.unwrapped.reset_to_state = np.asarray(state)
+                    assert isinstance(env, MultiStepWrapper)
+                    env.seed(episode_idx)
+
+                env_seeds.append(episode_idx)
+                env_prefixs.append(prefix)
+                env_init_fn_dills.append(dill.dumps(init_fn))
+
+        n_total = len(env_init_fn_dills)
+        if n_envs is None:
+            n_envs = n_total
+        env_fns = [env_fn] * n_envs
+
+        self.env = AsyncVectorEnv(env_fns)
+        self.env_fns = env_fns
+        self.env_seeds = env_seeds
+        self.env_prefixs = env_prefixs
+        self.env_init_fn_dills = env_init_fn_dills
+        self.n_vis = n_vis
+        self.output_dir = output_dir
+        self.fps = fps
+        self.crf = crf
+        self.n_obs_steps = n_obs_steps
+        self.n_action_steps = n_action_steps
+        self.past_action = past_action
+        self.max_steps = max_steps
+        self.tqdm_interval_sec = tqdm_interval_sec
+
+    def close(self):
+        """Shut down the rollout worker pool (one subprocess per env, held for the whole
+        run so rollouts don't pay respawn cost). Called by the training workspace."""
+        # force_close, not env.close(): a plain close() drains whatever call is in flight
+        # with no timeout, so one dead worker wedges teardown permanently. See force_close.
+        env = getattr(self, 'env', None)
+        if env is not None:
+            self.env = None
+            force_close(env)
+
+    def run(self, policy: BaseImagePolicy):
+        device = policy.device
+        env = self.env
+
+        n_envs = len(self.env_fns)
+        n_inits = len(self.env_init_fn_dills)
+        n_chunks = math.ceil(n_inits / n_envs)
+
+        all_video_paths = [None] * n_inits
+        all_rewards = [None] * n_inits
+        # the two halves of the verifier value, at the final step of each episode
+        all_t_goal_dist = [np.nan] * n_inits
+        all_arm_t_dist = [np.nan] * n_inits
+
+        for chunk_idx in range(n_chunks):
+            start = chunk_idx * n_envs
+            end = min(n_inits, start + n_envs)
+            this_global_slice = slice(start, end)
+            this_n_active_envs = end - start
+            this_local_slice = slice(0, this_n_active_envs)
+
+            this_init_fns = self.env_init_fn_dills[this_global_slice]
+            n_diff = n_envs - len(this_init_fns)
+            if n_diff > 0:
+                this_init_fns.extend([self.env_init_fn_dills[0]] * n_diff)
+
+            env.call_each('run_dill_function', args_list=[(x,) for x in this_init_fns])
+
+            obs = env.reset()
+            policy.reset()
+            last_obs = obs
+
+            pbar = tqdm.tqdm(total=self.max_steps,
+                desc=f"Eval PushTSearchRunner {chunk_idx+1}/{n_chunks}",
+                leave=False, mininterval=self.tqdm_interval_sec)
+            done = False
+            while not done:
+                obs_dict = dict_apply(dict(obs),
+                    lambda x: torch.from_numpy(x).to(device=device))
+                with torch.no_grad():
+                    if self.n_search_actions == 1:
+                        # BC rollout: one sample, executed. At n=1 every selection rule
+                        # returns this same action -- 'argmax'/'softmax' have a single
+                        # candidate to choose among, and 'final_pass' searches at n-1 = 0,
+                        # so its one generation is the empty-context conditional too.
+                        # Going through predict_action_best would still physics-simulate
+                        # in the verifier, so the BC baseline would pay a search cost it
+                        # does not use and spawn a worker pool it never needs.
+                        action_dict = policy.predict_action(obs_dict)
+                    else:
+                        action_dict = policy.predict_action_best(
+                            obs_dict, n_actions=self.n_search_actions)
+                action = dict_apply(action_dict,
+                    lambda x: x.detach().to('cpu').numpy())['action']
+                obs, reward, done, info = env.step(action)
+                last_obs = obs
+                done = np.all(done)
+                pbar.update(action.shape[1])
+            pbar.close()
+
+            all_video_paths[this_global_slice] = env.render()[this_local_slice]
+            all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
+            # final-step obs -> the verifier's two distance terms, for the active envs in
+            # this chunk. Same functions the verifier scores candidates with, so these are
+            # directly comparable to the scores argmax ranked on.
+            final_feedback = np.asarray(last_obs['feedback'])[this_local_slice, -1]   # (m, 16)
+            final_agent = np.asarray(last_obs['agent_pos'])[this_local_slice, -1]     # (m, 2)
+            all_t_goal_dist[this_global_slice] = list(t_goal_distance(final_feedback))
+            all_arm_t_dist[this_global_slice] = list(
+                arm_to_t_distance(final_agent, final_feedback))
+
+        _ = env.reset()
+
+        # per-split aggregation
+        max_rewards = collections.defaultdict(list)
+        successes = collections.defaultdict(list)
+        t_goal_dists = collections.defaultdict(list)
+        arm_t_dists = collections.defaultdict(list)
+        log_data = dict()
+        for i in range(n_inits):
+            episode_idx = self.env_seeds[i]
+            prefix = self.env_prefixs[i]
+            max_reward = float(np.max(all_rewards[i]))
+            max_rewards[prefix].append(max_reward)
+            successes[prefix].append(1.0 if max_reward >= 1.0 else 0.0)
+            t_goal_dists[prefix].append(all_t_goal_dist[i])
+            arm_t_dists[prefix].append(all_arm_t_dist[i])
+            log_data[prefix + f'sim_max_reward_ep{episode_idx}'] = max_reward
+
+        # tile the first n_vis rollouts (per split) side-by-side into one video
+        vis_by_prefix = collections.defaultdict(list)
+        for i in range(n_inits):
+            if all_video_paths[i] is not None:
+                vis_by_prefix[self.env_prefixs[i]].append(all_video_paths[i])
+        for prefix, paths in vis_by_prefix.items():
+            paths = paths[:self.n_vis]
+            if paths:
+                combined_path = self._tile_videos(paths)
+                if combined_path is not None:
+                    log_data[prefix + f'sim_video_first{len(paths)}'] = wandb.Video(
+                        combined_path, fps=self.fps)
+
+        for prefix in max_rewards:
+            log_data[prefix + 'mean_score'] = float(np.mean(max_rewards[prefix]))
+            log_data[prefix + 'success_rate'] = float(np.mean(successes[prefix]))
+            t_goal = float(np.mean(t_goal_dists[prefix]))
+            arm_t = float(np.mean(arm_t_dists[prefix]))
+            log_data[prefix + 'T_goal_distance'] = t_goal
+            log_data[prefix + 'arm_T_distance'] = arm_t
+            # == -value under the armT verifier; -T_goal_distance alone under t_goal
+            log_data[prefix + 'verifier_distance'] = t_goal + arm_t
+
+        return log_data

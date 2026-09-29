@@ -33,6 +33,51 @@ from gym.vector.utils import (
 __all__ = ["AsyncVectorEnv"]
 
 
+def force_close(vec):
+    """Tear down an AsyncVectorEnv without ever blocking. Safe to call on a wedged pool.
+
+    ``AsyncVectorEnv.close()`` first tries to DRAIN whatever call is in flight: if
+    ``_state`` is not DEFAULT it runs ``<state>_wait(timeout)``, and the default timeout is
+    ``None``, i.e. wait forever. That is fine when the workers are healthy and fatal when
+    they are not -- and teardown is exactly when they are not.
+
+    Observed: a worker died mid-reply during training. ``_poll()`` reported data ready, the
+    following ``pipe.recv()`` blocked on the dead worker, and the process hung inside
+    ``close()`` FOREVER. Two things made that expensive rather than merely annoying:
+
+      * the hang was in an ExitStack callback, and Python runs those DURING exception
+        unwinding and prints the traceback only AFTER it completes -- so the original
+        exception was never printed and the cause is unrecoverable;
+      * SLURM still saw the job as RUNNING, so it never requeued and held a GPU for
+        13.5 hours (it would have held it for the full 5-day walltime).
+
+    So: drop the drain entirely. Clearing ``_state`` first makes ``close_extras`` skip the
+    ``<state>_wait`` branch, and ``terminate=True`` then kills the workers rather than
+    negotiating with them. There is nothing worth collecting at teardown, and the results
+    of an in-flight reset are by definition discarded.
+    """
+    if vec is None:
+        return
+    try:
+        # skip the drain: nothing in flight is worth waiting for at teardown
+        vec._state = AsyncState.DEFAULT
+    except Exception:
+        pass
+    try:
+        vec.close(terminate=True)
+        return
+    except Exception as e:
+        print(f'warning: force_close fell back to killing workers: {e}')
+    # last resort -- close() itself failed; kill the processes directly so we never leak
+    # a pool of subprocesses that garbage collection will not reap
+    for p in (getattr(vec, 'processes', None) or []):
+        try:
+            if p.is_alive():
+                p.kill()
+        except Exception:
+            pass
+
+
 class AsyncState(Enum):
     DEFAULT = "default"
     WAITING_RESET = "reset"

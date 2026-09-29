@@ -1,0 +1,13 @@
+{
+  "generation": "legacy (pre-Round-7)",
+  "superseded_by": "<arm>_corrupt-<c>_demos-29-r8_seed-42",
+  "train_split_reproducible": true,
+  "train_split_note": "The 29 training episodes ARE exactly reproducible: downsample_mask over get_split_masks_3way at train_ratio=0.2, seed=42, recorded verbatim in config/splits/pusht_seed42_legacy_val10_train29.json (verified index-for-index). What is missing is provenance IN THIS DIRECTORY -- these runs predate splits.json, so nothing on disk ties these checkpoints to those episodes.",
+  "caveats": [
+    "use_ema: False -- every number from this run comes from the LIVE weights, while all 100-demo numbers come from the EMA average (decay 0.995). Different weights, not just different data.",
+    "No policy-level crop: crop_shape/random_crop were unset, so cropping happened only inside the encoder's CropRandomizer and an observation and the subgoal images derived from it received INDEPENDENT crop offsets at train time -- they were translated relative to each other. This is a correctness defect for the subgoal_* contexts specifically; the 100-demo arms fixed it by putting one offset in scope for the whole search.",
+    "val split is 10 episodes (SE ~9.5pp at p=0.9), so its checkpoint selection is weak: three of these arms tied at 9/10 while their test numbers were 84 / 70 / 32%.",
+    "Trained to 20k gradient steps, not 100k."
+  ],
+  "run": "subgoal-value_corrupt-False_demos-29_seed-42"
+}

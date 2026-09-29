@@ -1,0 +1,130 @@
+# PushT UNet BC -- the second master. Scaffolding from pusht_base; this file is the UNet
+# policy plus the two keys that differ from the search default (workspace and trainer tag).
+defaults:
+  - pusht_base
+  - _self_
+
+name: train_pusht_unet_bc
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+obs_as_global_cond: True
+
+trainer: unet_bc
+# ${enc_suffix} is LOAD-BEARING: without it this resolves to the same directory as every
+# pre-2026-08-28 ResNet UNet BC run, and `training.resume: True` would continue one of them
+# under a different backbone.
+run_name: unetbc_ver-${verifier_tag}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+task:
+  env_runner:
+    n_search_actions: 1
+
+dataloader:
+  num_workers: 4
+val_dataloader:
+  num_workers: 4
+
+policy:
+  # PushTUNetSearchPolicy IS DiffusionUnetImagePolicy plus the verifier and the shared
+  # search loop; training is byte-identical (compute_loss is the UNet's own, and the
+  # verifier is lazy so no worker pool spawns). It exists so the checkpoint can be
+  # evaluated at n>1 -- best-of-n here is n i.i.d. draws scored by the sim, with no
+  # learned selection, which is the baseline the search arms' test-time budget needs.
+  _target_: diffusion_policy.policy.pusht_unet_search_policy.PushTUNetSearchPolicy
+  shape_meta: ${shape_meta}
+  # DDIM at 8 inference steps, byte-identical to the ST arms' scheduler. Was DDPM at 100:
+  # that made the sampler a second difference alongside architecture, so a gap could not be
+  # attributed to either. variance_type is dropped (DDPM-only); set_alpha_to_one and
+  # steps_offset are DDIM's, taken from train_pusht_diffusion_search.
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+  # ONE definition, in pusht_base, shared with train_pusht_diffusion_search. This arm is
+  # the standard diffusion-policy baseline and deliberately does NOT match the ST arm on the
+  # slot machinery, gradient clipping or eval cadence -- but it must match it on the
+  # OBSERVATION, or the comparison varies the input as well as the algorithm. Until
+  # 2026-08-29 it did not: ResNet18 at a 76x76 crop with group norm, against the ST arm's
+  # frozen SD VAE at 72x72.
+  obs_encoder: ${obs_encoder}
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 8   # matches both ST arms
+  # Image crop, owned by the POLICY rather than the encoder -- the same contract the search
+  # transformer uses. One offset per SAMPLE, shared by the observation window, so the two obs
+  # frames are registered against each other at train time exactly as they are at eval (where
+  # both are centre-cropped). Left to itself CropRandomizer draws one offset per IMAGE, which
+  # gave this arm two differently-cropped frames per sample at train and two identical ones at
+  # eval -- a train/eval mismatch, and more scene coverage per sample than the ST arms get.
+  # ${crop_shape} is the same key the encoder block reads, so the two cannot disagree.
+  crop_shape: ${crop_shape}
+  random_crop: True
+
+  # scalar verifier value only -- this policy has no context input for the wider modes
+  search_context: value
+  selection: argmax
+  verifier_n_envs: 32
+  verifier_legacy: False
+  verifier_use_async: True
+  verifier_steps: null
+  # Which value the verifier scores with -- ${verifier_tag}, so the run DIRECTORY and
+  # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
+  verifier_value: ${verifier_tag}
+  obs_as_global_cond: ${obs_as_global_cond}
+  # 256, NOT the upstream UNet recipe's 128 -- matched to the search transformer's `n_emb`,
+  # which is the width its diffusion-timestep embedding is built at
+  # (`self.time_emb = SinusoidalPosEmb(n_emb)`, n_emb 256). This is the closest thing this
+  # architecture has to the transformer's embedding size: the UNet has no token projection
+  # at all (no `obs_emb`), it flattens the 530-dim obs features for both obs steps to 1060
+  # and concatenates the timestep embedding, and that vector is fed to a FiLM `cond_encoder`
+  # in every residual block. So raising this widens the conditioning vector 1188 -> 1316 and
+  # changes every one of those blocks.
+  #
+  # ARCHITECTURE-CHANGING: checkpoints written at 128 cannot be loaded at 256. The runs that
+  # produced the UNet columns of docs/reports/SUCCESS_RATES.md section 5 used 128 and are archived under
+  # data/outputs/_discarded/; anything trained from here on is a different model.
+  diffusion_step_embed_dim: 256
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  # flat decay: min==max clamps EMAModel's step-dependent warmup curve, which is otherwise a
+  # function of an un-checkpointed step counter and so differs across restarts.
+  #
+  # INTERPOLATED from training.ema_decay rather than repeated as a literal. This workspace
+  # instantiates EMA from this block and never reads training.ema_decay, so while the two
+  # were written out separately a command-line `training.ema_decay=0.999` was effective on
+  # both ST arms and a SILENT NO-OP on this one -- the same value by coincidence, not by
+  # construction.
+  min_value: ${training.ema_decay}
+  max_value: ${training.ema_decay}
+
+training:
+  # the UNet workspace validates and samples on an epoch cadence, not a step one
+  val_every: 10   # matches the ST arms, so both val_loss curves are sampled alike
+  sample_every: 5
+  rollout_every: null
+  # NOT inherited from pusht_base's 1.0: this arm has never clipped, and the workspace does
+  # read the key (train_diffusion_unet_image_workspace.py), so inheriting it would silently
+  # change UNet BC. The asymmetry vs the ST arm is a documented, deliberate difference.
+  gradient_clip_norm: null
+  # The remaining pusht_base training.* keys (outer/inner geometry, *_every_steps,
+  # nrmse_max_batches, ema_decay) are inert here -- this workspace reads none of them, and
+  # EMA is configured by the `ema:` block above.
+
+# `logging.tags` is NOT overridden here. Replacing pusht_base's list is what silently
+# dropped `verifier-`, `enc-` and the obs-noise labels from every UNet BC run; family_tag is
+# the one thing this arm needs to add, and n_demos is already in run_name.
+family_tag: unet-bc

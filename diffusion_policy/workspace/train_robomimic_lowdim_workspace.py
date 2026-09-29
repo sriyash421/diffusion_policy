@@ -7,6 +7,7 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+from typing import Optional
 import os
 import hydra
 import torch
@@ -33,8 +34,8 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 class TrainRobomimicLowdimWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
-    def __init__(self, cfg: OmegaConf):
-        super().__init__(cfg)
+    def __init__(self, cfg: OmegaConf, output_dir: Optional[str]=None):
+        super().__init__(cfg, output_dir=output_dir)
 
         # set seed
         seed = cfg.training.seed

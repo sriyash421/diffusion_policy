@@ -1,0 +1,445 @@
+# Shared PushT scaffolding: everything EXCEPT the `policy:` block.
+#
+# The three masters inherit this and add their own policy: train_pusht_diffusion_search
+# (search transformer), train_pusht_gaussian_search (Gaussian), train_pusht_unet_bc (UNet
+# BC). A child sets ONLY what it changes -- restating an inherited value silently detaches
+# it from this file, which is the bug class the split exists to prevent.
+#
+# `_target_` and `trainer` live here at the search default (outer/inner). Width 1 does
+# NOT re-pin them any more -- since 2026-08-18 outer/inner handles an empty context, so
+# `n_candidates=1` is the whole of the k=1 arm. The Gaussian and UNet arms still re-pin.
+defaults:
+  - _self_
+  # The ONLY PushT search task, and it is image-only by construction -- agent_pos and
+  # feedback are not in its shape_meta and the policy asserts that no low_dim obs key
+  # is declared, so no override can put them back. See the file header for why.
+  - task: pusht_image_search_imgonly
+
+name: pusht_base
+output_dir: null
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+
+# ---------------------------------------------------------------------------
+# Run identity. These four keys, and nothing else, determine the output directory (see
+# hydra.run.dir at the bottom) -- so relaunching the same config RESUMES it instead of
+# minting a fresh timestamped dir that `training.resume: True` can never find, and the
+# ablation arm is readable straight off the path. A second seed is a new directory rather
+# than a silent collision.
+#
+# The ablation configs override `search_context` / `corrupt_obs` at THIS level; the policy
+# block interpolates from here so the two can never disagree.
+# ---------------------------------------------------------------------------
+# WHICH VISION BACKBONE. `vae` -- the frozen SD VAE encoder -- for every PushT arm since
+# 2026-08-28; `resnet18` names the era before it. Declared HERE rather than in the search
+# master because the UNet BC arm is on the same backbone: the ST-vs-BC comparison is meant
+# to vary the algorithm, not the observation.
+encoder_tag: resnet18
+
+# The encoder as a run-DIRECTORY component, and NEVER EMPTY. Without it a VAE run and a
+# pre-swap ResNet run at the same arm/k/verifier/demos/seed resolve to the same run_name,
+# hence the same hydra.run.dir, and `training.resume: True` has the new run continue the old
+# one's checkpoints under a different architecture (the 2026-08-05 run-directory rename). Every run on disk predates
+# this axis and owns the empty spelling, so it is the new default that has to carry a
+# suffix -- the opposite of the sw_suffix/son_suffix rule, deliberately. Interpolated from
+# encoder_tag so the two cannot disagree.
+enc_suffix: _enc-${encoder_tag}
+
+# ---------------------------------------------------------------------------
+# THE OBSERVATION ENCODER, defined ONCE for every PushT arm.
+#
+# Both masters interpolate this block into `policy.obs_encoder`. It is here, not copied into
+# each of them, because the ST-vs-BC comparison is only meaningful if the two see the SAME
+# observation: same backbone, same crop, same normalization. Two copies of these nine keys is
+# how they came to differ in three of them (ResNet18 vs SD VAE, 76 vs 72, group norm on vs
+# off) while the results tables read as if only the algorithm varied.
+#
+# `crop_shape` is separate because the POLICY also declares it -- the policy chooses the
+# offsets and hands them to the encoder, so the two must agree, and interpolating both from
+# one key is what makes that structural.
+crop_shape: [76, 76]
+
+obs_encoder:
+  _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+  shape_meta: ${shape_meta}
+  # ResNet18, ImageNet-pretrained, TRAINED END TO END with the policy.
+  #
+  # Reverted from the frozen SD VAE on 2026-08-30. The VAE was adopted so the obs corruption
+  # ladder would act on a latent space diffusion models are trained to operate in, and it
+  # required the encoder to stay frozen for that claim to hold. Measured, the freeze is what
+  # broke the policy: at step 10k, argmax n=1 was 0.00 on BOTH arms and stayed exactly 0.00
+  # at every checkpoint, while the SAME encoder trained end to end recovered most of the
+  # ResNet gap (BC 0.06/0.10/0.14 at n=1/2/4 against ResNet's 0.08/0.14/0.20) -- so the SD
+  # latent is a fine representation and freezing it is not. See docs/reports/archive/success_rates_vae_debug.md.
+  #
+  # To put the VAE back for an arm, override at THIS level -- `policy.obs_encoder` is an
+  # interpolation of this block, so hydra cannot reach inside it:
+  #   obs_encoder.rgb_model._target_=diffusion_policy.model.vision.sd_vae_encoder.SDVAEEncoder \
+  #   +obs_encoder.rgb_model.scaling_factor=0.18215 '~obs_encoder.rgb_model.name' \
+  #   '~obs_encoder.rgb_model.weights' obs_encoder.use_group_norm=False \
+  #   crop_shape=[72,72] encoder_tag=vae
+  # Add `+obs_encoder.rgb_model.trainable=True encoder_tag=vae-ft` for the unfrozen variant.
+  rgb_model:
+    _target_: diffusion_policy.model.vision.model_getter.get_resnet
+    name: resnet18
+    weights: IMAGENET1K_V1
+  resize_shape: null
+  crop_shape: ${crop_shape}
+  random_crop: True
+  # Replaces the ResNet's BatchNorm2d with GroupNorm. Standard for diffusion policy: batch
+  # statistics are wrong under EMA and at the small batches this trains at.
+  use_group_norm: True
+  share_rgb_model: False
+  # MUST be False: PushTImageDataset.get_normalizer already maps images to [-1,1] via
+  # get_image_range_normalizer, while torchvision's ImageNet Normalize expects [0,1].
+  # Stacking them gave the encoder roughly [-6.5, +2.25]. (train_online_search.yaml sets
+  # imagenet_norm: True on this same dataset and is miscalibrated for this reason.)
+  imagenet_norm: False
+  # Off, as it was through every ResNet-era run. It normalizes the CONCATENATED feature
+  # vector; turning it on adds parameters and changes the conditioning distribution, so it
+  # would make existing checkpoints unloadable and every trained arm a different model.
+  feature_layernorm: False
+# ---------------------------------------------------------------------------
+
+# Carries the FLAT corrupt_obs arm into the run directory. A manual suffix rather than the
+# bare `_corrupt-${corrupt_obs}` this replaced: the bool printed `corrupt-False` on every
+# clean run, which reads as "corruption off" beside a son_suffix that means the opposite.
+# Empty by default, so a clean run's name says nothing about corruption at all. SET IT
+# whenever corrupt_obs is True -- two runs differing only in corrupt_obs would otherwise
+# share a directory and resume each other. Declared HERE, not in the search master, because
+# the Gaussian and subgoal masters interpolate it too.
+corrupt_suffix: ''               # e.g. '_corrupt'
+
+# One wandb tag naming the POLICY FAMILY, so each master can mark its runs without replacing
+# `logging.tags` wholesale. Replacing the list is how the UNet BC and single-step masters
+# silently dropped `enc-`, the obs-noise tags and `verifier-` from their runs.
+family_tag: search
+
+# One wandb tag naming the TRAINING GENERATION -- the backbone era these weights belong to.
+# A scalar for the same reason family_tag is one: a master (or a launcher) can mark its runs
+# without replacing logging.tags wholesale, which is how arms silently lose their labels.
+# 'rnE2E' == ResNet18 trained END TO END, the default restored on 2026-08-30. It is NOT
+# derived from encoder_tag: `enc-resnet18` says which backbone, this says how it was trained,
+# and the frozen-encoder arms share the former while differing in the latter. Set it
+# alongside encoder_tag whenever the backbone or the freeze changes.
+gen_tag: rnE2E
+
+exp_name: pusht_search
+
+# Training-set size in DEMONSTRATIONS. Selects the split manifest
+# (splits/pusht_seed42_train${n_demos}.json) AND appears in the run name, so two budgets
+# can never land in the same output directory -- which is how the earlier 29-episode runs
+# would otherwise have been silently resumed by a 100-episode relaunch. The budgets nest:
+# the 30-episode train list is a strict subset of the 100-episode one, and val (30) and
+# test (50) are identical across manifests, so budgets are directly comparable.
+#
+# 30 IS THE CURRENT GENERATION, set here so every arm -- ST at any k, UNet BC, Gaussian --
+# gets it from one place and no arm can be on a different budget by omission. 100 and the
+# retired 25/29 budgets are legacy: their runs are kept for reference in docs/reports/SUCCESS_RATES.md
+# and are reachable with `n_demos=100`, but nothing is trained at them by default.
+n_demos: 30
+
+# Carries the GEOMETRIC split manifests (README_pusht.md 2.2) into the run directory.
+# Empty by default, on the sw_suffix/son_suffix principle: a seed-42 run's name says
+# nothing about a split it does not use.
+#
+# LOAD-BEARING whenever task.dataset.split_file is overridden. n_demos alone does NOT
+# identify the dataset for those manifests -- pusht_blockborder_train30_core50 and
+# pusht_seed42_train30 are both 30 training episodes, so without this the two land in ONE
+# hydra.run.dir and `training.resume: True` continues one under the other's data. Set it
+# and the split_file together, never one alone.
+split_suffix: ''                 # e.g. '_split-blq', '_split-brd'
+
+# ------------------------------------------------- goal-only OBSERVATION corruption
+# Noise applied to the observation IMAGE inside a mask around the goal T, before the
+# encoder. Distinct from slot_obs_noise, which noises the ENCODED vector and therefore has
+# no spatial structure -- the two are different mechanisms and their numbers do not compare.
+#
+# The goal pose is a constant ([256, 256, pi/4] for every episode), so the mask is fixed.
+# `margin_px` is in IMAGE pixels of the 96px observation, NOT the 512px arena: the goal T
+# spans only ~26 image px, so reading a 512-space margin here inflates the masked area
+# ~5.3x. Coverage at margin 0 / 3 / 5 is 2.1% / 5.8% / 8.2% of the frame.
+#
+# TRAIN SPLIT ONLY -- PushTImageDataset._split_copy clears it, so val and test are clean and
+# the env runner never sees it.
+#
+# SET gm_suffix WHENEVER THIS IS NON-NULL: two levels sharing a run name would resolve to
+# one hydra.run.dir and `training.resume: True` would continue one under the other's data.
+goal_mask_noise: null            # e.g. {t: 800, margin_px: 3}
+gm_suffix: ''                    # e.g. '_gm-t800-T3px'
+goal_mask_tag: goal_only_mask    # wandb tag, applied only when goal_mask_noise is set
+
+# ---- transition filter -----------------------------------------------------------------
+# Which TRANSITIONS inside the split's episodes a run trains and is scored on, as a committed
+# manifest of absolute decision frames (scripts/make_moving_transitions.py). null = every
+# window, which is every run predating this key.
+#
+# It exists because `t_goal` scores a candidate by where the T ends up and nothing else, so
+# on a decision that moves the block nowhere every candidate ties and the verifier expresses
+# no preference -- 15-25% of decisions, measured. The `_moving_` manifests drop those.
+#
+# NOT TRAIN-ONLY, unlike goal_mask_noise above: this is part of what the dataset IS, so the
+# held-out split is the held-out TRANSITIONS and _split_copy carries it through.
+#
+# SET split_suffix WHENEVER THIS IS NON-NULL. Same hazard as gm_suffix: a filtered and an
+# unfiltered run at the same n_demos resolve to one hydra.run.dir, and `training.resume`
+# continues one under the other's data. check_transition_filter_labels refuses to start if
+# the two disagree.
+transition_file: null            # e.g. .../config/splits/transitions/..._moving_ta8.json
+transition_tag: t_goal_moving    # wandb tag, applied only when transition_file is set
+
+# Which verifier value the run is trained/evaluated against. Both a policy knob AND the run
+# IDENTITY: it selects the scoring rule in the code and names the run, so runs from either
+# side of the 2026-08-19 change are distinguishable on sight in the wandb name, the wandb
+# tags and the output directory:
+#
+#   t_goal   value = -(T-to-goal distance)                        <- CURRENT (see below)
+#   armT     value = -(T-to-goal + arm-to-T)                      <- superseded, see below
+#   armTn    value = -(T-to-goal/13.6 + arm-to-T/52.1)            <- DEPRECATED 2026-08-28
+#   armTd    same, but each term divided by the spread measured across the n candidates
+#            of THAT control step instead of the two constants.  <- EVAL-ONLY, never a
+#            verifier_tag: it is defined only over a candidate SET, so it has no
+#            per-candidate scalar to train against and cannot feed the search context
+#            (which is causal -- candidate k is conditioned on candidates < k, so a
+#            statistic over all n does not exist yet when k is scored). Train under
+#            armTn; select with `eval_search_pusht.py --verifier-value armTd`.
+#
+# armT summed the two terms RAW. Their marginal scales are comparable (80 vs 91 px), but the
+# spread that argmax actually sees -- across candidates within one control step -- is not
+# (13.6 vs 52.1), so the arm term outvoted task progress ~4:1 and cost the UNet BC arm its
+# best-of-n gain (0.460 -> 0.060 at n=8). armTn divides each term by its own within-step
+# spread, keeping the pre-contact tie-break the arm term was added for without letting it
+# override real progress. See pusht_verifier.value_arm_t_norm.
+#
+# These are the keys of pusht_verifier.VALUE_FNS, and each config interpolates this into
+# `policy.verifier_value`, so the tag IS the scoring rule -- not a label alongside it. The
+# workspace asserts the two agree. Directories from before the cutover carry no `ver-`
+# component at all; they were trained under `t_goal`.
+#
+# The approach term is what makes the value vary before the arm touches the block; without it
+# every candidate scored identically there and argmax ranked at random. Runs across the two
+# are NOT comparable, which is exactly why this is in run_name -- a new run must never resume
+# or merge into a pre-change directory.
+#
+# ---------------------------------------------------------------------------------------
+# DEFAULT REVERTED TO t_goal ON 2026-08-28. armTn is DEPRECATED as a default; it remains a
+# fully supported `verifier_value` and is NOT removed from pusht_verifier.VALUE_FNS -- ~14
+# run directories, the eval watcher list and scripts/build_slot_norm_doc.py all need it
+# loadable, and deleting it would make those checkpoints unevaluatable.
+#
+# WHAT THIS FLIP BREAKS IF YOU ARE NOT CAREFUL. `verifier_tag` is interpolated into
+# run_name, and run_name IS hydra.run.dir. Any launcher that relied on the DEFAULT to
+# produce a `ver-armTn_...` directory now resolves to `ver-t_goal_...` instead -- it will
+# not resume, it will silently start a fresh run in a new directory (the 2026-08-05 run-directory rename). Every
+# such launcher must pin `verifier_tag=armTn` explicitly. Audited at flip time: only
+# scripts/slurm/submit_slot_weight_round2.sh relied on the default, and it is now pinned.
+# scripts/slurm/submit_slot_weight_dtgoal.sh already pinned; scripts/run_st_big_30demo.sh
+# is immune because it overrides run_name outright; the remaining launchers produced
+# pre-cutover directories with no `ver-` component and were already stale either way.
+# ---------------------------------------------------------------------------------------
+verifier_tag: t_goal
+
+# Run output goes to /gscratch, NOT home. Home is a 10G hard quota and a single 100k-step
+# run's checkpoints (policy + AdamW moments + EMA copy, x50 step_*.ckpt) exceed it on their
+# own. Putting the whole run dir there -- not just a symlinked checkpoints/ -- means wandb
+# files, logs.json.txt and the eval watcher's bon_search/ follow automatically.
+# Override per-user with the DP_OUTPUT_ROOT env var.
+output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
+
+horizon: 16
+n_obs_steps: 2
+n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+
+dataloader:
+  # kept small: the verifier physics-simulates max_actions-1 candidates per step, so
+  # step time is dominated by the verifier. Raise if the verifier is parallelized.
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # Linear warmup to lr over 3k steps, cosine decay to min_lr_ratio*lr = 1e-5 reached at
+  # step 80,000, then HELD constant. decay_steps is measured from the END of warmup
+  # (progress = (step - warmup)/decay_steps), so 3000 + 77000 puts the floor at exactly 80k.
+  #
+  # This is the standard shared with the width-1 arms (train_pusht_diffusion_search n_candidates=1, train_pusht_unet_bc)
+  # so n=1 and n=16 results are directly comparable. It replaces warmup 500 / decay_steps
+  # 10000, which was calibrated for the old 20k runs and left a 100k run at its 1e-5 floor
+  # for 89% of training -- the defect recorded in
+  # data/outputs/_discarded/bc_demos-29-r8_seed-42__BAD-lr-decay_steps-10000/WHY_DISCARDED.md.
+  #
+  # `decay_then_constant` is a pure function of the step index, so it is safe to resume and
+  # safe to EXTEND: training past 100k just continues at 1e-5. Plain `cosine` is periodic
+  # past its horizon (it climbs back to peak), so a resumed run would silently start a
+  # second cycle.
+  lr_scheduler: decay_then_constant
+  lr_warmup_steps: 3000
+  lr_scheduler_kwargs:
+    decay_steps: 77000
+    min_lr_ratio: 0.1
+  # SAFETY BOUND ONLY -- max_gradient_steps below is what ends the run, and it is enforced
+  # mid-epoch so it stops on the exact step. num_epochs must stay far above any epoch count
+  # that could reach the budget: an epoch is ceil(n_windows/batch_size) steps, so at 29 demos
+  # it is ~110 steps and the old `num_epochs: 1000` was only ~110k -- close enough to bind
+  # first and silently become the real limit. Kept rather than removed because the loop is
+  # `range(num_epochs)`.
+  num_epochs: 100000
+  # 100k. The old 20k cap dates from the pre-augmentation runs that overfit by ~3k steps;
+  # with crop augmentation and EMA in place val_loss keeps improving much longer. Matches
+  # the width-1 arms, so the two search widths are compared at equal optimization.
+  max_gradient_steps: 100000
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  # EMA weights are what gets rolled out, validated, sampled and shipped in the checkpoint;
+  # the live weights are only the optimization target.
+  use_ema: True
+  # Constant, NOT the repo's warmup curve. EMAModel's default decay is a function of the
+  # step index (1 - (1+step)^-0.75, capped at max_value), which makes the averaging window
+  # depend on where you are in the run -- and its step counter is not checkpointed, so a
+  # resumed run re-enters the curve at 0. A flat decay is the same at every step and
+  # identical across restarts. 1/(1-0.995) = a 200-step averaging window throughout.
+  # Override to 0.999 for a 1000-step window if this smooths too little.
+  ema_decay: 0.995
+
+  # `freeze_encoder` was DROPPED FROM THIS FILE 2026-08-29 and is deliberately not replaced.
+  # It was honoured by TrainMLPImageWorkspace and TrainDiffusionUnetImageWorkspace and
+  # ignored by TrainSearchOuterInnerWorkspace, which overrides run() -- so on the DEFAULT ST
+  # trainer it was a silent no-op, which is the worst thing a knob can be. The obs backbone
+  # (model/vision/sd_vae_encoder.SDVAEEncoder) now freezes itself in __init__ and overrides
+  # train() to stay in eval, so the freeze holds whichever workspace runs it and there is
+  # nothing left for a flag to do. The two workspaces still read the key via `.get` for the
+  # non-PushT configs that set it.
+
+  # ---- outer/inner loop geometry (TrainSearchOuterInnerWorkspace) ----
+  # THE knob is max_gradient_steps above; these four define the loop shape and are
+  # independent of run length. num_inner = inner_epochs * ceil(outer_bs/inner_bs) = 32
+  # updates per outer step, so the search cost per update is divided by exactly
+  # inner_epochs (4x here: 480 -> 120 verifier sims). There is deliberately no num_outer --
+  # the outer loop runs until the gradient-step budget is spent.
+  outer_batch_size: 256    # windows whose search context is generated per outer step
+  inner_batch_size: 32     # matches dataloader.batch_size
+  inner_epochs: 4          # 256/32 = 8 batches/epoch x 4 = 32 updates per outer step
+  drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
+  # Rollout on GRADIENT STEPS and on a multiple of checkpoint_every, so every rollout
+  # number belongs to weights that were saved and can be re-verified against an eval curve.
+  # rollout_every (epochs) is kept only as the fallback for configs that predate this.
+  # ALL eval cadences are in GRADIENT STEPS. An epoch is not a stable unit here: its length
+  # depends on the dataset size and the train budget, so the old `val_every: 10` fired every
+  # ~960 steps at a 25-episode budget and would fire every ~4030 at 100 episodes -- the same
+  # config value silently meaning 4x less validation. rollout_every_steps is additionally a
+  # multiple of checkpoint_every, so every in-training success number belongs to weights that
+  # were saved and can be re-verified against an eval curve.
+  # The *_every (epoch) keys below are retained only as the fallback for configs predating
+  # this; the workspace prefers the *_every_steps ones whenever they are set.
+  # MUST be a multiple of checkpoint_every, so every in-training success number belongs to
+  # weights that were saved and can be re-verified against an eval curve. It was 2000 when
+  # checkpoint_every was 1000; at the 10k cadence that would put rollouts on steps with no
+  # checkpoint behind them. 20000 -> 5 rollouts over a 100k run.
+  rollout_every_steps: 20000
+  val_every_steps: 1000
+  sample_every_steps: 1000
+  rollout_every: 50
+  # 10k, matching the eval grid: every checkpoint written gets scored and nothing is scored
+  # off-grid. At the old 1k cadence a 100k run wrote 100 checkpoints of which ~10 were ever
+  # evaluated; on the 4.4 GB UNet checkpoints that same cadence filled a 1.9 TB disk at step
+  # 115k. A search-policy checkpoint is ~261 MB, so 10 x 261 MB per 100k run.
+  checkpoint_every: 10000
+  val_every: 10
+  sample_every: 10
+  # Bound the (verifier-driven) normalized-RMSE eval. These batches are now drawn as a
+  # FIXED SEEDED SUBSET spanning the whole split (see _make_nrmse_loader): with the plain
+  # shuffle:False loader all 128 windows came from the split's first episode, so every
+  # val_*/test_* number was a single-episode statistic.
+  nrmse_max_batches: 4
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+# ---- wandb labels that are not the run's identity ----------------------------------
+# These name the obs-noise arm for the wandb UI. They cannot be derived from
+# policy.slot_obs_noise in yaml (hydra has no conditionals), so they are set by hand and
+# CHECKED against it at startup by _check_obs_noise_labels -- a run whose tags disagree with
+# its ladder raises rather than training. Both are 'off' here; the ladder launchers set them
+# alongside son_suffix.
+obs_noise_tag: clean             # {clean, obs_noised}
+son_tag: uniform                 # the ladder mode, e.g. 'linear_signal', 'random_base-linsig'
+
+logging:
+  entity: l2sml
+  project: pushT_diffusion_search
+  resume: True
+  mode: online
+  # A wandb GROUP, which is the closest thing wandb has to a folder: these runs stay in the
+  # one project so they remain chartable against the ResNet era, but collapse into their own
+  # section in the UI. Named for what the generation IS -- frozen SD-VAE obs backbone, no
+  # agent_pos/feedback in the observation.
+  group: VAE_no_pos
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}_ver-${verifier_tag}
+  # ONE list, for every arm. A master marks itself with `family_tag`; nothing overrides
+  # this key, so no arm can lose the verifier, encoder or obs-noise labels by accident.
+  tags: ["${name}", "${task_name}", "${exp_name}", "${family_tag}",
+         "verifier-${verifier_tag}", "enc-${encoder_tag}",
+         "${obs_noise_tag}", "son-${son_tag}", "${gen_tag}"]
+  id: null
+
+checkpoint:
+  # NOTHING HERE NOMINATES A BEST CHECKPOINT. Every `checkpoints/step_*.ckpt` written at
+  # `checkpoint_every` is retained permanently and none is ever deleted, so the full
+  # training trajectory stays on disk and any step can be re-evaluated after the fact.
+  #
+  # Checkpoint choice comes from real eval, never from val_loss: `eval_search_pusht.py
+  # --watch` evaluates each step_*.ckpt into bon_search/success_curves.jsonl, and you pick
+  # from that curve with the step named explicitly.
+  #
+  # The `topk` block that used to sit here (k=5 by min val_loss) was removed 2026-08-19. It
+  # was wrong twice over. It picked on val_loss, which is not the metric anything is chosen
+  # on; and TopKCheckpointManager keeps its ranking in an in-memory dict that
+  # save_checkpoint never serializes, so after every resume the map restarted empty -- the
+  # first k post-resume epochs were saved unconditionally whatever their value, and the
+  # pre-resume files were no longer deletion candidates. `k: 5` was not held (one run
+  # carried 10) and the retained set was not the top-5 by val_loss either. It also cost
+  # 48 GB across the output tree that no eval path ever read.
+  #
+  # save_last_ckpt writes checkpoints/latest.ckpt, which `training.resume` reads. Keep it.
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+hydra:
+  # Run dir is a pure function of the run IDENTITY, not of the wall clock. Consequences:
+  #   * relaunching the same config resumes it (training.resume finds latest.ckpt) --
+  #     with a timestamped dir it silently restarted from scratch every time;
+  #   * the ablation arm and seed are readable from the path, so reporting is a glob
+  #     instead of three hand-maintained arm->path tables that drift apart;
+  #   * a different seed is a different directory instead of overwriting the first run.
+  # Do NOT pass hydra.run.dir= on the command line; that was the workaround for the
+  # timestamped template and it reintroduces silent collisions between arms.
+  run:
+    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+  sweep:
+    dir: ${output_root}/${exp_name}/${task_name}/${trainer}/_sweep_${now:%Y.%m.%d-%H.%M.%S}
+    subdir: ${hydra.job.num}

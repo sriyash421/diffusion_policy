@@ -7,6 +7,7 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+import contextlib
 import math
 import os
 import hydra
@@ -22,13 +23,14 @@ import numpy as np
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
 
-from diffusion_policy.workspace.base_workspace import BaseWorkspace, set_initial_lr
+from diffusion_policy.workspace.base_workspace import BaseWorkspace, clone_policy, set_initial_lr, check_pusht_config
 from diffusion_policy.policy.mlp_image_policy import MLPImagePolicy
+from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
-from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
+from diffusion_policy.common.pytorch_util import (
+    dict_apply, optimizer_to, trainable_parameters)
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 from diffusion_policy.common.sampler import get_collate_fn
@@ -36,22 +38,199 @@ from diffusion_policy.common.sampler import get_collate_fn
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
+def _subgoal_panel(subgoals, n_rows=2):
+    """Tile per-candidate subgoal frames into one wandb.Image, or None.
+
+    ``subgoals`` is the dict returned by a search policy's ``return_subgoals=True``:
+    ``image`` (B, n, 3, H, W) in [0, 1] and ``value`` (B, n). Each row is one batch
+    element, each column one candidate IN GENERATION ORDER -- so reading left to right
+    shows whether conditioning on previous candidates is actually steering the search.
+    The caption carries each candidate's verifier value with the executed (argmax) one
+    starred, which is the quickest way to see search working (or not) at a glance.
+    """
+    if not subgoals or subgoals.get('image', None) is None:
+        return None
+    from torchvision.utils import make_grid
+
+    images = subgoals['image'][:n_rows].float().cpu()          # b, n, 3, H, W
+    values = subgoals['value'][:n_rows].float().cpu()          # b, n
+    b, n = values.shape
+    grid = make_grid(images.reshape(b * n, *images.shape[2:]).clamp(0, 1), nrow=n)
+    best = values.argmax(dim=1)
+    caption = ' | '.join(
+        'row{}: {}'.format(r, ' '.join(
+            f'{v:.1f}' + ('*' if c == best[r] else '')
+            for c, v in enumerate(values[r].tolist())))
+        for r in range(b))
+    return wandb.Image(grid, caption=f'subgoals (cols = candidate order); {caption}')
+
+
+# The arm label for each (search_context, selection) pair. This is what the run DIRECTORY
+# is named, so it is asserted against cfg.arm below rather than left as a comment: the run
+# dir is how every downstream report identifies the arm, and a config whose label disagreed
+# with its mechanism would mislabel a whole column of docs/reports/SUCCESS_RATES.md with no error.
+_ARM_LABELS = {
+    ('value', 'argmax'): 'value',
+    ('subgoal', 'argmax'): 'subgoal-chosen4value',
+    ('subgoal_value', 'argmax'): 'subgoal-value',
+    ('subgoal', 'final_pass'): 'subgoal-only',
+}
+
+
+# Policy families whose arm is named after the FAMILY rather than the search-context
+# ablation, because the family is what they vary against train_pusht_diffusion_search: a
+# Gaussian candidate is one rsample where the diffusion arm runs a denoising loop, and that
+# -- not the context -- is the comparison. Their context ablations still have to be
+# nameable, so anything other than the default (value, argmax) carries the context in the
+# label too; see _expected_arm.
+_FAMILY_ARMS = {'PushTGaussianSearchPolicy': 'gaussian'}
+
+
+def _expected_arm(cfg, key):
+    """The arm label cfg SHOULD declare, or None if (search_context, selection) is unnamed.
+
+    For the context-ablation families this is just _ARM_LABELS[key]. For a family in
+    _FAMILY_ARMS it is the family name at the default context, and family-context otherwise
+    -- so two Gaussian runs that differ only in search_context still get distinct run
+    directories rather than silently sharing one.
+    """
+    context_label = _ARM_LABELS.get(key)
+    target = str((cfg.get('policy', None) or {}).get('_target_', '') or '')
+    family = _FAMILY_ARMS.get(target.rsplit('.', 1)[-1])
+    if family is None:
+        return context_label
+    if context_label is None:
+        return None
+    return family if key == ('value', 'argmax') else f'{family}-{context_label}'
+
+
+def _check_arm_label(cfg):
+    """Fail fast if cfg.arm disagrees with (search_context, selection).
+
+    Only checked when the config declares an `arm` -- the maze configs and the pre-arm
+    PushT configs do not, and are left alone.
+    """
+    arm = cfg.get('arm', None)
+    if arm is None:
+        return
+    key = (cfg.get('search_context', 'value') or 'value',
+           cfg.get('selection', 'argmax') or 'argmax')
+    expected = _expected_arm(cfg, key)
+    if expected is None:
+        raise ValueError(
+            f'no arm label defined for search_context/selection {key}; add it to '
+            f'_ARM_LABELS (and pick the run-directory name deliberately) before training '
+            f'a combination nothing can name.')
+    if arm != expected:
+        raise ValueError(
+            f'config declares arm={arm!r} but search_context/selection {key} is the '
+            f'{expected!r} arm. The run directory is named from `arm`, so this would file '
+            f'the results under the wrong ablation.')
+
+
+def _check_obs_noise_labels(cfg):
+    """Fail fast if the obs-corruption LABELS disagree with the obs-corruption CONFIG.
+
+    Four surfaces name the same fact and none can be derived from the others in yaml:
+
+      policy.slot_obs_noise / corrupt_obs   the actual corruption
+      son_suffix / corrupt_suffix           run-directory fragments, so two corruption
+                                            settings cannot share a directory
+      son_tag / obs_noise_tag               wandb tags, so a corrupted run is filterable
+
+    Hydra has no conditionals, so the labels are set by hand -- which means they can be
+    forgotten, and a forgotten son_suffix is not cosmetic: run_name IS hydra.run.dir and
+    `training.resume: True` would have two different ladders resume each other. This turns
+    that into a startup error.
+
+    Only checked when the config declares the keys; the maze and pre-ladder configs do not.
+    """
+    if cfg.get('son_suffix', None) is None and cfg.get('son_tag', None) is None:
+        return
+    mode = str(((cfg.get('policy', None) or {}).get('slot_obs_noise', None)
+                or {}).get('mode', 'uniform') or 'uniform')
+    on = mode != 'uniform'
+    suffix = str(cfg.get('son_suffix', '') or '')
+    tag = str(cfg.get('son_tag', 'uniform') or 'uniform')
+    noise_tag = str(cfg.get('obs_noise_tag', 'clean') or 'clean')
+    if on and not suffix:
+        raise ValueError(
+            f'slot_obs_noise.mode={mode!r} but son_suffix is empty. run_name is '
+            f'hydra.run.dir, so this ladder would share a directory with the uncorrupted '
+            f'arm and `training.resume` would have them resume each other. Set son_suffix '
+            f"(e.g. '_son-linsig').")
+    if not on and suffix:
+        raise ValueError(
+            f'son_suffix={suffix!r} but slot_obs_noise.mode is uniform -- the directory '
+            f'would claim a ladder the run does not have.')
+    if on != (tag != 'uniform'):
+        raise ValueError(
+            f'son_tag={tag!r} does not agree with slot_obs_noise.mode={mode!r}. The wandb '
+            f'tag is how these runs are found; set son_tag to the mode (with its shape or '
+            f"decay), or to 'uniform' when the ladder is off.")
+    if on != (noise_tag == 'obs_noised'):
+        raise ValueError(
+            f'obs_noise_tag={noise_tag!r} does not agree with slot_obs_noise.mode='
+            f"{mode!r}. Use 'obs_noised' when the ladder is on and 'clean' when it is off.")
+
+    # The FLAT corruption arm has the same shape of hazard, and it bit for real:
+    # train_pusht_diffusion_search_subgoal_only_corrupt set corrupt_obs: True and no
+    # corrupt_suffix, so from the day the bare `corrupt-${corrupt_obs}` left run_name it
+    # resolved to the same hydra.run.dir as the CLEAN subgoal-only arm.
+    if cfg.get('corrupt_suffix', None) is not None:
+        flat = bool(cfg.get('corrupt_obs', False))
+        csuf = str(cfg.get('corrupt_suffix', '') or '')
+        if flat != bool(csuf):
+            raise ValueError(
+                f'corrupt_obs={flat} but corrupt_suffix={csuf!r}. run_name is hydra.run.dir '
+                f"and `training.resume: True` finds latest.ckpt there, so the corrupted and "
+                f"clean arms would resume each other. Set corrupt_suffix='_corrupt' when "
+                f'corrupt_obs is True, and leave it empty when it is False.')
+
+
 def _is_search_policy(policy) -> bool:
     """Whether this policy exposes the best-of-n search interface.
 
-    One explicit capability check, in place of the ad-hoc `hasattr(policy, 'verifier')`
-    probes used elsewhere in this file. Search policies add `search_candidates` /
-    `predict_n_actions` on top of the standard `predict_action` contract; everything else
-    is driven through `predict_action` alone.
+    One explicit capability check, used everywhere instead of ad-hoc `hasattr(policy,
+    'verifier')` / `getattr(policy, 'supports_return_scores')` probes. Search policies add
+    `search_candidates` / `predict_action_best` on top of the standard `predict_action`
+    contract; everything else is driven through `predict_action` alone.
     """
     return hasattr(policy, 'search_candidates') and hasattr(policy, 'verifier')
 
 
+
+def _val_slot_weighting(policy) -> bool:
+    """Whether val_loss is computed WITH the per-slot weighting.
+
+    Default False (uniform). val_loss is the cross-arm comparison signal, and a weighting
+    that changes over training -- a slot_weights curriculum -- would make it move for
+    reasons that have nothing to do with fit, so a curve could not be compared with itself.
+    The legacy `slot_weight_decay` scalar resolves to 'trained', preserving the semantics
+    every run under that key already had.
+
+    There is a second reason the default matters: ema_model is a deepcopy and the workspace
+    sets _slot_weight_step only on the LIVE model, so a curriculum evaluated on the EMA copy
+    would sit at the schedule's starting profile forever -- silently uniform, but uniform by
+    accident rather than by choice.
+    """
+    spec = getattr(policy, 'slot_weight_spec', None)
+    return bool(spec and spec.get('val') == 'trained')
+
+
 class TrainMLPImageWorkspace(BaseWorkspace):
-    include_keys = ['global_step', 'epoch', 'last_checkpoint_step']
+    # last_{rollout,val,sample}_step make the gradient-step eval cadences resume-safe:
+    # without them a resumed run re-fires every eval block immediately.
+    include_keys = [
+        'global_step', 'epoch', 'last_checkpoint_step',
+        'last_rollout_step', 'last_val_step', 'last_sample_step',
+    ]
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
+        _check_arm_label(cfg)
+        _check_obs_noise_labels(cfg)
+        check_pusht_config(cfg)
 
         # set seed
         seed = cfg.training.seed
@@ -63,14 +242,42 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         self.model: MLPImagePolicy = (
             hydra.utils.instantiate(cfg.policy))
 
+        # Built here, BEFORE any load_checkpoint: load_payload assigns into
+        # self.__dict__[key] for every saved state_dict, so a use_ema checkpoint cannot be
+        # resumed into a workspace that has no ema_model attribute. (Which also means
+        # use_ema cannot be flipped on resume.)
+        self.ema_model = None
+        if cfg.training.get('use_ema', False):
+            self.ema_model = clone_policy(self.model)
+
+        # FREEZE BEFORE the optimizer is built, so the frozen parameters are excluded from it
+        # and the trainable_parameters() print below reports the real count. The handler in
+        # run()'s epoch loop applies the same two lines, but it runs strictly later -- so on
+        # its own it would leave the startup line reading "(0 frozen)" on a genuinely frozen
+        # run, which is exactly the signal a freeze ablation is read off. That loop copy is
+        # kept: it re-asserts .eval() each epoch, which is needed because self.model.train()
+        # is called mid-epoch and nn.Module.train() recurses into children.
+        if cfg.training.get('freeze_encoder', False):
+            self.model.obs_encoder.eval()
+            self.model.obs_encoder.requires_grad_(False)
+
         # configure training state
+        # Frozen parameters are excluded, not merely skipped by AdamW: the SD VAE obs
+        # backbone is 34.2M frozen parameters and there is no reason for them to sit in the
+        # optimizer's state_dict or under its weight_decay.
         self.optimizer = hydra.utils.instantiate(
-            cfg.optimizer, params=self.model.parameters())
+            cfg.optimizer,
+            params=trainable_parameters(self.model, type(self).__name__))
 
         # configure training state
         self.global_step = 0
         self.epoch = 0
         self.last_checkpoint_step = 0  # Track last checkpoint step
+        # gradient-step eval cadences (see run()); epochs are not a stable unit here
+        # because an epoch's length changes with the dataset size and train budget.
+        self.last_rollout_step = 0
+        self.last_val_step = 0
+        self.last_sample_step = 0
 
         # accelerator
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -99,6 +306,124 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             except Exception as e:
                 print(f'warning: failed to close {type(owner).__name__}: {e}')
 
+    def _make_nrmse_loader(self, split_dataset, cfg, collate_fn, seed=0):
+        """Loader for the search-quality metrics: a FIXED, episode-spanning window subset.
+
+        The plain val/test loader has `shuffle: False` and the sampler emits in episode
+        order, so truncating it at `nrmse_max_batches` (4 x 32 = 128 windows) drew every
+        window from the split's FIRST episode -- 2% of the test split. Everything named
+        `val_*`/`test_*`, including the `first - min` search-gain statistic the whole
+        "does search help" claim rests on, was a single-episode number.
+
+        A seeded Subset fixes both halves of that: it spans the split, and because the
+        indices are drawn once with a fixed seed it is the SAME windows at every
+        evaluation, so the metric is comparable across training steps. A reshuffling
+        loader would span the split but inject fresh sampling noise into a curve that is
+        read over time. Cost is unchanged -- still `nrmse_max_batches` batches.
+        """
+        n_windows = len(split_dataset)
+        want = int(cfg.training.get('nrmse_max_batches', 4) or 4) * int(cfg.val_dataloader.batch_size)
+        want = min(want, n_windows)
+        idx = np.random.default_rng(seed).choice(n_windows, size=want, replace=False)
+        subset = torch.utils.data.Subset(split_dataset, sorted(idx.tolist()))
+        kwargs = dict(cfg.val_dataloader)
+        kwargs['shuffle'] = False          # the subset already carries the spread
+        kwargs['persistent_workers'] = False
+        return DataLoader(subset, collate_fn=collate_fn, **kwargs)
+
+    def _search_action_nrmse(self, policy, dataloader, device, max_batches=None):
+        """Search-quality metrics over a split (search policies only).
+
+        For each window, generate ``max_actions`` candidates and compare each against the
+        GT expert action over the action-step window, in the normalizer's normalized
+        action space. Returns a dict (or None for non-search policies, i.e. no
+        ``.verifier``):
+
+          nrmse_min    best candidate -- how good search *can* get
+          nrmse_avg    mean candidate -- the control: did the distribution itself move,
+                       or are we just drawing more samples from an unchanged one?
+          nrmse_first  candidate 0, generated with an EMPTY search context -- i.e. the
+                       no-search baseline. (first - min) is the actual best-of-n gain,
+                       which nrmse_min alone cannot show.
+          action_value       mean verifier score over candidates.
+          action_value_best  score of the candidate search would actually execute
+                             (argmax) -- the value-space analogue of nrmse_min.
+          action_value_first candidate 0's score, i.e. the no-search baseline.
+                             (best - first) is what says whether search is helping.
+
+        Under ``selection: final_pass`` two more are added, because none of the above
+        describes the action that arm actually executes -- it deploys a FURTHER sample
+        conditioned on all K candidates, not any of them:
+
+          nrmse_final        that extra sample vs the expert action.
+          action_value_final its verifier score. Simulated for MONITORING ONLY; the
+                             deployed policy never scores it. ``final - best`` is the
+                             arm's whole question: does the model's own synthesis beat the
+                             oracle argmax it is trying to replace?
+        """
+        if not _is_search_policy(policy):
+            return None
+        To, Ta = policy.n_obs_steps, policy.n_action_steps
+        sl = slice(To - 1, To - 1 + Ta)
+        action_normalizer = policy.normalizer['action']
+        mins, avgs, firsts, vals = list(), list(), list(), list()
+        vals_best, vals_first = list(), list()
+        finals, vals_final = list(), list()
+        final_pass = getattr(policy, 'selection', 'argmax') == 'final_pass'
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(dataloader):
+                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                # copy, never mutate: batch['obs'] may alias a long-lived batch
+                obs_dict = dict(batch['obs'])
+                if batch.get('attention_mask', None) is not None:
+                    obs_dict['attention_mask'] = batch['attention_mask']
+                # ask for scores explicitly: in the wider search_context modes `values`
+                # is the rollout state, not a rankable scalar. `values` IS what the extra
+                # final pass has to be conditioned on, so keep it too.
+                pred_action, values, scores = policy.search_candidates(
+                    obs_dict, verifier=policy.verifier,
+                    n_actions=policy.max_actions, return_scores=True)  # (B,K,H,Da), ctx, (B,K)
+                npred = action_normalizer.normalize(pred_action[:, :, sl])   # B, K, Ta, Da
+                ngt = action_normalizer.normalize(batch['action'][:, sl]).unsqueeze(1)
+                rmse = (npred - ngt).pow(2).mean(dim=(-1, -2)).sqrt()        # B, K
+                mins.append(rmse.min(dim=1).values)                          # B
+                avgs.append(rmse.mean(dim=1))                                # B
+                firsts.append(rmse[:, 0])                                    # B
+                vals.append(scores.mean(dim=1))                              # B
+                vals_best.append(scores.max(dim=1).values)                   # B
+                vals_first.append(scores[:, 0])                              # B
+                if final_pass:
+                    # exactly what predict_action_best deploys, plus one sim to score it --
+                    # same `context_capacity` bound, so the two cannot drift apart. keep may
+                    # be 0 (the ST k=1 arm), and `x[:, -0:]` is the WHOLE tensor, so the
+                    # empty case must pass None rather than a slice.
+                    keep = policy.context_capacity
+                    final = policy.predict_action(
+                        obs_dict,
+                        actions=pred_action[:, -keep:] if keep else None,
+                        values=values[:, -keep:] if keep else None)['action_pred']  # B,H,Da
+                    nfinal = action_normalizer.normalize(final[:, sl])       # B, Ta, Da
+                    finals.append(
+                        (nfinal - ngt[:, 0]).pow(2).mean(dim=(-1, -2)).sqrt())
+                    vals_final.append(
+                        policy._score_candidates(policy.verifier, obs_dict, final)[1])
+                if max_batches is not None and batch_idx >= max_batches - 1:
+                    break
+        if not mins:
+            return None
+        out = {
+            'nrmse_min': torch.cat(mins).mean().item(),
+            'nrmse_avg': torch.cat(avgs).mean().item(),
+            'nrmse_first': torch.cat(firsts).mean().item(),
+            'action_value': torch.cat(vals).mean().item(),
+            'action_value_best': torch.cat(vals_best).mean().item(),
+            'action_value_first': torch.cat(vals_first).mean().item(),
+        }
+        if finals:
+            out['nrmse_final'] = torch.cat(finals).mean().item()
+            out['action_value_final'] = torch.cat(vals_final).mean().item()
+        return out
+
     def run(self):
         cfg = copy.deepcopy(self.cfg)
         # resume training
@@ -107,31 +432,30 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
+                payload = self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+                # Refuse a pre-EMA payload resumed into a use_ema run -- see
+                # BaseWorkspace.assert_ema_payload. Shared with the outer/inner and
+                # diffusion-UNet workspaces, which each override run() and so need the
+                # same guard on their own resume paths.
+                self.assert_ema_payload(payload, lastest_ckpt_path)
             else:
-                # hydra.run.dir is timestamped in every config here, so a plain re-submit
-                # mints a NEW output dir and looks for latest.ckpt somewhere that cannot
-                # contain it -- silently starting over despite resume: True. Say so.
                 print(f"training.resume=True but no checkpoint found at "
                       f"{lastest_ckpt_path} -- STARTING FROM SCRATCH. To continue a "
                       f"previous run, relaunch with hydra.run.dir=<that run's output dir>.")
 
         # Pretrained weights are the INITIALIZATION for a fresh finetune run only. If we
         # just resumed, the resumed weights are strictly newer -- loading the pretrained
-        # ones on top would discard all progress while KEEPING the resumed optimizer
-        # state and global_step, so the run continues as though nothing happened. Every
-        # search config sets resume: True, so this fired on every restart.
-        if cfg.checkpoint.get('pretrained_ckpt_path', None) is not None \
-                and not checkpoint_loaded:
+        # ones on top would throw away all progress while keeping the resumed optimizer
+        # state and global_step, which is silently catastrophic on any restart.
+        if cfg.checkpoint.get('pretrained_ckpt_path', None) is not None and not checkpoint_loaded:
             pretrained_ckpt_path = pathlib.Path(
                 hydra.utils.to_absolute_path(cfg.checkpoint.pretrained_ckpt_path))
             if pretrained_ckpt_path.is_file():
                 print(f"Loading pretrained weights from {pretrained_ckpt_path}")
-                # include_keys=[] because it filters payload['pickles'], NOT state_dicts:
-                # ['model'] never selected the weights (those come from state_dicts and
-                # are governed by exclude_keys), it only let the pretrained run's
-                # global_step / epoch / last_checkpoint_step leak into this fresh run.
+                # include_keys=[] so no pickled workspace state (global_step, epoch,
+                # last_checkpoint_step) leaks in from the pretrained run; this is a fresh
+                # run that merely starts from those weights.
                 self.load_checkpoint(path=pretrained_ckpt_path,
                     exclude_keys=['optimizer'],
                     include_keys=[]
@@ -142,10 +466,20 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     f"Pretrained checkpoint path {pretrained_ckpt_path} not found"
                 )
 
+        # record run identity (git sha, slurm job id, arm, seed) next to the results
+        if self.accelerator.is_main_process:
+            self.write_manifest()
+
         # configure dataset
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
+
+        # Record the exact episodes this run trains/validates/tests on, and refuse to
+        # resume if they differ from what the run directory already recorded. Cannot fold
+        # into write_manifest above -- that runs before the dataset exists.
+        if self.accelerator.is_main_process:
+            self.write_splits(dataset)
 
         # Use weighted sampler if available (for multi-dataset with sampling ratios)
         dataloader_kwargs = dict(cfg.dataloader)
@@ -164,10 +498,38 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             print("Computing normalizer from dataset")
             normalizer = dataset.get_normalizer()
             self.model.set_normalizer(normalizer)
+        if self.ema_model is not None:
+            # the EMA copy is what gets evaluated and checkpointed; without this it would
+            # carry empty normalizer stats
+            self.ema_model.set_normalizer(normalizer)
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+        # An EMPTY val split is a legitimate configuration -- the geometric manifests
+        # (README_pusht.md 2.2) include two whose eval region has nothing left over after
+        # the test set is taken, and PushTImageDataset already skips the count check when
+        # n_val_episodes is 0. Iterating a zero-length dataloader is NOT survivable though:
+        # accelerate's DataLoaderShard.__iter__ either raises UnboundLocalError on
+        # `current_batch` or yields a single None, which reaches dict_apply as
+        # `AttributeError: 'NoneType' object has no attribute 'items'`. So the whole
+        # validation block is skipped rather than guarded from the inside. No effect on a
+        # non-empty val split.
+        has_val = len(val_dataset) > 0
+        # separate from val_dataloader: the loss loop wants every window in order, the
+        # search metrics want a fixed spread-out subset (see _make_nrmse_loader)
+        nrmse_val_loader = self._make_nrmse_loader(val_dataset, cfg, collate_fn, seed=0)
+
+        # optional held-out test dataloader (only for a real 3-way split, where the val
+        # and test pools are distinct; with the legacy 2-way split they are the same set,
+        # so we skip it to avoid duplicated metrics).
+        test_dataloader = None
+        nrmse_test_loader = None
+        if hasattr(dataset, 'get_test_dataset') and \
+                getattr(dataset, 'val_pool', None) is not getattr(dataset, 'test_pool', None):
+            test_dataset = dataset.get_test_dataset()
+            test_dataloader = DataLoader(test_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+            nrmse_test_loader = self._make_nrmse_loader(test_dataset, cfg, collate_fn, seed=1)
 
         # configure lr scheduler
         # By default the LR decays over the whole run (steps_per_epoch * num_epochs).
@@ -228,9 +590,26 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         device = self.accelerator.device
         optimizer_to(self.optimizer, device)
 
+        # ---- EMA ------------------------------------------------------------------
+        ema = None
+        if cfg.training.get('use_ema', False):
+            self.ema_model.to(device)
+            decay = cfg.training.ema_decay
+            # min_value == max_value clamps get_decay's warmup curve flat, so the decay is
+            # the same constant at every step: independent of run length, and identical
+            # across restarts. Nothing schedule-shaped is left to restore.
+            ema = EMAModel(model=self.ema_model, update_after_step=0,
+                           inv_gamma=1.0, power=0.75,
+                           min_value=decay, max_value=decay)
+            # EMAModel exposes no state_dict, so save_checkpoint never persists this
+            # counter (it only serializes attributes having state_dict AND
+            # load_state_dict). Left at 0 on resume, get_decay returns 0.0 for step <= 0
+            # and the update degenerates to ema_param.copy_(param) -- silently destroying
+            # the restored average on the first post-resume step.
+            ema.optimization_step = self.global_step
+
         # save batch for sampling
         train_sampling_batch = None
-        val_sampling_batch = None
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
@@ -240,45 +619,80 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             cfg.training.checkpoint_every = 1
             cfg.training.val_every = 1
             cfg.training.sample_every = 1
+            # the gradient-step cadences take precedence over the epoch ones when set, so
+            # they must be overridden too or a debug run fires no eval block at all
+            for key in ('rollout_every_steps', 'val_every_steps', 'sample_every_steps'):
+                if cfg.training.get(key, None) is not None:
+                    cfg.training[key] = 1
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
-        with JsonLogger(log_path) as json_logger:
+        with contextlib.ExitStack() as stack:
+            json_logger = stack.enter_context(JsonLogger(log_path))
+            # The search verifier and the env runner each hold a pool of worker
+            # SUBPROCESSES, which garbage collection will not reap. Register their
+            # shutdown so they are released on normal exit and on exceptions alike.
+            stack.callback(self._close_worker_pools, env_runner)
+            # Hard stop in GRADIENT STEPS. Enforced both here (so a run resumed already past
+            # the cap exits before training) and MID-EPOCH in the batch loop below, which is
+            # what actually makes it exact.
+            max_gradient_steps = cfg.training.get('max_gradient_steps', None)
+            stop_training = False
+            # The running value normalizer advances only while the training loop is driving;
+            # off by default so an eval script normalizes with the statistics the arm trained
+            # under. No-op on every arm without a learned-Q verifier.
+            if hasattr(self.accelerator.unwrap_model(self.model), 'set_value_norm_training'):
+                self.accelerator.unwrap_model(self.model).set_value_norm_training(True)
             for local_epoch_idx in range(cfg.training.num_epochs):
-                if cfg.training.get('max_gradient_steps', None) is not None:
-                    if self.global_step >= cfg.training.max_gradient_steps:
-                        break
+                if max_gradient_steps is not None \
+                    and self.global_step >= max_gradient_steps:
+                    break
                 step_log = dict()
                 # ========= train for this epoch ==========
-                if cfg.training.freeze_encoder:
+                # `.get`, because the PushT configs no longer declare the key: their obs
+                # backbone (SDVAEEncoder) freezes itself unconditionally. Kept for the maze,
+                # procgen and in-context configs that still set it.
+                if cfg.training.get('freeze_encoder', False):
                     self.accelerator.unwrap_model(self.model).obs_encoder.eval()
                     self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
 
                 train_losses = list()
                 n_batches = len(train_dataloader)
                 accumulate_every = cfg.training.gradient_accumulate_every
-                max_train_steps = cfg.training.max_train_steps
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        if train_sampling_batch is None:
-                            train_sampling_batch = batch
+                        # Refreshed every batch, NOT frozen at epoch 0. The old
+                        # `if train_sampling_batch is None` guard pinned the FIRST batch of
+                        # the FIRST epoch and reused that same GPU tensor for every
+                        # sample_every evaluation for the rest of the run -- so
+                        # train_action_* measured fit on 32 windows the model re-saw every
+                        # epoch, not anything that moved with training.
+                        train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                        model = self.accelerator.unwrap_model(self.model)
+                        # Crop offsets are a pure function of (seed, global_step): the same
+                        # offset covers this sample's obs window AND every subgoal image the
+                        # search generates from it, and a resumed run reproduces an
+                        # uninterrupted one because there is no RNG state to restore.
+                        if hasattr(model, 'set_crop_step'):
+                            model.set_crop_step(cfg.training.seed, self.global_step)
+                        # beside set_crop_step so the crop offset and the
+                        # slot-weight curriculum share one notion of 'now'
+                        if hasattr(model, 'set_slot_weight_step'):
+                            model.set_slot_weight_step(self.global_step)
+                        raw_loss = model.compute_loss(batch)
                         loss = raw_loss / accumulate_every
                         self.accelerator.backward(loss)
 
-                        # Accumulation windows are counted in BATCHES. Keying them on
-                        # global_step (which counts optimizer steps) meant a counter could
-                        # not delimit its own windows: the window shifted by one every
-                        # epoch, the very first batch stepped on a single micro-batch, and
-                        # each epoch's final partial window was dropped with its gradients
-                        # leaking into the next epoch (zero_grad only ran inside the
-                        # branch). Inert while every config sets accumulate=1, but silently
-                        # wrong the moment one does not.
+                        # Accumulation windows are counted in BATCHES, not in global_step
+                        # (which counts optimizer steps and so cannot delimit its own
+                        # windows). The epoch's final window is always flushed, so a
+                        # partial window's gradients never leak into the next epoch.
+                        max_train_steps = cfg.training.max_train_steps
                         is_last_batch = (batch_idx == (n_batches - 1)) or (
                             max_train_steps is not None
                             and batch_idx >= (max_train_steps - 1))
@@ -290,9 +704,17 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
-                            # global_step is exactly the number of optimizer steps taken.
-                            # That is what checkpoint_every, max_gradient_steps and the
-                            # step_*.ckpt names (which the eval/BoN scripts parse) mean.
+                            if ema is not None:
+                                # per OPTIMIZER step, not per batch
+                                ema.step(self.accelerator.unwrap_model(self.model))
+                                # EMAModel averages parameters and never copies BUFFERS, so the running
+                                # value-normalizer statistics would stay at their construction values on
+                                # the EMA copy -- which is the copy evaluation scores. No-op on every arm
+                                # that has no learned-Q normalizer.
+                                if hasattr(ema.averaged_model, 'sync_value_norm_from'):
+                                    ema.averaged_model.sync_value_norm_from(self.accelerator.unwrap_model(self.model))
+                            # global_step is exactly the number of optimizer steps taken,
+                            # which is what checkpoint_every and step_*.ckpt names mean.
                             self.global_step += 1
 
                         raw_loss_cpu = raw_loss.item()
@@ -306,7 +728,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                         }
 
                         # The last batch's slot is left for the end-of-epoch summary log
-                        # at the same global_step, so wandb steps stay strictly increasing.
+                        # (same global_step), so wandb steps stay strictly increasing.
                         if is_optimizer_step and not is_last_batch:
                             if self.accelerator.is_main_process:
                                 wandb_run.log(step_log, step=self.global_step)
@@ -317,10 +739,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
-                                # Anchor BEFORE writing, so the value that lands inside the
-                                # checkpoint is the step it was taken at; setting it after
-                                # persists the previous anchor and a resumed run believes
-                                # it is overdue and fires an extra checkpoint immediately.
+                                # Anchor BEFORE writing, so the value that lands in the
+                                # checkpoint is the step it was taken at. Setting it
+                                # afterwards persists the PREVIOUS anchor, so a resumed run
+                                # believes it is overdue and fires an extra checkpoint on
+                                # its very first step.
                                 self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
@@ -335,6 +758,22 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
+                        # Stop on the EXACT step. The epoch-level check above only fires
+                        # between epochs, so on its own it overshoots by up to a full epoch
+                        # -- and whenever the final epoch begins below the cap it never
+                        # fires at all, leaving num_epochs as the real bound. (At 382
+                        # steps/epoch x 786 epochs the last epoch started at 299,870, so a
+                        # 300,000 cap did nothing and the run ended at 300,252.)
+                        #
+                        # Placed after the checkpoint block so the final step is saved, and
+                        # it leaves the end-of-epoch block below to run once on the
+                        # truncated epoch -- so a capped run still ends with a val_loss and
+                        # a final rollout.
+                        if max_gradient_steps is not None \
+                            and self.global_step >= max_gradient_steps:
+                            stop_training = True
+                            break
+
                         if max_train_steps is not None \
                             and batch_idx >= (max_train_steps - 1):
                             break
@@ -344,25 +783,67 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 train_loss = np.mean(train_losses)
                 step_log['train_loss'] = train_loss
                 policy = self.accelerator.unwrap_model(self.model)
+                # EMA weights are what gets rolled out, validated, sampled and saved into
+                # every step_*.ckpt; the live weights are only the optimization target.
+                eval_policy = self.ema_model if self.ema_model is not None else policy
+                eval_policy.eval()
                 policy.eval()
 
+                # Eval cadences in GRADIENT STEPS. Epochs are not a stable unit: an epoch's
+                # length depends on the dataset size and the train budget, so the same
+                # `val_every: 10` fired every ~960 steps at a 25-episode budget and every
+                # ~4030 at 100 episodes. rollout_every_steps is additionally a multiple of
+                # checkpoint_every, so every in-training success number belongs to weights
+                # that were actually saved and can be re-verified against an eval curve.
+                # The epoch-based keys remain as the fallback for configs predating this.
+                rollout_every_steps = cfg.training.get('rollout_every_steps', None)
+                if rollout_every_steps is None:      # legacy epoch-based configs
+                    do_rollout = (self.epoch % cfg.training.rollout_every) == 0
+                else:
+                    do_rollout = (self.global_step - self.last_rollout_step) >= rollout_every_steps
+                val_every_steps = cfg.training.get('val_every_steps', None)
+                if val_every_steps is None:
+                    do_val = (self.epoch % cfg.training.val_every) == 0
+                else:
+                    do_val = (self.global_step - self.last_val_step) >= val_every_steps
+                do_val = do_val and has_val
+                sample_every_steps = cfg.training.get('sample_every_steps', None)
+                if sample_every_steps is None:
+                    do_sample = (self.epoch % cfg.training.sample_every) == 0
+                else:
+                    do_sample = (self.global_step - self.last_sample_step) >= sample_every_steps
+
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
-                    runner_log = env_runner.run(policy)
+                if do_rollout:
+                    self.last_rollout_step = self.global_step
+                    # Seed before the rollout so its success rate is reproducible from the
+                    # checkpoint. The env itself is deterministic given a reset state, but
+                    # conditional_sample draws from the global RNG, so without this the
+                    # number depended on whatever state the preceding training left behind.
+                    torch.manual_seed(cfg.training.seed)
+                    np.random.seed(cfg.training.seed)
+                    runner_log = env_runner.run(eval_policy)
                     # log all
                     step_log.update(runner_log)
 
                 # run validation
-                if (self.epoch % cfg.training.val_every) == 0:
+                if do_val:
+                    self.last_val_step = self.global_step
                     with torch.no_grad():
                         val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
-                                if val_sampling_batch is None:
-                                    val_sampling_batch = batch      # first val batch -> val action-MSE sampling
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
+                                # This workspace also trains policies with no slot
+                                # weighting at all (MLPImagePolicy), whose compute_loss
+                                # does not take the keyword.
+                                if hasattr(eval_policy, 'slot_weight_spec'):
+                                    loss = eval_policy.compute_loss(
+                                        batch,
+                                        slot_weighting=_val_slot_weighting(eval_policy))
+                                else:
+                                    loss = eval_policy.compute_loss(batch)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -372,32 +853,55 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
 
+                    # best-of-candidates normalized RMSE on val (and test, if 3-way).
+                    # Search policies only; bounded by nrmse_max_batches (verifier is
+                    # physics-simulated, so this is not free).
+                    if _is_search_policy(eval_policy):
+                        nrmse_max_batches = cfg.training.get('nrmse_max_batches', None)
+                        for prefix, loader in (('val', nrmse_val_loader),
+                                               ('test', nrmse_test_loader)):
+                            if loader is None:
+                                continue
+                            metrics = self._search_action_nrmse(
+                                eval_policy, loader, device, nrmse_max_batches)
+                            if metrics is None:
+                                continue
+                            for key, value in metrics.items():
+                                step_log[f'{prefix}_{key}'] = value
+
                 # run sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0:
+                if do_sample:
+                    self.last_sample_step = self.global_step
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        # Copy, never mutate: train_sampling_batch is held on GPU for the
-                        # whole run, so an attention_mask inserted into its obs dict below
-                        # would stick there forever and be fed to every later epoch.
+                        # copy, never mutate: train_sampling_batch is held on GPU for the
+                        # whole run, so anything inserted into its obs dict sticks forever
                         obs_dict = dict(batch['obs'])
                         gt_action = batch['action'][
-                            :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
+                            :, eval_policy.n_obs_steps-1:eval_policy.n_obs_steps+eval_policy.n_action_steps-1
                         ]
                         if batch.get('attention_mask', None) is not None:
                             obs_dict['attention_mask'] = batch['attention_mask']
-                        
-                        if hasattr(policy, 'verifier'):
-                            # Include the expert action so ground-truth verifiers (e.g. MSEVerifier) can read it.
-                            result = policy.search_candidates({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
-                            pred_action, values = result
-                            pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
-                            # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).
+
+                        if _is_search_policy(eval_policy):
+                            # search policies whose context feedback is wider than the
+                            # scalar (e.g. a rollout state) also return the scalar
+                            # ranking score; log that, not the mean over the context.
+                            # also ask for the subgoals: this block already runs a full
+                            # search, so reusing it is far cheaper than a second one.
+                            all_action, values, scores, subgoals = eval_policy.search_candidates(
+                                obs_dict, verifier=eval_policy.verifier,
+                                n_actions=eval_policy.max_actions,
+                                return_scores=True, return_subgoals=True)
+                            asl = slice(eval_policy.n_obs_steps-1,
+                                        eval_policy.n_obs_steps+eval_policy.n_action_steps-1)
+                            pred_action = all_action[:, :, asl]
                             mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions
                             min_mse, _ = torch.min(mse, dim=-1) # B
                             avg_mse = mse.mean(dim=-1) # B
                             # NORMALIZED: per-dim [-1,1] space (the space the loss is computed in).
-                            na = policy.normalizer['action']
+                            na = eval_policy.normalizer['action']
                             mse_n = (na.normalize(pred_action) - na.normalize(gt_action).unsqueeze(1)).pow(2).mean(dim=(-1, -2))
                             min_n, _ = torch.min(mse_n, dim=-1) # B
                             avg_n = mse_n.mean(dim=-1) # B
@@ -412,68 +916,39 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             step_log['train_action_rmse_error_avg_normalized'] = avg_n.sqrt().mean().item()
                             step_log['train_action_rmse_error_min_unnormalized'] = min_mse.sqrt().mean().item()
                             step_log['train_action_rmse_error_avg_unnormalized'] = avg_mse.sqrt().mean().item()
-                            step_log['train_action_value'] = values.mean().item()
+                            # candidate 0 == empty search context == the no-search
+                            # baseline; (first - min) is the best-of-n gain.
+                            step_log['train_action_mse_error_first'] = mse[:, 0].mean().item()
+                            step_log['train_action_value'] = scores.mean().item()
+                            step_log['train_action_value_best'] = scores.max(dim=1).values.mean().item()
+                            step_log['train_action_value_first'] = scores[:, 0].mean().item()
+                            if getattr(eval_policy, 'selection', 'argmax') == 'final_pass':
+                                # the sample this arm deploys is none of the candidates
+                                # above -- draw it and log it alongside them
+                                keep = eval_policy.context_capacity
+                                final = eval_policy.predict_action(
+                                    obs_dict,
+                                    actions=all_action[:, -keep:] if keep else None,
+                                    values=values[:, -keep:] if keep else None)['action_pred']
+                                fscore = eval_policy._score_candidates(
+                                    eval_policy.verifier, obs_dict, final)[1]
+                                step_log['train_action_mse_error_final'] = (
+                                    final[:, asl] - gt_action).pow(2).mean().item()
+                                step_log['train_action_value_final'] = fscore.mean().item()
+                                del final
+                            del all_action, values
+                            panel = _subgoal_panel(subgoals)
+                            if panel is not None:
+                                step_log['train_subgoals'] = panel
+                            del subgoals
                         else:
-                            result = policy.predict_action(obs_dict)
-                            pred_action = result['action']
+                            pred_action = eval_policy.predict_action(obs_dict)['action']
                             mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                             step_log['train_action_mse_error'] = mse.item()
+                        # release RAM
                         del batch
                         del obs_dict
                         del gt_action
-                        del result
-                        del pred_action
-                        del mse
-
-                # run sampling on a VALIDATION batch -> val action MSE (mirrors the
-                # train_action_mse_error above, but on held-out data). This is the
-                # action-space error (sampled action vs expert), complementing
-                # val_loss which is only the denoising/epsilon MSE.
-                if (self.epoch % cfg.training.sample_every) == 0 and val_sampling_batch is not None:
-                    with torch.no_grad():
-                        batch = dict_apply(val_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        # copy, never mutate -- see the train sampling block above
-                        obs_dict = dict(batch['obs'])
-                        gt_action = batch['action'][
-                            :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
-                        ]
-                        if batch.get('attention_mask', None) is not None:
-                            obs_dict['attention_mask'] = batch['attention_mask']
-
-                        if hasattr(policy, 'verifier'):
-                            result = policy.search_candidates({**obs_dict, 'action': batch['action']}, verifier=policy.verifier, n_actions=policy.max_actions)
-                            pred_action, values = result
-                            pred_action = pred_action[:, :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1]
-                            # UNNORMALIZED: raw action units (mixed m / rad / gripper[0,1]).
-                            mse = (pred_action - gt_action.unsqueeze(1)).pow(2).mean(dim=(-1, -2)) # B, max_actions
-                            min_mse, _ = torch.min(mse, dim=-1) # B
-                            avg_mse = mse.mean(dim=-1) # B
-                            # NORMALIZED: per-dim [-1,1] space (the space the loss is computed in).
-                            na = policy.normalizer['action']
-                            mse_n = (na.normalize(pred_action) - na.normalize(gt_action).unsqueeze(1)).pow(2).mean(dim=(-1, -2))
-                            min_n, _ = torch.min(mse_n, dim=-1) # B
-                            avg_n = mse_n.mean(dim=-1) # B
-                            step_log['val_action_mse_error_min'] = min_mse.mean().item()
-                            step_log['val_action_mse_error_avg'] = avg_mse.mean().item()
-                            step_log['val_action_mse_error_min_unnormalized'] = min_mse.mean().item()
-                            step_log['val_action_mse_error_avg_unnormalized'] = avg_mse.mean().item()
-                            step_log['val_action_mse_error_min_normalized'] = min_n.mean().item()
-                            step_log['val_action_mse_error_avg_normalized'] = avg_n.mean().item()
-                            # RMSE = sqrt(per-sample MSE), then mean over batch.
-                            step_log['val_action_rmse_error_min_normalized'] = min_n.sqrt().mean().item()
-                            step_log['val_action_rmse_error_avg_normalized'] = avg_n.sqrt().mean().item()
-                            step_log['val_action_rmse_error_min_unnormalized'] = min_mse.sqrt().mean().item()
-                            step_log['val_action_rmse_error_avg_unnormalized'] = avg_mse.sqrt().mean().item()
-                            step_log['val_action_value'] = values.mean().item()
-                        else:
-                            result = policy.predict_action(obs_dict)
-                            pred_action = result['action']
-                            mse = torch.nn.functional.mse_loss(pred_action, gt_action)
-                            step_log['val_action_mse_error'] = mse.item()
-                        del batch
-                        del obs_dict
-                        del gt_action
-                        del result
                         del pred_action
                         del mse
 
@@ -486,18 +961,24 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
-                # NOTE: global_step is deliberately NOT incremented here. It counts
-                # optimizer steps and is advanced only in the training loop; incrementing
-                # it per epoch as well drifted it +1/epoch away from the true step count,
-                # and from the step_*.ckpt names the eval/BoN scripts parse.
+                # NOTE: global_step is NOT incremented here. It counts optimizer steps and
+                # is advanced only in the training loop; incrementing it per epoch as well
+                # made it drift from the true step count (and from the step_*.ckpt names
+                # that the eval script parses) by one per epoch.
                 self.epoch += 1
-        # A threaded checkpoint save may still be in flight; without this the process can
-        # exit and leave the final checkpoint truncated.
+
+                # The end-of-epoch validation and sampling above have already run, so the
+                # run ends fully evaluated rather than mid-epoch.
+                if stop_training:
+                    print(f'Reached max_gradient_steps={max_gradient_steps}, stopping.')
+                    break
+        # the last checkpoint may still be writing on the background save thread; without
+        # this the process can exit and leave it truncated
         self.join_saving_thread()
-        # Guard: end_training() iterates self.accelerator.trackers, which is
-        # only set inside init_trackers(); we never call it (no log_with=),
-        # so skip cleanly on accelerate versions that don't lazy-init it.
-        if hasattr(self.accelerator, 'trackers'):
+        # Guard: end_training() iterates self.accelerator.trackers, which is only
+        # populated by init_trackers(); we never call it (no log_with=), so an empty list
+        # here means there is nothing to end.
+        if getattr(self.accelerator, 'trackers', None):
             self.accelerator.end_training()
 
 @hydra.main(

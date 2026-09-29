@@ -1,0 +1,43 @@
+# DIFFUSION-UNET BC, 29 demos (the Round-8 parity split).
+#
+# Identical to train_pusht_unet_bc except for the demo budget and the epoch count that
+# follows from it. See that file for why this inherits the SEARCH task, why
+# imagenet_norm is False, why num_inference_steps stays at 100, and why outer/inner does
+# not apply to this policy.
+#
+# `n_demos: 29` alone is NOT enough: task.dataset.split_file interpolates as
+# splits/pusht_seed42_train${n_demos}.json and there is no train29.json. Generating one
+# with `dump_pusht_splits.py --n-train-episodes 29` takes a PREFIX of the permuted pool --
+# a different 29 episodes, overlapping the real set in only 4 of 29 (README_pusht 2.1).
+#
+# RUN LENGTH needs NO override here. The parent sets `max_gradient_steps: 300000`, which is
+# in gradient steps and therefore already independent of the demo budget; `num_epochs` is
+# inherited as a safety bound large enough never to bind.
+#
+# This is what the config used to have to get right by hand: an epoch is
+# `ceil(n_windows / batch_size)` steps, so the same step budget needed a DIFFERENT epoch
+# count at each demo budget (110 steps/epoch here at 3,504 windows / batch 32, against 382
+# at 100 demos). An epoch is not a stable unit across demo budgets, and that is the trap
+# that silently gave the two BC arms different training lengths.
+#
+# `_self_` LAST.
+defaults:
+  - train_pusht_unet_bc
+  - _self_
+
+name: train_pusht_unet_bc_29
+
+n_demos: 29
+run_name: unetbc_demos-29-r8_seed-${training.seed}
+
+task:
+  dataset:
+    split_file: diffusion_policy/config/splits/pusht_seed42_train29_val30.json
+    n_train_episodes: 29
+    n_val_episodes: 30
+    n_test_episodes: 50
+    # must stay null with a split_file: it would re-subsample the pinned manifest
+    train_ratio: null
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "unet-bc", "demos-29", "r8-split"]

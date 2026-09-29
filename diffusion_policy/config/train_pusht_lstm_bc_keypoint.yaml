@@ -1,0 +1,50 @@
+# PushT LSTM BC (KEYPOINT) -- the image master's twin on the 20-d keypoint observation.
+#
+# Inherits train_pusht_lstm_bc so the two arms share every optimisation and geometry decision
+# and differ ONLY in the observation. Anything set here is something that cannot be true of
+# both arms; everything else is deliberately not restated.
+defaults:
+  - train_pusht_lstm_bc
+  - _self_
+  # replaces pusht_base's `task: pusht_image_search_imgonly`
+  - override task: pusht_keypoint_manifest
+
+name: train_pusht_lstm_bc_keypoint
+
+# The backbone axis is meaningless without an image, so it must not appear in the run name --
+# `_enc-resnet18` on a keypoint run would claim a ResNet that is not in the model.
+enc_suffix: ''
+run_name: lstmbckp_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+# A SIBLING of pusht_base's `obs_encoder`, not an override of it, because `policy.obs_encoder`
+# must be RE-POINTED rather than rewritten. The parent sets it to the interpolation
+# `${obs_encoder}`; assigning a dict to that same key does NOT replace it -- OmegaConf resolves
+# the destination interpolation first and MERGES into it, so the ResNet block's keys survive
+# and FlattenObsEncoder is constructed with `rgb_model`. Pointing one interpolation at another
+# replaces the node outright. pusht_base's `obs_encoder` therefore stays in the composed config,
+# unused: this arm has no image, and `enc_suffix: ''` above keeps that dead ResNet out of the
+# run name.
+#
+# recurrent PPO's KeypointExtractor is `nn.Flatten()`; this is its counterpart, and it is
+# parameter-free. NOT MultiImageObsEncoder: that appends low_dim tensors raw, so the (B,9,2)
+# keypoint entry would survive the concat as (B,9,2) instead of flattening to 18.
+obs_encoder_keypoint:
+  _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+  shape_meta: ${shape_meta}
+
+policy:
+  obs_encoder: ${obs_encoder_keypoint}
+  # There is no image to crop. Passing a crop_shape would make CropScopeMixin draw offsets
+  # nothing consumes.
+  crop_shape: null
+  random_crop: False
+
+# No encoder means no ResNet activations, so the whole 30-episode split fits in one batch and
+# there is nothing to accumulate. An epoch is then a single optimizer step over all 30
+# episodes, which is why num_epochs (inherited at 2e6) must stay a pure safety bound.
+dataloader:
+  batch_size: 32
+val_dataloader:
+  batch_size: 32
+training:
+  gradient_accumulate_every: 1

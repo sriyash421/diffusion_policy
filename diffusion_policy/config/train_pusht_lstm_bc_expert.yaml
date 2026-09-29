@@ -1,0 +1,58 @@
+# PushT LSTM BC (IMAGE) on the FULL demonstration set -- the recurrent expert candidate.
+#
+# Inherits train_pusht_lstm_bc so the policy, the encoder and every optimisation decision are
+# the 30-demo master's, unchanged. This file sets ONLY what a full-data run changes: the
+# split, its geometry, the step budget, and where success rate comes from.
+#
+# WHY A SEPARATE FILE rather than command-line overrides. `n_demos` selects the split manifest
+# AND names hydra.run.dir, and the 176-episode manifest has a DIFFERENT GEOMETRY from every
+# other one (30 test / 0 val, against 50 test / 30 val). load_split_manifest validates both
+# counts against the manifest, so carrying them on the command line means every relaunch,
+# every resume and every eval job has to retype them or die. Structure mirrors
+# train_pusht_unet_bc_expert, which this arm is the recurrent counterpart of.
+defaults:
+  - train_pusht_lstm_bc
+  - _self_
+
+name: train_pusht_lstm_bc_expert
+
+# 176 = every episode that is not one of the 30 held out. Selects
+# splits/pusht_seed42_train176.json (train 176 / val 0 / test 30). Those 30 are a FRESH
+# selection balanced on moving-transition count, NOT the seed42 `val` 30 and NOT the
+# blockborder core50, so this arm's success rate is comparable to the UNet BC expert arms
+# and to nothing else in the tree.
+n_demos: 176
+
+task:
+  dataset:
+    # VALIDATED against the manifest, not generative -- these must equal its list lengths or
+    # load_split_manifest raises. The parent task declares 50/30; this manifest is 30/0.
+    n_test_episodes: 30
+    # 0, and the dataset reads that as "there is no val split".
+    #
+    # THE COST IS SPECIFIC TO THIS ARM AND IT IS NOT SMALL. val_loss is what the LSTM arms
+    # have been read on -- it is how the turn was located at step 6000 (30 demos, seed42) and
+    # step 2500 (60 demos, keypoint, blockborder). With no val split there is no val_loss at
+    # all: TrainMLPImageWorkspace computes `has_val = len(val_dataset) > 0` and skips the
+    # whole validation block, deliberately, because iterating a zero-length accelerate
+    # dataloader raises rather than yielding nothing. So this run has exactly one readout,
+    # the offline success curve on the 30 held-out episodes, and no early-overfit signal.
+    n_val_episodes: 0
+
+training:
+  # 200k, matching train_pusht_unet_bc_expert step for step so the two expert arms are read
+  # off the same grid. 176 episodes is ~5.9x the 30-demo data.
+  max_gradient_steps: 200000
+  # OFF, for the reason train_pusht_unet_bc_expert gives: success rate is measured OFFLINE by
+  # eval_search_pusht.py --watch over every step_*.ckpt, and an in-training rollout would
+  # produce a SECOND success number for the same weights on a different cadence through a
+  # different code path.
+  rollout_every_steps: null
+  # 10000 -- raised from the master's 2000, and it IS the eval grid: 20 checkpoints, every one
+  # scored, nothing scored off-grid. At ~185 MB per LSTM checkpoint that is ~3.7 GB.
+  checkpoint_every: 10000
+  # THE LR SCHEDULE IS DELIBERATELY NOT STRETCHED. The master floors at step 16k
+  # (lr_warmup_steps 600 + decay_steps 15400) and that is left exactly as it is, so this arm
+  # is optimised identically to the 30- and 60-demo LSTM arms and the comparison varies the
+  # data alone. The cost is that steps 16k-200k all run at 0.1x peak; that is the accepted
+  # trade, and it is the same one the UNet expert made at its own 80k floor.

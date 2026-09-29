@@ -23,9 +23,20 @@ class TopKCheckpointManager:
         if self.k == 0:
             return None
 
+        # rollout_every / val_every / checkpoint_every are independent, so the monitored
+        # metric is simply absent on epochs where its producer did not run. Skip instead
+        # of raising -- topk selection resumes on the next epoch that produces it.
+        if self.monitor_key not in data:
+            return None
+
         value = data[self.monitor_key]
-        ckpt_path = os.path.join(
-            self.save_dir, self.format_str.format(**data))
+        try:
+            ckpt_path = os.path.join(
+                self.save_dir, self.format_str.format(**data))
+        except KeyError as e:
+            raise KeyError(
+                f"checkpoint.topk.format_str {self.format_str!r} references {e} which is "
+                f"not in the logged metrics {sorted(data.keys())}") from e
         
         if len(self.path_value_map) < self.k:
             # under-capacity

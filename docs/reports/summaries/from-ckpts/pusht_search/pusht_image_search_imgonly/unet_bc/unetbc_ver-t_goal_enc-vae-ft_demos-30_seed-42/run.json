@@ -1,0 +1,30 @@
+{
+  "name": "train_pusht_unet_bc",
+  "exp_name": "pusht_search",
+  "trainer": "unet_bc",
+  "task_name": "pusht_image_search_imgonly",
+  "search_context": null,
+  "corrupt_obs": null,
+  "seed": 42,
+  "zarr_path": "data/pusht_cchi_v7_replay.zarr",
+  "train_ratio": null,
+  "target": "diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace",
+  "launches": [
+    {
+      "started_at": "2026-08-30T11:30:56",
+      "slurm_job_id": "39349866",
+      "hostname": "g3063",
+      "git_sha": "d63d70b9f9e909cce32e051bcf28abda16a8a09d",
+      "git_dirty": true,
+      "global_step": 0
+    },
+    {
+      "started_at": "2026-08-30T13:39:49",
+      "slurm_job_id": "39356213",
+      "hostname": "g3054",
+      "git_sha": "7ec4c4476f15acbfe18ca7a08f06b3383d4b7156",
+      "git_dirty": true,
+      "global_step": 20000
+    }
+  ]
+}

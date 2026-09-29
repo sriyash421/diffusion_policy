@@ -1,0 +1,32 @@
+# Search-context ablation (2/2): SUBGOAL OBSERVATION + VERIFIER SCALAR.
+#
+# Identical to train_pusht_diffusion_search except for what each already-generated
+# candidate feeds back into the context the next candidate is conditioned on:
+#   baseline : the verifier scalar (-mean keypoint distance to the goal T)
+#   this run : that scalar CONCATENATED with the encoded observation the candidate's
+#              action chunk actually reaches when rolled out in the PushT sim (the
+#              rendered frame plus agent_pos/feedback, through this policy's own obs
+#              encoder) -- i.e. both signals.
+# Both come out of the same simulated rollout, so this costs no extra sim steps over the
+# baseline. Candidate ranking still uses the verifier scalar.
+#
+# Training length, checkpoint cadence and the encoder/augmentation settings are all
+# INHERITED from train_pusht_diffusion_search so every arm of the ablation is identical
+# except for search_context. Do not override them here -- an earlier version pinned
+# max_gradient_steps: 100000 while the base ran 20k, which made the arms incomparable
+# and trained this one ~30x past its val_loss optimum. See AUDIT.md ROUND 4.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_subgoal_verifier
+
+# Ablation identity. These drive BOTH the policy and the output directory
+# (hydra.run.dir in the base config), so the arm is readable off the path.
+search_context: subgoal_value
+corrupt_obs: False
+arm: subgoal-value
+
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "subgoal_verifier_env"]

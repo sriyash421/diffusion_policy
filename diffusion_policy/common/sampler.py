@@ -90,7 +90,16 @@ def collate_fn(batch):
     obs_dict = {key: [item['obs'][key] for item in batch] for key in batch[0]['obs'].keys()}
     collated_obs = dict_apply(obs_dict, lambda x: _collate(x))
     collated_actions = _collate([item['action'] for item in batch])
-    collated_expert_mask = _collate([item['expert_mask'] for item in batch])
+    # OPTIONAL since 2026-08-29. sim2real reads a real per-step expert_mask out of its zarr;
+    # PushT never had one and emitted a constant np.ones purely to satisfy this line, which
+    # then rode in every batch unread (PushT uses default_collate, so it never even reached
+    # here). Absent means "every step is expert", which is what that constant meant.
+    if 'expert_mask' in batch[0]:
+        collated_expert_mask = _collate([item['expert_mask'] for item in batch])
+    else:
+        collated_expert_mask = torch.ones(
+            (len(batch), max(item['action'].shape[0] for item in batch), 1),
+            dtype=torch.float32)
 
     max_len = collated_actions.shape[1]
     seq_lens = [item['action'].shape[0] for item in batch]
@@ -127,11 +136,20 @@ class SequenceSampler:
         keys=None,
         key_first_k=dict(),
         episode_mask: Optional[np.ndarray]=None,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        index_filter=None
         ):
         """
         key_first_k: dict str: int
             Only take first k data from these keys (to improve perf)
+        index_filter: optional (N,4) -> (N,) bool, applied to the window rows.
+
+            `episode_mask` selects whole episodes; this selects individual WINDOWS within
+            the ones it kept, which nothing else here can express. It is a callback rather
+            than a semantic flag on purpose -- deciding which windows matter needs the task's
+            own data (PushT reads block poses to find the transitions its verifier has signal
+            on), and this class must stay task-agnostic. Defaults to None, so every other
+            dataset sharing this sampler is unaffected.
         """
 
         super().__init__()
@@ -154,6 +172,12 @@ class SequenceSampler:
         else:
             indices = np.zeros((0,4), dtype=np.int64)
 
+        if index_filter is not None and len(indices):
+            keep = np.asarray(index_filter(indices), dtype=bool)
+            assert keep.shape == (len(indices),), (
+                f'index_filter returned {keep.shape}, expected {(len(indices),)}')
+            indices = indices[keep]
+
         # (buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx)
         self.indices = indices 
         self.keys = list(keys) # prevent OmegaConf list performance problem
@@ -164,6 +188,7 @@ class SequenceSampler:
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k
         self.return_sequences = return_sequences
+        self.index_filter = index_filter
     
     def __len__(self):
         return len(self.indices)

@@ -1,0 +1,30 @@
+{
+  "name": "train_pusht_lstm_bc_keypoint",
+  "exp_name": "pusht_search",
+  "trainer": "lstm_bc",
+  "task_name": "pusht_keypoint_manifest",
+  "search_context": null,
+  "corrupt_obs": null,
+  "seed": 42,
+  "zarr_path": "data/pusht_cchi_v7_replay.zarr",
+  "train_ratio": null,
+  "target": "diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace",
+  "launches": [
+    {
+      "started_at": "2026-09-15T22:21:11",
+      "slurm_job_id": "40204562",
+      "hostname": "g3084",
+      "git_sha": "0a6f46f976efe7e42e9c20964fe1005605b64382",
+      "git_dirty": true,
+      "global_step": 0
+    },
+    {
+      "started_at": "2026-09-16T09:14:44",
+      "slurm_job_id": "40215647",
+      "hostname": "g3047",
+      "git_sha": "0a6f46f976efe7e42e9c20964fe1005605b64382",
+      "git_dirty": true,
+      "global_step": 20000
+    }
+  ]
+}

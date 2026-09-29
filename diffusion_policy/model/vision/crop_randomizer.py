@@ -35,6 +35,12 @@ class CropRandomizer(nn.Module):
         self.crop_width = crop_width
         self.num_crops = num_crops
         self.pos_enc = pos_enc
+        # Optional externally-supplied crop offsets, (B, 2). When set, forward_in uses
+        # these instead of drawing its own. This exists so a caller that knows which
+        # images belong together -- e.g. a search policy encoding an observation and the
+        # subgoal images predicted from it -- can give them ONE shared offset, which
+        # per-image sampling cannot express. None restores the default behaviour exactly.
+        self._forced_offsets = None
 
     def output_shape_in(self, input_shape=None):
         """
@@ -83,6 +89,18 @@ class CropRandomizer(nn.Module):
         inputs to [B * N, ...].
         """
         assert len(inputs.shape) >= 3 # must have at least (C, H, W) dimensions
+        if self._forced_offsets is not None:
+            # caller-supplied offsets: one per image in this batch, already accounting for
+            # whichever images are meant to share a crop
+            offsets = self._forced_offsets.to(inputs.device)
+            assert offsets.shape[0] == inputs.shape[0], (
+                f'got {offsets.shape[0]} crop offsets for {inputs.shape[0]} images')
+            out = crop_image_from_indices(
+                inputs, offsets, self.crop_height, self.crop_width)
+            if self.num_crops > 1:
+                out = out.unsqueeze(1).expand(
+                    -1, self.num_crops, *out.shape[1:]).reshape(-1, *out.shape[1:])
+            return out
         if self.training:
             # generate random crops
             out, _ = sample_random_image_crops(

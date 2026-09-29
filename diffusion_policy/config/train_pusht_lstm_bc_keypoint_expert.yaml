@@ -1,0 +1,28 @@
+# PushT LSTM BC (KEYPOINT) on the full demonstration set -- the image expert's twin.
+#
+# INHERITANCE DIRECTION DIFFERS FROM THE UNET PAIR, deliberately. There,
+# unet_bc_keypoint_expert inherits unet_bc_expert and re-does the observation swap, because
+# the swap is a policy replacement that the expert file does not touch. Here the swap lives
+# in train_pusht_lstm_bc_keypoint and is ~40 lines of OmegaConf whose correctness depends on
+# re-POINTING `policy` at a sibling rather than merging a dict onto it; duplicating that to
+# gain scalar inheritance would be trading a safe duplication for a dangerous one. So this
+# file inherits the keypoint master and restates the four expert scalars, which are pinned
+# equal to the image expert's by unit_tests/test_lstm_expert_configs.py.
+defaults:
+  - train_pusht_lstm_bc_keypoint
+  - _self_
+
+name: train_pusht_lstm_bc_keypoint_expert
+
+# Identical to train_pusht_lstm_bc_expert -- see that file for why each value is what it is.
+n_demos: 176
+
+task:
+  dataset:
+    n_test_episodes: 30
+    n_val_episodes: 0
+
+training:
+  max_gradient_steps: 200000
+  rollout_every_steps: null
+  checkpoint_every: 10000

@@ -1,0 +1,478 @@
+# PushT DIFFUSION search transformer -- the search master.
+#
+# Scaffolding (task, dataloader, optimizer, training, logging, checkpoint, hydra) comes
+# from pusht_base; this file is the denoiser and its search knobs.
+defaults:
+  - pusht_base
+  - _self_
+
+name: train_pusht_diffusion_search
+
+# ---------------------------------------------------------------------------
+# DEFAULT TRAINER -- outer_inner. FLIP APPLIED 2026-08-13.
+#
+# Outer/inner is now the default way to train offline search, and everything inheriting this
+# file gets it. The flip was staged for a long time because SIX r8 trainers were live against
+# train_pusht_diffusion_search_29 with Requeue=1: `trainer` is a path component of
+#   ${output_root}/${exp_name}/${task_name}/${trainer}/${run_name}
+# so flipping it under a running job means any preempt resolves to .../outer_inner/<run>/,
+# finds no latest.ckpt, and SILENTLY RESTARTS FROM SCRATCH in a new directory. That is the
+# failure the 2026-08-05 run-directory rename documents. The precondition (no live `tr_` jobs) held when this was
+# applied -- training now runs locally and nothing was in flight.
+#
+# WHAT CHANGES. `offline` regenerates the search context from the CURRENT weights on every
+# gradient step: max_actions-1 candidate samples plus their verifier rollouts, used once and
+# discarded. `outer_inner` generates it once per pool of `outer_batch_size` windows and
+# reuses it for `inner_epochs` passes -- ~4x cheaper per update (480 -> 120 verifier sims),
+# paid for with a context drawn from weights up to num_inner updates stale. That staleness is
+# measured, not assumed: `train_drift_mse_eps` compares the live policy against a frozen
+# snapshot of the collector at matched inputs, which is proportional to the per-denoising-step
+# KL. Measured at these settings it is ~0.006 and flat across the inner loop.
+#
+# **Runs trained the two ways are not comparable.** Every run in docs/reports/SUCCESS_RATES.md sections
+# 1-3 predates this flip and is `offline`; their directories are under .../offline/ and are
+# not resumed by anything launched now.
+#
+# WIDTH 1 IS AN OVERRIDE, NOT A CONFIG. `n_candidates=1` is the whole of it -- it drives
+# policy.max_actions, task.env_runner.n_search_actions and the k${n_candidates} in run_name,
+# so the width-1 arm is THIS arm with one number changed and cannot drift from k=16 in
+# anything else. train_pusht_bc.yaml, train_pusht_st_k1.yaml and train_pusht_st_n1*.yaml
+# were all deleted on 2026-08-18 for that reason; their arms are CLI overrides now
+# (e.g. the dropout diagnostic is `n_candidates=1 policy.p_drop_attn=0.01
+# policy.cond_encoder=transformer policy.causal_attn=False`).
+#
+# k=1 RUNS ON OUTER/INNER TOO, deliberately. There is no search cost to amortize at width 1,
+# so the pooled sampling is pure downside there (256-window pools with inner_epochs passes
+# instead of full-dataset epochs). That is accepted: one code path for every k is worth more
+# than the ordering, and the LOSS is identical either way -- only which windows the optimizer
+# sees, in what order, differs. TrainSearchOuterInnerWorkspace handles the empty context.
+#
+# NOTE: "BC" means the diffusion UNet (train_pusht_unet_bc) and nothing else. The width-1
+# transformer is ST k=1, never "BC".
+#
+# Anything that must stay on the single-step loop inherits train_pusht_diffusion_search_single
+# rather than re-pinning `trainer` by hand.
+#
+# Verify after touching any of this:
+#   python train.py --config-name=<cfg> --cfg job --resolve | grep -E 'trainer|_target_'
+# ---------------------------------------------------------------------------
+trainer: outer_inner             # {offline, outer_inner} -- paired with _target_ at the top
+
+search_context: value            # {value, subgoal, subgoal_value}
+
+corrupt_obs: False
+# Paired with corrupt_obs above and REQUIRED whenever it is True: whether eval rollouts
+# also see corrupted observations. null means "not answered", which the policy rejects --
+# it used to be answered implicitly (and inconsistently) at the call site.
+corrupt_obs_eval: null
+
+# How the executed action is picked. ORTHOGONAL to search_context, which only says what
+# each candidate reports back:
+#   argmax     -- the verifier scalar ranks the candidates, best one executed (best-of-n
+#                 over a ground-truth simulator). Every arm before subgoal-only.
+#   final_pass -- after the n candidates are scored, one MORE sample is drawn conditioned
+#                 on all of them and executed as-is, unsimulated. The verifier scalar then
+#                 takes no part in selection at all.
+selection: argmax                # {argmax, softmax, final_pass}
+
+# ------------------------------------------------------------------ slot loss weighting
+# Weight on each candidate SLOT's term in the denoising loss. One forward decodes all
+# K = n_candidates slots against the SAME target (the expert action); the staircase memory
+# mask lets slot k attend to exactly the first k scored candidates, so the model fits a
+# family of conditionals from "no context" (slot 0) to "K-1 scored candidates" (slot K-1).
+# Weights are always renormalized to mean 1, so switching profiles cannot silently change
+# the loss SCALE -- which `gradient_clip_norm` and the effective step size both read.
+#
+#   mode: uniform     every slot equal. The objective every run before this key used,
+#                     bit-identical. THE DEFAULT.
+#   mode: geometric   w_k ∝ decay^(K-1-k); needs `decay` in (0,1).
+#   mode: linear      w_k ∝ 1 + (ratio-1)*k/(K-1); needs `ratio` = w_last/w_first > 1.
+#                     ratio = decay^-(K-1) gives the SAME endpoint spread as geometric at
+#                     that decay (at K=16, decay 0.9 -> ratio 4.857), so that pairing
+#                     isolates CURVATURE from spread -- the only clean shape comparison.
+#   mode: list        explicit K-length `weights`, e.g. a profile derived from a measured
+#                     p_is_best_by_index rather than from a formula.
+#   mode: last_only   only slot K-1. The extreme, as a probe: it starves the slots that
+#                     manufacture slot K-1's context, so it is expected to hurt -- which is
+#                     what would make a null result from it informative.
+#
+# `schedule` ramps the chosen profile up from uniform over training, blended in WEIGHT
+# space so the mean stays exactly 1 at every point of the ramp. It exists because the
+# training context is generated by the CURRENT policy (generate_search_context), so
+# up-weighting slot K-1 early changes the very distribution slot K-1 conditions on.
+#
+# `val` is what val_loss is computed under. Default 'uniform': val_loss is the cross-arm
+# comparison signal, and a weighting that moves over training would make the curve
+# incomparable with itself. 'trained' mirrors the training objective (and is what the
+# legacy scalar below resolves to, preserving the semantics its runs already had).
+#
+# ⚠️ TWO CAVEATS BEFORE USING A LAST-SLOT-HEAVY PROFILE.
+# (1) These arms run `selection: argmax`, where EVERY slot is deployed -- all n candidates
+#     come from slots 0..K-1 and the executed action is the best of them. The objective is
+#     a good MAX OVER THE POOL, not a good final conditional, so down-weighting K-1 of the
+#     K candidates the selector picks from may be the wrong direction. The last-slot-heavy
+#     argument is a `final_pass` argument, where slot K-1 IS the deployment condition.
+# (2) The weight is keyed to the ABSOLUTE slot index, but `final_pass` deploys slot
+#     min(n, max_actions-1) -- so under that rule the deployed conditional's weight depends
+#     on the eval n. At K=16 with decay 0.9 the slot used at n=1 trains at 0.40 and the one
+#     at n>=16 at 1.96. `context_decay` below has no n dependence.
+slot_weights:
+  mode: uniform          # {uniform, geometric, linear, tent, list, last_only, curriculum}
+  decay: null            # geometric: w_k ∝ decay^(K-1-k), 0 < decay < 1
+  ratio: null            # linear:    w_last/w_first, > 1
+                         # tent:      w_peak/w_edge,  > 1
+  weights: null          # list:      explicit K-length list of positives
+  reverse: false         # mirror the finished profile -- how a SLOT-0-HEAVY one is written
+  schedule: null         # {shape: linear|cosine|step, start_step: 0, end_step: 50000}
+  waypoints: null        # curriculum only; see below
+  interp: null           # curriculum only; {linear, step}, default linear
+  val: uniform           # {uniform, trained} -- what val_loss is computed under
+
+# `tent` puts the mass on the MIDDLE slots -- neither context-free nor fully conditioned --
+# with a symmetric peak at the centre. At even K the peak straddles the two central slots.
+# `reverse` mirrors any profile, so a slot-0-heavy ramp is `linear` + `reverse: true`
+# rather than a ratio < 1 (which the validator rejects, along with every other no-op).
+#
+# `mode: curriculum` moves the profile over training, through an ordered `waypoints` list.
+# Each waypoint is a profile spec plus the `step` it takes effect at -- the same keys mean
+# the same thing there as here, so a curriculum can use any shape above. Held flat before
+# the first waypoint and after the last; the interval [step_i, step_i+1) belongs to
+# waypoint i, so a waypoint's own step is the first step it is active on.
+#
+#   interp: step     hold each waypoint's profile until the next one's step. "30k steps on
+#                    uniform, then linear" is this: each profile is actually TRAINED on for
+#                    its whole stretch.
+#   interp: linear   interpolate between waypoints, so the objective drifts continuously
+#                    and a waypoint's exact profile is touched for one step on the way past.
+#
+# Every waypoint is renormalized to mean 1, and a convex combination of mean-1 vectors is
+# mean 1 -- so the loss SCALE is constant across a whole curriculum, and gradient_clip_norm,
+# the effective step size and val_loss stay comparable while the profile moves.
+#
+# The round-2 curriculum (30k uniform, then linear r=100 for the remaining 70k):
+#   slot_weights:
+#     mode: curriculum
+#     interp: step
+#     waypoints:
+#       - {step: 0,     mode: uniform}
+#       - {step: 30000, mode: linear, ratio: 100}
+
+# LEGACY scalar, kept so the runs already trained under it resolve to the identical weight
+# vector. Exactly equivalent to slot_weights: {mode: geometric, decay: X, val: trained}.
+# Setting both this and a non-uniform slot_weights.mode raises rather than picking a winner.
+slot_weight_decay: False
+
+# ---------------------------------------------------------------- per-slot loss NORM
+# Which norm each slot's loss term uses -- orthogonal to slot_weights above, which scales
+# the terms. `l2tol1` sets slot k's L1 fraction to alpha_k = k/(K-1), so slot 0 (no search
+# context) stays pure L2 and slot K-1 (full context) is pure L1, linear in between: the
+# low-context slots cannot resolve the multimodality and keep the smooth quadratic, the
+# high-context ones get the outlier-tolerant norm. Per element:
+#   loss_k = (1 - alpha_k) * (pred - target)^2 + alpha_k * |pred - target|
+# NOT renormalized to mean 1 (unlike slot_weights) -- it picks a norm, it does not split a
+# fixed budget. val_loss is always computed under plain L2 so it stays a cross-arm yardstick.
+# Set sw_suffix when this is non-l2, for the same run-dir reason slot_weights needs it.
+slot_loss_norm:
+  mode: l2               # {l2, l1, l2tol1}
+
+# ------------------------------------------------- per-slot OBSERVATION corruption ladder
+# TMRL-style context smoothing, indexed by candidate slot. Slot k's observation features are
+# noised by the obs DDPM at a FIXED timestep t_k, with t falling across the slot index: slot
+# 0 (no search context) is the most corrupted, slot K-1 (full context) is clean. The premise
+# is that a slot which cannot see well has to explore, while a slot with the full context
+# sharpens -- so the context becomes something the model must actually use.
+#
+# The noise SAMPLE is shared across a decision and only the LEVEL varies by slot: the agent
+# has one observation, not K of them. Scaled by a running per-dimension feature std, so
+# sqrt(alpha_bar) means an SNR rather than an absolute magnitude.
+#
+# THE MAGNITUDE COMES FROM `obs_noise_scheduler` (see the policy block), not from these
+# shapes. On TMRL's VLA schedule the floor is sqrt(alpha_bar) = 0.0064, so slot 0 really is
+# mostly noise; the shapes below only decide how the range is DISTRIBUTED across the slots.
+# Measured per-slot sqrt(alpha_bar) at K=16 on that schedule:
+#
+#   linear_signal  0.01 0.07 0.14 0.21 0.27 0.34 0.40 0.47 0.54 0.60 0.67 0.73 0.80 0.87 0.93 1.00
+#                  even steps (1.0x spread) -- the only shape that grades evenly from the
+#                  marginal to the conditional, and the recommended default.
+#   linear_t       0.01 0.01 0.02 0.04 0.07 0.10 0.16 0.23 0.33 0.44 0.56 0.69 0.81 0.91 0.97 1.00
+#                  21.8x spread; slots 0-3 are all near-identical pure noise. Kept as an arm
+#                  BECAUSE that is the contrast linear_signal exists to fix.
+#   geometric 0.7  0.01 0.08 0.29 0.55 0.74 0.86 0.93 0.96 0.98 0.99 0.99 1.00 ... 1.00
+#                  1099x spread, 6/15 adjacent pairs indistinguishable -- degenerate here.
+#                  The startup print warns when slots collapse.
+#
+#   uniform        off. Bit-identical to the objective that predates this, and registers no
+#                  extra buffers, so every existing checkpoint still loads.
+#   linear_t       t_k = (K-1-k)/(K-1) * (T-1). Even in the timestep INDEX -- the same
+#                  index-linear form slot_weights and slot_loss_norm use. Because alpha_bar
+#                  is a cumulative product this is NOT even in corruption: the step in
+#                  sqrt(alpha_bar) runs 0.042 at the noisy end down to 0.006 at the clean
+#                  end, a 7x spread.
+#   geometric      t_k = (T-1) * decay^k. Spends almost everything on slots 0-4; at
+#                  decay 0.7 eight of fifteen adjacent pairs are indistinguishable and slots
+#                  12-14 land on one timestep. Kept for a like-for-like shape comparison
+#                  against slot_weights' own geometric mode, not as a recommendation -- the
+#                  startup print warns when slots collapse.
+#   linear_signal  t_k chosen so sqrt(alpha_bar) falls in EQUAL steps (~0.027 at K=16) from
+#                  its floor at slot 0 to ~1 at slot K-1. The only shape that gives all K
+#                  slots a distinct, evenly-spaced corruption level. Default choice.
+#   list           an explicit K-length timestep profile.
+#   random_base    NO fixed ladder. `shape` names which of the three profiles above supplies
+#                  the curve; a base timestep is drawn PER SAMPLE from `base_range` and the
+#                  curve is rescaled into [0, base]. So slot 0 sits at the drawn level, slot
+#                  K-1 stays clean, and what varies between samples is the ladder's EXTENT.
+#                  At base = T-1 it is exactly the fixed `shape`; at base = 0 every slot is
+#                  clean. (A rigid translate was the first design and does not work: the
+#                  fixed shapes already span the whole timestep range, so a block that wide
+#                  has nowhere to slide.) Per sample rather than per batch, matching how the
+#                  flat corrupt_obs has always drawn its timestep, so the corruption level is
+#                  uncorrelated across a training batch. Within one decision the base is
+#                  PINNED by _corrupt_scope, exactly as the noise sample is -- the agent has
+#                  one observation, seen at K graded levels.
+#
+# MUTUALLY EXCLUSIVE with corrupt_obs: both noise obs_cond, so enabling both would corrupt
+# it twice at two unrelated levels. The policy raises rather than letting one win.
+#
+# Two things to hold in mind when reading results (neither is a bug):
+#  * corrupt_obs_eval: False evaluates every slot CLEAN, so the slot -> level mapping the
+#    model trained under does not hold at rollout. That is a legitimate arm -- it measures
+#    how much of the benefit survives without deployment-time corruption -- but it is not
+#    the same conditional the loss trained.
+#  * The deployed slot range moves with search width. At n < K only slots 0..n-1 are ever
+#    generated, i.e. only the noisy end; past n = K the rolling window pins every further
+#    generation at slot K-1. Under selection: final_pass the executed action is the LAST
+#    generation, hence the ladder's cleanest reachable slot.
+# Set son_suffix whenever this is non-uniform, for the run-dir reason sw_suffix exists.
+slot_obs_noise:
+  mode: uniform          # {uniform, linear_t, geometric, linear_signal, list, random_base}
+  # decay: 0.7           # geometric only (or random_base with shape: geometric), in (0, 1)
+  # timesteps: []        # list only, exactly n_candidates entries
+  # shape: linear_signal # random_base only; {linear_t, geometric, linear_signal}
+  # base_range: [0, 99]  # random_base only; inclusive, default [0, num_train_timesteps-1]
+
+# Recency discount on the SEARCH CONTEXT, applied inside the transformer as an additive
+# attention bias. For a candidate generated against m context entries, the latest entry
+# counts at weight 1, the previous at context_decay, the one before that at context_decay^2
+# -- entry j gets context_decay^(m-1-j). 1.0 == off.
+#
+# Unlike slot_weight_decay this depends only on distance-from-latest, never on absolute
+# index, on max_actions, or on the search width, so the profile is identical in every loop
+# at every n. See SearchTransformerForDiffusion._build_memory_masks.
+context_decay: 1.0
+
+# The ablation label for (search_context, selection). Asserted in the workspace against
+# _ARM_LABELS so a config cannot file its results under the wrong arm; it is what the run
+# directory will be named once the pending rename lands (see the 2026-08-05 run-directory rename).
+arm: value                       # {value, subgoal-chosen4value, subgoal-value, subgoal-only}
+
+# Search width: how many candidates the loop generates (policy.max_actions interpolates from
+# here). Top-level because it is part of the run identity -- the loop length changes both the
+# training cost (K-1 candidates are generated per gradient step) and the widest context the
+# model is ever trained at, so two K values must not share an output directory.
+n_candidates: 16
+
+# RENAME LANDED 2026-08-05 (the 2026-08-05 run-directory rename). Keyed on `arm`, not `search_context`, because
+# `selection` is a second axis: `subgoal` under argmax is `subgoal-chosen4value`, under
+# final_pass it is `subgoal-only` -- different experiments that `ctx-subgoal` conflated.
+# The twelve old `ctx-*` directories were moved and back-symlinked, so absolute paths held
+# by running jobs still resolve; drop those symlinks once nothing reads through them.
+# sw_suffix carries the slot-weight profile and the slot loss norm into the run directory.
+# EMPTY BY DEFAULT, so every existing run_name is byte-identical to what it was before
+# slot_weights existed and no live run's directory moves. Set it whenever slot_weights is
+# non-uniform or slot_loss_norm is non-l2: hydra.run.dir
+# is a pure function of run_name and `training.resume: True` finds latest.ckpt there, so two
+# weightings sharing a name would silently resume each other's run.
+sw_suffix: ''                    # e.g. '_sw-lin4857', '_sw-geo9', '_l2tol1'
+# Carries the OBS-NOISE ladder into the run directory. Must name the mode AND its parameter:
+# corrupt-${corrupt_obs} is a bool and cannot tell three ladder shapes apart, so without this
+# they would share a directory and `training.resume: True` would have them resume each other.
+son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7', '_son-rndlinsig'
+# son_suffix's siblings `son_tag` and `obs_noise_tag` live in pusht_base with the rest of the
+# wandb labels. Set ALL THREE together on a ladder run: the directory, the tag and the ladder
+# saying different things is worse than an unlabelled run, which is why
+# _check_obs_noise_labels refuses to start when they disagree.
+# `corrupt_suffix` lives in pusht_base, beside enc_suffix: the Gaussian and subgoal
+# masters interpolate it too.
+# `encoder_tag` and `enc_suffix` live in pusht_base: the UNet BC arm shares this backbone,
+# so the key belongs where both masters can see it.
+
+# Carries a non-default TRANSFORMER SIZE into the run directory. policy.n_layer / n_head /
+# n_emb are overridable from the command line and appear nowhere else in run_name, so two
+# architectures resolved to one directory and every capacity arm had to override run_name by
+# hand to avoid it. Empty at the default 4/4/256, on the sw_suffix principle.
+arch_suffix: ''                  # e.g. '_arch-6x8x1024'
+
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+# Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
+# move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
+# actually selects the workspace.
+_target_: diffusion_policy.workspace.train_search_outer_inner_workspace.TrainSearchOuterInnerWorkspace
+
+
+policy:
+  _target_: diffusion_policy.policy.pusht_diffusion_search_policy.PushTDiffusionSearchPolicy
+  shape_meta: ${shape_meta}
+  # ONE definition, in pusht_base, shared with train_pusht_unet_bc: the ST-vs-BC comparison
+  # is only meaningful if both see the same observation. See the block there.
+  obs_encoder: ${obs_encoder}
+
+  # THE OBSERVATION corruption schedule -- separate from `noise_scheduler` below, which
+  # denoises the ACTION. Two independent processes, as in TMRL.
+  #
+  # This is TMRL's VLA schedule verbatim (T=1000, beta 1e-4 -> 0.02 linear;
+  # tmrl_openpi/src/tmrl_openpi/models/cspi0.py:79-114 `context_noise_T` /
+  # `context_beta_start` / `context_beta_end`). It matters because sqrt(alpha_bar) at t=T-1 is
+  # the FLOOR on how corrupted any slot can be, and no ladder shape or cap can go below it:
+  #
+  #   T=100,  beta 0.001->0.02  (the class default)  floor 0.5895  -> 59% of the signal SURVIVES
+  #   T=1000, beta 1e-4 ->0.02  (this, TMRL VLA)     floor 0.0064  -> 0.6%, essentially noise
+  #
+  # The old default is what TMRL's own STATE branch uses (tmrl/models/flow.py, T=100, floor
+  # 0.603) and it can only ever blur slot 0. The VLA schedule is what realises the continuum
+  # the method rests on: slot 0 at the marginal p(a), slot K-1 at the conditional p(a|c).
+  # The 10x finer grid is a second benefit -- at T=100, 16 slots round onto each other at the
+  # clean end, which is what made small ladder ranges space unevenly.
+  #
+  # NOT applied to the maze/procgen arms that share this policy class: the class default
+  # stays the legacy literal, so only configs that pass this block change.
+  obs_noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: linear
+    prediction_type: epsilon
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 8
+
+  n_layer: 4
+  n_cond_layers: 2
+  n_head: 4
+  n_emb: 256
+  p_drop_emb: 0.0
+  p_drop_attn: 0.2
+
+  # TRUE, and this line used to be the odd one out. `causal_attn` defaults to True on both
+  # SearchTransformerForDiffusion and DiffusionTransformerSearchPolicy, and every other
+  # diffusion-transformer config in this repo (train_diffusion_transformer_{lowdim,hybrid,
+  # real_hybrid,sim2real}_*.yaml) sets True; only this file forced False.
+  #
+  # WHAT IT CHANGES: the DECODER, not the memory. `self.mask` goes from None to a triu
+  # buffer, which switches on the second clause of `_build_tgt_mask` -- within one candidate,
+  # horizon step i now attends only to steps j <= i. The 16 action steps were fully
+  # bidirectional and are now autoregressive. Cross-candidate isolation is unaffected.
+  #
+  # THIS BREAKS RESUME FOR EVERY PRE-EXISTING RUN, and silently looks like a corrupt
+  # checkpoint if you don't know why. register_buffer("mask", ...) adds a `model.mask` key to
+  # the state_dict (108 keys -> 109), and BaseWorkspace.load_payload calls load_state_dict
+  # without strict=False, so resuming an older checkpoint under this config dies with
+  # `Missing key(s) in state_dict: "model.mask"`. Those checkpoints are still EVALUABLE --
+  # create_from_checkpoint rebuilds from the cfg embedded in the payload, which still says
+  # False -- but an in-flight run must be finished or restarted, not resumed across this.
+  #
+  # Every number in docs/reports/archive/LATEST_SUCCESS_RATES.md / docs/reports/SUCCESS_RATES.md predates this. Runs from here
+  # are a new generation. Note also that it does NOT reach the UNet arms
+  # (train_pusht_unet_bc*, DiffusionUnetImagePolicy has no such knob), so the ST-vs-UNet 2x2
+  # now varies horizon causality as well as architecture.
+  causal_attn: True
+
+  # A causal GPT2Model over the conditioning memory instead of the nn.TransformerEncoder,
+  # matching how SearchPolicy and OnlineSearchPolicy encode their context: one flat token
+  # stream [obs_0, obs_1, cand_0 ... cand_14], NO hand-built mask, causality supplied by
+  # GPT-2's own triangular mask, and a padding mask as the only thing passed in.
+  # `_build_encoder_mask` is not consulted on this path.
+  #
+  # Motivated by the capacity arm's stated prediction: if capacity is not what limits
+  # this policy, "what remains is conditioning bandwidth ... that points at the obs
+  # projection and n_cond_layers, not at model size". This changes the trunk that bandwidth
+  # flows through while holding the bandwidth's width fixed.
+  #
+  # LIKE-FOR-LIKE ON PARAMETERS: GPT-2 at n_embd 256 / n_layer 2 is 1.58M, the same as the
+  # nn.TransformerEncoder it replaces, so this is not a capacity change wearing a trunk
+  # change's clothes. (That holds only because the model passes vocab_size=1; GPT2Config's
+  # 50257 default would have added a 12.87M `wte` that is never read.)
+  #
+  # ONE EDGE OF CONNECTIVITY CHANGES, and it is worth knowing which: under
+  # `_build_encoder_mask` the two obs tokens attended to each other in both directions.
+  # Under causal masking obs step 0 can no longer see obs step 1. Everything else --
+  # candidate->obs, candidate->earlier candidate, and no obs->candidate -- is already what
+  # causality gives. SearchPolicy never had to answer this because it flattens the whole obs
+  # window into a single token.
+  #
+  # REQUIRES `transformers`, newly declared in conda_environment.yaml -- an env built before
+  # that needs `pip install 'transformers==4.29.2'` or this config dies at policy
+  # construction. The import is lazy (see
+  # SearchTransformerForDiffusion._build_cond_encoder), so every OTHER config still imports
+  # the module fine without it. Checkpoints are not interchangeable with
+  # cond_encoder: transformer.
+  cond_encoder: gpt2
+
+  # interpolated from the top-level identity keys so the run dir and the policy can never
+  # disagree about which ablation arm this is
+  corrupt_obs: ${corrupt_obs}
+  corrupt_obs_eval: ${corrupt_obs_eval}
+  search_context: ${search_context}
+  selection: ${selection}
+  slot_weight_decay: ${slot_weight_decay}
+  slot_weights: ${slot_weights}
+  slot_loss_norm: ${slot_loss_norm}
+  slot_obs_noise: ${slot_obs_noise}
+  context_decay: ${context_decay}
+
+  # Image crop, owned by the POLICY rather than the obs encoder. Random crop is the
+  # primary regularizer for PushT image BC (76x76 out of 96x96, matching
+  # train_diffusion_unet_hybrid_workspace.yaml) and removing it is what let an earlier run
+  # memorize the train set in ~3k steps -- so it stays.
+  #
+  # What changed is WHERE the offset comes from. One offset is drawn per SAMPLE and reused
+  # for that sample's whole obs window AND every subgoal image the search generates from
+  # it, so obs and subgoal stay spatially registered at train time exactly as they are at
+  # eval time (where both are center-cropped). The offset is a pure function of
+  # (training.seed, global_step), so it is identical across restarts and machines and is no
+  # longer drawn from the global RNG interleaved with the diffusion noise.
+  # The SAME key the encoder reads, so the offsets the policy chooses and the crop the
+  # encoder applies cannot disagree. See the obs_encoder block in pusht_base.
+  crop_shape: ${crop_shape}
+  random_crop: True
+
+  # search width (candidates conditioned on the previous ones), same as the maze config.
+  # Interpolated from the top-level identity key so the run dir and the policy agree.
+  max_actions: ${n_candidates}
+  # feedback-based PushT verifier (simulates candidates in a deterministic PushT sim);
+  # `verifier_value` below picks WHICH value it scores with. No maze_path / MazeVerifier.
+  # The pool of verifier_n_envs sims steps in parallel (AsyncVectorEnv) to keep step
+  # time tractable. verifier_steps stays null: the policy already hands the verifier
+  # exactly the executed action window (action_pred[n_obs_steps-1 : +n_action_steps]),
+  # so any cap here could only truncate that window.
+  #
+  # A batch WIDER than the pool is scored in ceil(B / verifier_n_envs) SEQUENTIAL rounds,
+  # so 32 costs two rounds for the eval script's B=50 and three for the in-training
+  # runner's B=80 (30 val + 50 test), the tail of each padded with duplicate rows. Set
+  # this to null to size the pool to the first batch instead -- one round, no padding.
+  # The sims are per-row independent and deterministic, so the pool size is a wall-clock
+  # knob and cannot move a score; what it costs is one subprocess per env, alongside the
+  # rollout runner's own pool. 32 stays the default because that resource call belongs to
+  # whoever launches the job.
+  verifier_n_envs: 32
+  verifier_legacy: False
+  verifier_use_async: True
+  verifier_steps: null
+  # Which value the verifier scores with -- ${verifier_tag}, so the run DIRECTORY and
+  # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
+  verifier_value: ${verifier_tag}
+

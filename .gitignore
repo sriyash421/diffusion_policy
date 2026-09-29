@@ -17,6 +17,11 @@ fuse.cfg
 # Generation results
 results/
 
+# PushT search: rendered rollouts (regenerate with scripts/render_search_videos.py)
+videos/
+# eval watcher bookkeeping -- runtime state, not source
+scripts/slurm/eval_watchers.tsv
+
 ray/auth.json
 
 # Byte-compiled / optimized / DLL files
@@ -143,3 +148,23 @@ dmypy.json
 # Local agent settings / scratch image transfers
 .claude/
 transfer_images/
+data
+results
+# Cluster results copied off Hyak (see docs/reports/archive/aug10_results2copy.md)
+hyak_results/
+
+# generated eval artifacts (JSON/PNG/NPZ per checkpoint) -- regenerable, 300M+
+analysis
+
+# machine-local shortcuts into /gscratch (checkpoints, mode/attention analysis output)
+ckpts
+modes
+attn
+# The `videos/` rule above does not match `videos` when it is a SYMLINK into /gscratch
+# (git tests the path itself, not its target), so the bare name is needed too.
+videos
+mode_analysis/outputs
+attention_analysis/outputs
+
+# Rendered mode/dispersion panels, 82M of PNG regenerable from mode_analysis/
+modes24/

@@ -102,6 +102,7 @@ class PushTEnv(gym.Env):
                 rs.randn() * 2 * np.pi - np.pi
                 ])
         self._set_state(state)
+        self.max_coverage = 0.0        # per EPISODE, like `reward`; reset before the first step
 
         observation = self._get_obs()
         return observation
@@ -131,6 +132,7 @@ class PushTEnv(gym.Env):
         coverage = intersection_area / goal_area
         reward = np.clip(coverage / self.success_threshold, 0, 1)
         done = coverage > self.success_threshold
+        self.max_coverage = max(self.max_coverage, float(coverage))
 
         observation = self._get_obs()
         info = self._get_info()
@@ -314,6 +316,13 @@ class PushTEnv(gym.Env):
 
         self.max_score = 50 * 100
         self.success_threshold = 0.95    # 95% coverage.
+        # RAW goal coverage, kept because `reward` cannot be inverted back to it. Reward is
+        # `clip(coverage / success_threshold, 0, 1)`, so every episode at or above 0.95
+        # coverage reports 1.0 and the true value is gone -- which is exactly the half of the
+        # distribution a solved-episode count is about. Tracked here rather than in info
+        # because MultiStepWrapper.info is a deque(maxlen=n_obs_steps+1) and keeps only the
+        # last few steps, while `reward` (and this) span the episode.
+        self.max_coverage = 0.0
 
     def _add_segment(self, a, b, radius):
         shape = pymunk.Segment(self.space.static_body, a, b, radius)

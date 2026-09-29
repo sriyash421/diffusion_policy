@@ -217,13 +217,15 @@ class TrainIbcDfoHybridWorkspace(BaseWorkspace):
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
-                        batch = train_sampling_batch
                         n_samples = cfg.training.sample_max_batch
-                        batch = dict_apply(train_sampling_batch, 
+                        batch = dict_apply(train_sampling_batch,
                             lambda x: x.to(device, non_blocking=True))
                         obs_dict = dict_apply(batch['obs'], lambda x: x[:n_samples])
-                        gt_action = batch['action']
-                        
+                        # gt_action must be truncated to the same n_samples as obs_dict,
+                        # otherwise the mse below compares mismatched batch sizes whenever
+                        # sample_max_batch < dataloader.batch_size.
+                        gt_action = batch['action'][:n_samples]
+
                         result = policy.predict_action(obs_dict)
                         pred_action = result['action']
                         start = cfg.n_obs_steps - 1

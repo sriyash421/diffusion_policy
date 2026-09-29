@@ -1,0 +1,127 @@
+# THE PushT search task. The only one -- `pusht_image_search.yaml` was deleted on
+# 2026-08-29 and this file absorbed its `env_runner` / `dataset` blocks, which were
+# duplicated between the two verbatim (~90 lines, stale comments included) so that a change
+# to one silently missed the other.
+#
+# IMAGE-ONLY OBSERVATION, AND THIS IS STRUCTURAL. `agent_pos` and `feedback` are not in
+# shape_meta and there is no configuration that puts them back: the policy asserts at
+# construction that shape_meta.obs declares no low_dim key (see PushTSearchMixin), so a
+# hydra override that re-adds one fails at startup rather than training a different model.
+#
+# WHY. `feedback` is an exact invertible transform of the block pose, so with those two keys
+# in the observation the policy is handed the ground-truth T pose in closed form instead of
+# extracting it from pixels -- a strictly stronger observation than the standard PushT-image
+# setup, and one that makes success rates non-comparable to published image baselines. It
+# also makes the per-slot corruption ladder (policy.slot_obs_noise) unable to bite: those 18
+# dims arrive LinearNormalizer-scaled while the image half is a VAE latent, so they would be
+# corrupted at a wholly different SNR, and slot 0 -- the slot the ladder exists to make
+# uncertain -- would still know its own position and the goal-relative error exactly.
+#
+# THE DATASET STILL EMITS BOTH, and the normalizer still fits `feedback`. That is not an
+# oversight: PushTVerifier resets a pymunk sim from [agent_pos, feedback] read off the RAW
+# obs dict (pusht_search_mixin._VERIFIER_OBS_KEYS), and PushTSearchMixin._normalize_value
+# rescales the verifier's context scalar by the fitted `feedback` scale. Neither goes
+# through shape_meta, so neither is affected by their absence here.
+#
+# task_name is a hydra.run.dir component, so runs from here land under
+# .../pusht_image_search_imgonly/ and the with-pos runs under .../pusht_image_search/ stay
+# exactly where the reporting scripts expect to find them.
+name: pusht_image_search_imgonly
+
+image_shape: &image_shape [3, 96, 96]
+shape_meta:
+  # acceptable types: rgb, low_dim
+  # IMAGE ONLY -- see the header. block_pos, agent_pos and feedback are all emitted by the
+  # dataset and all deliberately absent here, so the encoder never sees any of them.
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+  action:
+    shape: [2]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.pusht_search_image_runner.PushTSearchImageRunner
+  # rollouts reset to the initial states of the held-out val + test episodes.
+  # zarr_path/seed/n_test_episodes/n_val_episodes must match task.dataset so the split matches.
+  zarr_path: ${task.dataset.zarr_path}
+  seed: ${task.dataset.seed}
+  n_test_episodes: ${task.dataset.n_test_episodes}
+  n_val_episodes: ${task.dataset.n_val_episodes}
+  n_train_episodes: ${task.dataset.n_train_episodes}
+  # the SAME manifest the dataset reads, so the rollout splits cannot drift from the
+  # training splits (both used to re-derive from the seed independently)
+  split_file: ${task.dataset.split_file}
+  # first 5 episodes per split are tiled into a side-by-side eval video
+  n_vis: 5
+  # candidates generated per decision at eval time (best-value one is executed). Kept
+  # modest so periodic in-training rollout stays affordable (verifier is physics-simulated).
+  n_search_actions: ${n_candidates}
+  # must be False to reset exactly onto recorded states (see runner)
+  legacy: False
+  max_steps: 300
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  past_action: ${past_action_visible}
+  n_envs: null
+
+dataset:
+  _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
+  zarr_path: data/pusht_cchi_v7_replay.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  # ---------------------------------------------------------------------------
+  # THE SPLIT MANIFEST IS THE SOURCE OF TRUTH, and since 2026-08-29 it is the ONLY way to
+  # partition the data -- PushTImageDataset raises without a split_file, and the
+  # derive-from-seed branch (whose n_val_episodes==0 path ran validation on the TEST set)
+  # is gone. It names the exact episode indices; the count keys below are VALIDATED against
+  # it and generate nothing. A config that disagrees with the manifest raises rather than
+  # silently repartitioning.
+  #
+  # This exists because the splits used to be derived at runtime, independently, in the
+  # dataset, the env runner and the eval script, from (seed, n_test, n_val, n_train,
+  # train_ratio). Nothing recorded which episodes a checkpoint had been trained on -- so
+  # when n_val_episodes went 10 -> 30 to fix the checkpoint selector, train_ratio: 0.2 of
+  # a shrinking pool silently cut the training budget from 29 episodes to 25, and every
+  # result collected in between was on a different dataset than the one before it.
+  #
+  # BC UNet, ST k=1, ST k=16 and every ladder arm read this one block -- none of them
+  # overrides task.dataset -- so all of them train, validate and roll out on 50 test /
+  # 30 val / 30 train, the same episodes.
+  #
+  # Regenerate with:  python scripts/dump_pusht_splits.py
+  # Check it still matches the derivation / the zarr:  --verify / --check-zarr
+  # ---------------------------------------------------------------------------
+  # selected by the top-level n_demos, so the budget, the manifest and the run directory
+  # can never disagree (see train_pusht_diffusion_search.yaml)
+  split_file: diffusion_policy/config/splits/pusht_seed42_train${n_demos}.json
+  # 206 episodes: 50 test / 30 val / 100 train (26 unused). test = perm[:50] is
+  # byte-identical to the legacy 2-way split for this seed, so previously-collected test
+  # numbers stay measured on the same episodes.
+  n_test_episodes: 50
+  # the val split is what a checkpoint should be CHOSEN on, so that test stays a report
+  # rather than a maximum; at 10 episodes its SE was ~9.5pp at p=0.9, which made three arms
+  # tie at 9/10 while their test numbers were 84 / 70 / 32%. 30 halves that to ~5.5pp.
+  n_val_episodes: 30
+  # ABSOLUTE episode budget, from the top-level n_demos. Absolute rather than a fraction,
+  # so it no longer moves when the test or val split sizes change -- which is exactly how
+  # the budget silently fell 29 -> 25 when n_val_episodes went 10 -> 30. In the manifest's
+  # derivation this truncates the permuted train pool, so budgets are nested: the
+  # 25-episode set is a strict subset of the 100-episode one (verified in bc_prep.sbatch).
+  n_train_episodes: ${n_demos}
+  split: train
+  # PART-3 goal-only obs corruption (README_pusht.md 2.4). null = off, which is every
+  # existing run. Image-space and TRAIN-SPLIT ONLY -- val, test and the env runner are
+  # clean, so this is a training-time ablation, not a deployment condition.
+  # `margin_px` is in IMAGE pixels (the 96px observation), NOT the 512px arena.
+  goal_mask_noise: ${goal_mask_noise}
+  # Which windows of those episodes. Applies to EVERY split, unlike goal_mask_noise --
+  # the held-out set is meant to be the held-out transitions. See pusht_base.yaml.
+  transition_file: ${transition_file}
+  # Load only the image frames the policy conditions on. Every consumer of the `image`
+  # key slices [:, :n_obs_steps] before encoding, so at horizon 16 / n_obs_steps 2 this
+  # reads and copies 8x fewer image bytes per window for a bit-identical batch. Null
+  # restores the full-horizon window.

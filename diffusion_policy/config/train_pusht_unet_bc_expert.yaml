@@ -1,0 +1,57 @@
+# PushT UNet BC (IMAGE) on the FULL demonstration set -- the expert candidate.
+#
+# Inherits train_pusht_unet_bc so the policy, the encoder and every optimisation decision
+# are the 30-demo master's, unchanged. This file sets ONLY what a full-data run changes:
+# the split, its geometry, and the step budget.
+#
+# WHY IT IS A SEPARATE FILE rather than command-line overrides. `n_demos` selects the split
+# manifest AND names hydra.run.dir, and the 176-episode manifest has a DIFFERENT GEOMETRY
+# from every other one (30 test / 0 val, against 50 test / 30 val). Those two counts are
+# validated against the manifest by load_split_manifest, so carrying them on the command
+# line means every relaunch, every resume and every eval job has to retype them or die.
+defaults:
+  - train_pusht_unet_bc
+  - _self_
+
+name: train_pusht_unet_bc_expert
+
+# 176 = every episode that is not one of the 30 held out. Selects
+# splits/pusht_seed42_train176.json, which is train 176 / val 0 / test 30 -- a FRESH
+# selection, not the 30 that the seed42 family calls `val`, so success rates from this arm
+# are NOT comparable to the val column of the 30-demo arms.
+#
+# 176 is unique among the manifests, so this run owns the bare `demos-176` spelling and
+# cannot collide with an existing directory. The one thing that could collide is a
+# transition-FILTERED run at the same budget (splits/pusht_seed42_train176_moving_ta8.json):
+# that one must set split_suffix, and check_transition_filter_labels refuses to start it
+# without one. This arm leaves transition_file null and therefore keeps the empty suffix.
+n_demos: 176
+
+task:
+  dataset:
+    # VALIDATED against the manifest, not generative -- these must equal its list lengths or
+    # load_split_manifest raises. The parent task declares 50/30; this manifest is 30/0.
+    n_test_episodes: 30
+    # 0, and the dataset reads that as "there is no val split", so nothing validates and
+    # nothing rolls out on val. The 30 held-out episodes are the TEST split and are the only
+    # thing success rate is measured on.
+    n_val_episodes: 0
+
+training:
+  # 200k, double the 100k the 30-demo arms run. 176 episodes is ~5.9x the data, so an epoch
+  # is ~690 steps rather than ~117.
+  #
+  # THE LR SCHEDULE IS DELIBERATELY NOT STRETCHED. pusht_base warms up over 3k and decays to
+  # the 1e-5 floor at step 80k, and that is left exactly as it is, so this arm is optimised
+  # identically to every existing PushT arm and a 30-vs-176 comparison varies the data
+  # alone. The cost is that steps 80k-200k run at the floor; that is the accepted trade.
+  max_gradient_steps: 200000
+  # OFF. Success rate is measured OFFLINE, by eval_search_pusht.py --watch, on every
+  # step_*.ckpt this run writes -- that is the record the expert checkpoint is chosen from.
+  # The inherited 20k in-training rollout would produce a SECOND success number for the same
+  # weights, on a different cadence and through a different code path, and two numbers for
+  # one quantity is exactly the drift this config tree exists to prevent.
+  rollout_every_steps: null
+
+# checkpoint_every is inherited at 10000, which IS the eval grid: every checkpoint written
+# gets scored and nothing is scored off-grid.

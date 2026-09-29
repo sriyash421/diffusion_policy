@@ -1,4 +1,5 @@
 from typing import Union
+import contextlib
 import copy
 import torch
 import torch.nn as nn
@@ -76,7 +77,22 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             imagenet_norm: bool=False,
             extra_randomizations=None,
             feature_dim: int=None,
-            depth_model: nn.Module = None
+            depth_model: nn.Module = None,
+            # LayerNorm over the CONCATENATED feature vector, before it leaves this
+            # encoder. Off by default, and it must stay that way: it adds parameters and
+            # changes the conditioning distribution, so flipping it silently would make
+            # every existing checkpoint unloadable and every trained arm a different model.
+            #
+            # What it is for: the concat is heterogeneous. The rgb half is a ResNet
+            # global-avg-pool taken straight after layer4's final ReLU -- non-negative and
+            # unbounded -- while the low_dim half arrives LinearNormalizer-scaled to about
+            # [-1, 1]. Both halves are then handed to a single Linear (`obs_emb` on the
+            # search transformer, the FiLM `cond_encoder` via `global_cond` on the UNet)
+            # with nothing in between. This is the same scale asymmetry that
+            # PushTSearchMixin._normalize_value exists to prevent on the search-context
+            # side, where the verifier scalar is rescaled to O(1) before being concatenated
+            # with a normalized action.
+            feature_layernorm: bool=False
         ):
         """
         Assumes rgb input: B,C,H,W
@@ -154,7 +170,10 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                             pos_enc=False
                         )
                     else:
-                        this_normalizer = torchvision.transforms.CenterCrop(
+                        # must be the randomizer slot, not the normalizer slot: the
+                        # normalizer is unconditionally reassigned below, which silently
+                        # dropped the center crop.
+                        this_randomizer = torchvision.transforms.CenterCrop(
                             size=(h,w)
                         )
                 # configure extra randomizations
@@ -202,8 +221,57 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         self.key_shape_map = key_shape_map
         self.feature_dim = feature_dim
         self.projector = None
+        # Sized EAGERLY, not on first forward: a module created inside forward() misses
+        # the optimizer's parameter list (it is built from the policy at construction) and
+        # breaks strict state_dict loads. output_shape() runs one example forward, which is
+        # why feature_norm must already exist -- as None -- when it is called.
+        self.feature_norm = None
+        if feature_layernorm:
+            self.feature_norm = nn.LayerNorm(self.output_shape()[0])
 
-    def forward(self, obs_dict):
+        # The projector is sized eagerly for the SAME reason, and the reason is sharper here:
+        # it used to be built inside _forward, i.e. AFTER any training.freeze_encoder had run
+        # requires_grad_(False) over this module. A module created then is trainable, absent
+        # from the optimizer's parameter list (built from the policy at construction), and on
+        # whatever device the first forward happened to use -- a failure that appears only
+        # under freezing. output_shape() already ran above, so the width is known.
+        if self.feature_dim is not None:
+            in_dim = self.output_shape()[0]
+            self.projector = nn.Sequential(
+                nn.Linear(in_dim, self.feature_dim * 2),
+                nn.ReLU(),
+                nn.Linear(self.feature_dim * 2, self.feature_dim))
+
+    @contextlib.contextmanager
+    def _forced_crop_offsets(self, offsets):
+        """Temporarily pin every RGB key's CropRandomizer to caller-supplied offsets.
+
+        A CropRandomizer draws one offset per IMAGE, which cannot express "these images
+        belong to the same sample and must share a crop" -- the case a search policy needs
+        when it encodes an observation and the subgoal images predicted from it. The
+        randomizers live inside nn.Sequential transforms, which cannot forward extra
+        arguments, so the offsets are pinned as state for the duration of one forward and
+        cleared afterwards (including on exception, so a failure cannot leave a stale
+        offset pinned for the next batch).
+        """
+        randomizers = [m for t in self.key_transform_map.values()
+                       for m in t.modules() if isinstance(m, CropRandomizer)]
+        if offsets is None or not randomizers:
+            yield
+            return
+        for r in randomizers:
+            r._forced_offsets = offsets
+        try:
+            yield
+        finally:
+            for r in randomizers:
+                r._forced_offsets = None
+
+    def forward(self, obs_dict, crop_offsets=None):
+        with self._forced_crop_offsets(crop_offsets):
+            return self._forward(obs_dict)
+
+    def _forward(self, obs_dict):
         batch_size = None
         features = list()
         # process rgb input
@@ -271,13 +339,16 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         # concatenate all features
         result = torch.cat(features, dim=-1)
 
-        if self.feature_dim is not None:
-            if self.projector is None:
-                self.projector = nn.Sequential(
-                    nn.Linear(result.shape[-1], self.feature_dim * 2),
-                    nn.ReLU(),
-                    nn.Linear(self.feature_dim * 2, self.feature_dim)
-                )
+        # Before the projector, so a configuration using both normalizes the concat and
+        # then projects it, rather than normalizing a projection.
+        if self.feature_norm is not None:
+            result = self.feature_norm(result)
+
+        # `is not None` rather than `feature_dim is not None`: __init__ sizes the projector by
+        # calling output_shape(), which runs this forward once while the attribute is still
+        # None. Building it here instead would put it outside the optimizer and outside any
+        # freeze that already ran -- see the note beside its construction.
+        if self.projector is not None:
             result = self.projector(result)
 
         return result

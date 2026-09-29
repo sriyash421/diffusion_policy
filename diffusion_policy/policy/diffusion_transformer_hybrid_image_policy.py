@@ -7,6 +7,7 @@ from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.obs_corruption import ObsCorruptionMixin
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.transformer_for_diffusion import TransformerForDiffusion
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
@@ -19,7 +20,7 @@ import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 
 
-class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
+class DiffusionTransformerHybridImagePolicy(ObsCorruptionMixin, BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
@@ -181,7 +182,7 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
-        self.corrupt_obs = corrupt_obs
+        self._init_corruption(corrupt_obs, kwargs.get('corrupt_obs_eval'))
         self.obs_noise_scheduler = DDPMScheduler(
             num_train_timesteps=noise_scheduler.config.num_train_timesteps,
             beta_start=noise_scheduler.config.beta_start,
@@ -326,20 +327,6 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
 
     def encode_obs_features(self, obs):
         return self.obs_encoder(obs)
-
-    def corrupt_obs_features(self, obs_features):
-        if not self.corrupt_obs:
-            return obs_features
-
-        # Add noise to encoded obs features to simulate corrupted context.
-        obs_noise = torch.randn_like(obs_features)
-        bsz = obs_features.shape[0]
-        timesteps = torch.randint(
-            0, self.obs_noise_scheduler.config.num_train_timesteps, 
-            (bsz,), device=obs_features.device
-        ).long()
-        return self.obs_noise_scheduler.add_noise(
-            obs_features, obs_noise, timesteps)
 
     def compute_loss(self, batch):
         # normalize input

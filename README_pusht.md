@@ -1,0 +1,1401 @@
+# Push-T experiments (branch `harine/pushT`)
+
+This branch adds a **feedback-conditioned** Push-T task, an **online-search** in-context
+policy, and **best-of-N** evaluation/visualization on top of upstream Diffusion Policy.
+The root [README.md](README.md) is still the upstream Columbia doc and does **not** cover
+any of this — use this file for the Push-T work here.
+
+**This file is how to RUN the arms. What happened when they were run is in
+[`docs/reports/`](docs/reports/README.md)** — start at
+[RESULTS.md](docs/reports/RESULTS.md), which answers "do these methods work on PushT" for
+every arm in one table, with the caveats that decide whether two rows can be compared. The 24
+dated readouts that used to sit at the repo root are in `docs/reports/archive/`, unedited.
+
+What's new relative to upstream:
+
+| Area | Files |
+| --- | --- |
+| Feedback obs (16-dim goal-vs-achieved keypoint displacement) | [`diffusion_policy/env/pusht/feedback_util.py`](diffusion_policy/env/pusht/feedback_util.py), [`pusht_feedback.py`](diffusion_policy/env/pusht/pusht_feedback.py) |
+| Task configs | [`config/task/pusht_image.yaml`](diffusion_policy/config/task/pusht_image.yaml), [`config/task/pusht_image_online.yaml`](diffusion_policy/config/task/pusht_image_online.yaml) |
+| Online-search policy + workspace | [`policy/online_search_policy.py`](diffusion_policy/policy/online_search_policy.py), [`workspace/train_online_search_workspace.py`](diffusion_policy/workspace/train_online_search_workspace.py), [`config/train_online_search.yaml`](diffusion_policy/config/train_online_search.yaml) |
+| Best-of-N eval + video | [`eval_bon.py`](eval_bon.py), [`bon_video.py`](bon_video.py) |
+
+---
+
+## 1. Environment
+
+**Use `vae_pushT_l2s` for everything current.** The obs backbone is the Stable Diffusion VAE
+encoder, and `robodiff` cannot construct it at all:
+
+```
+from diffusers import AutoencoderKL
+ImportError: cannot import name 'CustomDtype' from 'accelerate.utils'
+```
+
+`robodiff` has diffusers 0.36.0 installed against accelerate 0.13.2 — two years apart, and
+`conda_environment.yaml` still declares diffusers 0.11.1, so the installed env had drifted
+from the file. `AutoencoderKL` is the first thing in this repo that reaches the part of
+diffusers that notices; before the fix, every SD-VAE run died at startup with 0 steps.
+
+```bash
+conda env create -f conda_environment_vae_pusht.yaml   # once
+conda activate vae_pushT_l2s
+```
+
+The three sbatch entry points (`train_pusht_search`, `eval_watch_pusht_search`,
+`eval_ckpt_pusht_search`) default to it; `DP_CONDA_ENV=<name>` overrides.
+
+`robodiff` is left untouched for the ResNet-era checkpoints. Both envs carry the same
+diffusers, so the DDIM/DDPM sampling is identical and either can evaluate either — the fix
+was accelerate, deliberately, because downgrading diffusers would have moved the sampling
+numerics under runs that are meant to be comparable.
+
+> **GPU required.** These are large image models; a CPU run does not complete a single batch
+> in practical time. Launch training/eval on a GPU node (`sbatch`/`srun`).
+
+---
+
+## 2. Dataset  ⚠️ needs a post-download patch
+
+The Push-T dataset is `pusht_cchi_v7_replay.zarr` (206 episodes). It's the **same** file
+whether you get it from Columbia or the "gym-pusht" folder the configs originally
+referenced — there is no separate gym-pusht data release; that path was just where the
+original author stored this file.
+
+```bash
+mkdir -p data && cd data
+wget https://diffusion-policy.cs.columbia.edu/data/training/pusht.zip   # ~31 MB
+unzip pusht.zip
+mv pusht/pusht_cchi_v7_replay.zarr .        # configs expect it at data/<zarr>, not data/pusht/<zarr>
+rm -rf pusht pusht.zip && cd ..
+```
+
+**The raw zarr ships a single 5-dim `data/state` array, but this branch's dataset and
+env-runner expect separate `data/agent_pos` (2d) and `data/block_pos` (3d) arrays**
+([`pusht_image_dataset.py:88`](diffusion_policy/dataset/pusht_image_dataset.py#L88),
+[`pusht_image_runner.py:54`](diffusion_policy/env_runner/pusht_image_runner.py#L54)).
+Loading the unpatched file fails with `KeyError: 'agent_pos'`. Derive them once:
+
+```bash
+python - <<'PY'
+import zarr, numpy as np
+g = zarr.open('data/pusht_cchi_v7_replay.zarr', 'a')
+d = g['data']; s = np.asarray(d['state'])   # [agent_x, agent_y, block_x, block_y, theta]
+for name, arr in [('agent_pos', s[:, :2]), ('block_pos', s[:, 2:5])]:
+    d.array(name, arr.astype(np.float32), chunks=(161, arr.shape[1]),
+            compressor=d['state'].compressor, overwrite=True)
+print('data keys:', list(d.keys()))
+PY
+```
+
+This split is exact: resetting `PushTImageEnv(legacy=False)` to a recorded state
+round-trips with 0.0 error, and `compute_feedback_from_pose(block_pos)` equals the live
+`PushTFeedbackWrapper` feedback with 0.0 error. Re-downloading the dataset means redoing
+this step.
+
+All Push-T configs on this branch already point at `data/pusht_cchi_v7_replay.zarr`
+(relative to repo root — hydra does not chdir here, so run commands from the repo root).
+
+### 2.1 The split manifests — how the 29 / 100 / 25-demo splits and the 50 test episodes were made
+
+The 206 episodes are partitioned by a **committed manifest**, never at runtime. Every
+manifest below is already in the repo, so **you do not need to regenerate anything to
+reproduce a trained policy** — a run reads `task.dataset.split_file` and validates the
+`n_*_episodes` keys against it. The commands are here so the derivation is auditable and so
+a new budget can be cut the same way.
+
+| manifest | train | val | test | used by |
+|---|--:|--:|--:|---|
+| `pusht_seed42_train100.json` | 100 (12,899 fr) | 30 | 50 | every 100-demo arm, `bc_demos-100` |
+| `pusht_seed42_legacy_val10_train29.json` | 29 (3,707 fr) | **10** | 50 | the six **legacy-29** arms, `bc_demos-29` |
+| `pusht_seed42_train29_val30.json` | the **same** 29 | 30 | 50 | the six **r8** arms |
+| `pusht_seed42_train25.json` | 25 (3,325 fr) | 30 | 50 | `bc_demos-25` (archive) |
+| `pusht_seed42.json` | 100 | 30 | 50 | identical to `train100`; the original default |
+
+Two invariants hold across all five, and both are load-bearing:
+
+- **The 50 test episodes are byte-identical in every manifest.** `test = perm[:50]` under
+  seed 42 does not move when the val split or the training budget changes, which is what
+  makes test numbers comparable across every section of `SUCCESS_RATES.md`.
+- **Budgets nest.** Train is a *prefix* of the permuted remainder, so the 25 episodes are a
+  strict subset of the 100.
+
+All five also record `episode_ends_checksum: c88b56c9af8c5ee778293e50768ae0a5` — a hash of
+the zarr's episode boundaries. If you re-download the data and redo the `agent_pos` patch
+above, check this still matches before trusting any stored index.
+
+#### Regenerating them
+
+Three of the five are a prefix derivation and come straight from the CLI. `-o` is required
+for anything other than the default path:
+
+```bash
+# 100-demo (the default: seed 42, 50 test, 30 val, 100 train)
+python scripts/dump_pusht_splits.py -o diffusion_policy/config/splits/pusht_seed42_train100.json
+python scripts/dump_pusht_splits.py -o diffusion_policy/config/splits/pusht_seed42.json
+
+# 25-demo
+python scripts/dump_pusht_splits.py --n-train-episodes 25 \
+    -o diffusion_policy/config/splits/pusht_seed42_train25.json
+```
+
+**The legacy 29 cannot be regenerated by that CLI, and `--n-train-episodes 29` does not
+reproduce it.** Those runs used `train_ratio: 0.2` — a fraction of what remained after test
+and val — which routes through `downsample_mask`'s own `rng.choice` rather than taking a
+prefix. The two sets **overlap in only 4 of 29 episodes**. The committed file records the
+real derivation (`get_split_masks_3way(n_test=50, n_val=10)` then
+`downsample_mask(train_ratio=0.2, seed=42)`) and is the source of truth; treat it as data,
+not as something to re-derive.
+
+#### The indices themselves
+
+Since the 29 is data rather than a derivation, here it is. These are episode indices into
+`data/pusht_cchi_v7_replay.zarr` (206 episodes) and mean nothing against any other zarr —
+check `episode_ends_checksum` first, see *Verifying* below.
+
+**train, 29 episodes (3,707 frames)** — byte-identical in `pusht_seed42_legacy_val10_train29.json`
+and `pusht_seed42_train29_val30.json`; this is the set the CLI cannot reproduce:
+
+```
+15, 16, 23, 39, 72, 73, 74, 80, 87, 95, 97, 99, 114, 115, 125, 130, 133, 134, 138, 143,
+144, 156, 161, 166, 172, 174, 181, 191, 194
+```
+
+**test, 50 episodes (6,232 frames)** — identical in *all five* manifests. This is the anchor
+that makes test numbers comparable across every section of `SUCCESS_RATES.md`:
+
+```
+3, 7, 8, 9, 20, 24, 25, 26, 29, 33, 37, 38, 46, 50, 51, 54, 56, 67, 70, 75, 79, 84, 94,
+96, 98, 101, 104, 106, 107, 108, 112, 119, 132, 146, 149, 150, 152, 154, 159, 167, 168,
+178, 184, 195, 196, 197, 198, 201, 202, 203
+```
+
+**val** — the one split that differs between generations:
+
+```
+r8    (30, 3,462 fr)  0, 1, 2, 4, 5, 6, 12, 27, 28, 32, 52, 55, 62, 66, 68, 81, 82, 86,
+                      88, 89, 92, 120, 123, 145, 153, 155, 157, 171, 180, 205
+100   (30, 3,586 fr)  0, 2, 4, 12, 27, 28, 32, 52, 55, 62, 66, 68, 80, 81, 82, 86, 88,
+                      89, 92, 114, 120, 123, 138, 145, 153, 155, 157, 171, 180, 205
+legacy(10, 1,147 fr)  2, 27, 82, 86, 88, 123, 153, 155, 180, 205
+```
+
+Print any of them without loading the images:
+
+```bash
+python -c "import json;m=json.load(open('diffusion_policy/config/splits/pusht_seed42_train29_val30.json'));print({k:m[k] for k in ('train','val','test')})"
+```
+
+**The 29- and 100-demo manifests are different partitions, not nested budgets.** Each is
+internally disjoint, but they disagree with each other, so a split label is only meaningful
+relative to its own manifest:
+
+| relation | result |
+|---|---|
+| `test` | **identical** — test numbers are comparable across every arm |
+| train29 ∩ train100 | 23 of 29 — overlapping, *not* a subset |
+| train29 ∩ val100 | **{80, 114, 138}** — trained on at 29 demos, held out at 100 |
+| val29 ∩ train100 | **{1, 5}** — held out at 29 demos, trained on at 100 |
+| val29 ∩ val100 | 27 of 30 |
+
+Practical consequence: **never compare a `val_*` number across the two budgets**, and never
+select a checkpoint for one budget using the other's val split. Within an arm it is fine —
+val only ever chooses a checkpoint and is never reported. (`train25` *is* a strict prefix
+subset of `train100`, so that pair does nest.)
+
+For contrast, the prefix derivation the CLI implements gives a genuinely different 29:
+`--n-train-episodes 29` overlaps the real set in only **4 of 29** episodes at `n_val 10`
+(the like-for-like comparison against the legacy config), or 7 of 29 at `n_val 30`.
+
+The r8 manifest is built *from* the legacy one, so the two generations share their 29
+training episodes exactly:
+
+```bash
+python scripts/make_29demo_parity_split.py        # -> pusht_seed42_train29_val30.json
+```
+
+It takes the legacy 29 verbatim as train, the standard 50 as test, and draws 30 val
+episodes in the Round-7 permutation order minus anything the legacy train set claims. Val
+widened from 10 to 30 because at 10 episodes SE is ~9.5 pp at p=0.9 — three legacy arms
+tied at 9/10 while their test numbers were 84 / 70 / 32%. Val only ever *chooses* a
+checkpoint and is never reported, so widening it changes no published number.
+
+#### Verifying
+
+```bash
+python scripts/dump_pusht_splits.py --verify \
+    -o diffusion_policy/config/splits/pusht_seed42_train100.json   # file matches the derivation
+python scripts/dump_pusht_splits.py --check-zarr \
+    -o diffusion_policy/config/splits/pusht_seed42_train100.json   # zarr still matches the file
+```
+
+`--verify` guards against the manifest and the derivation drifting apart; `--check-zarr`
+guards against the *data* changing under fixed indices, which the in-place `agent_pos`
+heredoc above makes a real failure mode. Pass the same `--seed` / `--n-*-episodes` the
+manifest was built with — they are recorded in its own `derivation` block. Neither flag
+works on the legacy-29 or r8 manifests, whose derivations the CLI does not implement.
+
+Those two can still be checked, in the two ways that matter. **Does the zarr still match?**
+Every manifest records `episode_ends_checksum`, so this is manifest-agnostic:
+
+```bash
+python -c "
+import zarr, numpy as np, hashlib
+ee = np.asarray(zarr.open('data/pusht_cchi_v7_replay.zarr','r')['meta']['episode_ends'])
+print(len(ee), hashlib.md5(np.ascontiguousarray(ee.astype(np.int64)).tobytes()).hexdigest())
+"
+# expect: 206 c88b56c9af8c5ee778293e50768ae0a5
+```
+
+The `agent_pos` / `block_pos` patch adds arrays under `data/` and leaves `meta/episode_ends`
+untouched, so a patched and a freshly-patched zarr are interchangeable here.
+
+**Does the legacy 29 still match its recorded derivation?** It does reproduce — "cannot be
+regenerated" means the *CLI* has no flag for it, not that the derivation is lost:
+
+```bash
+python -c "
+import json, numpy as np, zarr
+from diffusion_policy.common.sampler import downsample_mask
+from diffusion_policy.dataset.pusht_image_dataset import get_split_masks_3way
+ee = zarr.open('data/pusht_cchi_v7_replay.zarr','r')['meta']['episode_ends'][:]
+tr, _, _ = get_split_masks_3way(n_episodes=len(ee), n_test_episodes=50,
+                                n_val_episodes=10, seed=42)
+tr29 = downsample_mask(tr, max_n=round(0.2 * int(tr.sum())), seed=42)
+got = sorted(int(i) for i in np.nonzero(tr29)[0])
+want = sorted(json.load(open('diffusion_policy/config/splits/pusht_seed42_train29_val30.json'))['train'])
+print('match:', got == want)
+"
+# expect: match: True   (pool after 50 test + 10 val = 146; round(0.2*146) = 29)
+```
+
+Why any of this exists: the splits used to be derived independently in three places from
+`(seed, n_test_episodes, n_val_episodes, n_train_episodes, train_ratio)`, with nothing
+recording which episodes a checkpoint had trained on. Raising `n_val_episodes` from 10 to
+30 shrank the pool `train_ratio: 0.2` was a fraction *of*, silently cutting the training
+budget from 29 episodes to 25. The derive-from-the-seed branch is gone entirely
+as of 2026-08-29: a `split_file` is now required.
+
+
+### 2.2 The geometric split manifests — train and eval differ by *where the T starts*
+
+The five manifests in §2.1 all partition at random (one seed-42 permutation), so train and
+test are draws from the same distribution. The five below partition by **the T's starting
+position**, so the eval set is a region the policy never trained on. Regenerate all five
+with one command:
+
+```bash
+python scripts/make_geometric_splits.py     # -> config/splits/pusht_blockquad_*, pusht_blockborder_*
+python scripts/plot_geometric_splits.py     # -> analysis/pusht_geometric_split_{quadrant,border}.png
+```
+
+Both families key on **`data/block_pos[episode_start][:2]`, the T's start — not the
+agent's.** The two disagree: agent and block start in the same quadrant in only 51 of the
+206 episodes, so "bottom-left" means something different depending on which you pick.
+
+| manifest | train | val | test | eval region |
+|---|--:|--:|--:|---|
+| `pusht_blockquad_bottomleft_train137.json` | 137 (16,483 fr) | 19 | 50 | T starts with `x < 256, y ≥ 256` |
+| `pusht_blockquad_topright_train173.json` | 173 (21,880 fr) | 0 | 33 | T starts with `x ≥ 256, y < 256` |
+| `pusht_blockborder_train30_core50.json` | 30 (4,349 fr) | 70 | 50 | interior core, `d > 178.3 px` |
+| `pusht_blockborder_train60_core50.json` | 60 (8,264 fr) | 40 | 50 | interior core, `d > 178.3 px` |
+| `pusht_blockborder_train100_core50.json` | 100 (13,548 fr) | 0 | 50 | interior core, `d > 178.3 px` |
+
+**Quadrant family.** Eval is one quadrant of the 512×512 arena (split at 256; **y increases
+downward**, so "bottom" is `y ≥ 256`), train is every episode outside it. The two datasets
+are deliberately *not* size-matched, because the demos are not uniform over the arena: 69
+episodes start bottom-left but only 33 top-right. Where the quadrant has episodes to spare,
+50 of them are `test` (what `eval_search_pusht` rolls out) and the remainder is `val`,
+chosen by a seed-42 permutation. Top-right holds only 33, so **it has no val set at all** —
+all 33 are test. That is a real asymmetry between the two datasets, not an oversight; the
+workspace's validation loop is guarded on `len(val_losses) > 0` and simply skips.
+
+**Border family.** With `d = min(x, y, 512−x, 512−y)` the T's distance to the nearest wall:
+
+- **train** = the `k` episodes with the *smallest* `d` — a band hugging the walls. `k = 30`
+  reaches `d ≤ 92.0 px`, `k = 60` reaches `118.9`, `k = 100` reaches `144.1`.
+- **test** = the 50 with the *largest* `d` (`d > 178.3 px`, the interior core), **identical
+  across all three budgets**, so the three runs are directly comparable on one number.
+- **val** = `band_100 \ band_k`, the ring the wider bands train on and this budget does not:
+  70 / 40 / 0 episodes. So the 30-demo dataset is validated on ground the 100-demo dataset
+  treats as *training* data, and the val sets nest the opposite way from the train sets.
+
+Three consequences worth knowing before you read any number off these:
+
+- **Train nests, val nests backwards, test is fixed.** `train_30 ⊂ train_60 ⊂ train_100`
+  and `val_100 ⊂ val_60 ⊂ val_30`, with one shared test set. A budget comparison therefore
+  varies the training band and nothing else.
+- **56 episodes are used by nothing.** They sit between the widest band (`d = 144.1`) and
+  the core (`d = 178.3`), belonging to neither the train region nor the shared eval region.
+  This is the price of holding the test set fixed at 50 while the bands grow.
+- **Selection is by rank, not by a width threshold.** The 60-demo cut falls between two
+  episodes 0.002 px apart, so a float cutoff would be a coin flip; ties in `d` break by
+  episode index. The `train_d_max_px` recorded in each manifest describes the band that
+  resulted — it is not the input.
+
+#### Verifying
+
+`scripts/dump_pusht_splits.py --verify` does not know these derivations. Re-running the
+generator is the check — it is deterministic, so the files should not move:
+
+```bash
+python scripts/make_geometric_splits.py && git diff --stat diffusion_policy/config/splits/
+# expect: no changes
+```
+
+The generator asserts its own invariants on every write (splits disjoint, test never below
+50 outside the quadrant family) and stamps the same `episode_ends_checksum` the §2.1
+manifests carry, so the zarr check in §2.1 applies unchanged.
+
+
+### 2.3 The geometric-split sweep — 3 arms × 5 datasets
+
+Trained 2026-09-03. Three arms on each of the five §2.2 manifests, evaluated on each
+manifest's own held-out test episodes, so every number is an **out-of-region** readout.
+
+| arm | config | override |
+| --- | --- | --- |
+| UNet BC | `train_pusht_unet_bc` | — |
+| ST k=1 | `train_pusht_diffusion_search_single` | `n_candidates=1` |
+| ST k=16, uniform slot weights | `train_pusht_diffusion_search` | `n_candidates=16` |
+
+Uniform slot weights and no obs-noise ladder are the config **defaults**, which is why no
+arm sets `slot_weights` or `slot_obs_noise`: `sw_suffix` and `son_suffix` are empty exactly
+when those are uniform, so the empty suffix in the run name *is* the uniform claim. The
+encoder is the default ResNet18 trained end to end (`enc-resnet18`, `gen_tag: rnE2E`), not
+the frozen SD-VAE of §3 — see `pusht_base.yaml:66` for the revert and its measurement.
+
+```bash
+bash scripts/run_geometric_splits.sh              # dry run: what would be submitted, where
+SUBMIT=1 bash scripts/run_geometric_splits.sh     # ...and sbatch (robotics/weirdlab GPUs)
+TIME_LIMIT=5-00:00:00 SUBMIT=1 bash scripts/run_geometric_splits.sh   # longer wall clock
+
+SUBMIT=1 bash scripts/slurm/submit_geometric_readouts.sh   # eval, on the ckpt partition
+python scripts/build_geometric_splits_doc.py               # -> docs/reports/archive/SUCCESS_RATES_GEOMETRIC.md
+```
+
+**`split_suffix` is load-bearing.** These runs override `task.dataset.split_file`, and
+`n_demos` alone does not identify the dataset for the new manifests —
+`pusht_blockborder_train30_core50` and `pusht_seed42_train30` are both 30 training
+episodes. Without `split_suffix` the two resolve to one `hydra.run.dir` and
+`training.resume: True` continues one under the other's data. It defaults to empty, so no
+existing run name moves. The five overrides always travel together:
+
+```bash
+task.dataset.split_file=diffusion_policy/config/splits/pusht_blockquad_topright_train173.json \
+  n_demos=173 task.dataset.n_test_episodes=33 task.dataset.n_val_episodes=0 \
+  split_suffix=_split-trq
+```
+
+**Wall clock.** The launcher passes `--time=3-00:00:00`, overriding the 10 days
+`train_pusht_search.sbatch` asks for. SLURM will not schedule a 10-day job ahead of a
+maintenance reservation: on 2026-09-03 all 15 sat at `ReqNodeNotAvail, Reserved for
+maintenance` with `StartTime` pushed past the Sept 8 window, 5.5 days out. Measured, the
+arms finish well inside 3 days — BC UNet ~3h, ST k=1 ~1.5h, ST k=16 ~29h. A pending job's
+limit can be lowered in place without resubmitting:
+
+```bash
+scontrol update jobid=<JID> TimeLimit=3-00:00:00
+```
+
+`n_demos`, `n_test_episodes` and `n_val_episodes` are all validated against the manifest by
+`load_split_manifest`, so a mismatched count is a startup error rather than a silent
+mis-budget. `env_runner` needs nothing — it interpolates all of them from `task.dataset`.
+
+**Empty val splits.** Two of the five manifests (`topright`, `blockborder_train100`) have
+`val = 0` — their eval region has nothing left after the 50-episode test set is taken.
+Iterating a zero-length *accelerate-prepared* dataloader is not survivable: accelerate's
+`DataLoaderShard.__iter__` either raises `UnboundLocalError` on `current_batch` or yields a
+single `None`, which reaches `dict_apply` as `AttributeError: 'NoneType' object has no
+attribute 'items'`. Both training workspaces therefore compute `has_val = len(val_dataset) > 0`
+and skip the whole validation block, rather than guarding from the inside:
+
+- `train_diffusion_unet_image_workspace.py` — gates `if has_val and (self.epoch % val_every) == 0`
+- `train_mlp_image_workspace.py` — `do_val = do_val and has_val` (ST k=1, and ST k=16 by
+  inheritance through `TrainSearchOuterInnerWorkspace`)
+
+Neither changes anything for a non-empty val split. The other empty-val paths were checked
+and are already safe: `_make_nrmse_loader` builds a plain (unprepared) `DataLoader` that
+yields zero batches, and `PushTSearchImageRunner` creates no val environments from an empty
+mask. Runs with `val = 0` log no `val_loss`, so **do not select checkpoints on val for
+those two datasets** — there is nothing to select on.
+
+**Eval.** `n = 1,2,4,8,16,32,64` under both `argmax` and `final_pass`, on the same levels
+for all three arms because the comparison is across arms at matched n. Clean rules only:
+none of these arms trains under a ladder, so `--corrupt-obs-eval` is a no-op on them. The
+watchers run on the preemptible `ckpt` partition with a 12h wall clock, so
+`submit_geometric_readouts.sh` must be re-run as checkpoints land — it is idempotent
+(skips a `(run, rule)` whose watcher is queued, and eval merges into the same
+`success_curves.jsonl`). To automate:
+
+```bash
+setsid nohup env SUBMIT=1 bash scripts/slurm/autoupdate_geometric_readouts.sh >/dev/null 2>&1 &
+```
+
+
+### 2.4 The observation-noise arms — 12 ST k=16 runs on `blq` and `brd60`
+
+Trained 2026-09-04. All ST k=16 with uniform slot weights, default ResNet18 encoder, on two
+of the §2.2 manifests only. Three mechanisms, and **only the first two share one**:
+
+```bash
+SUBMIT=1 bash scripts/run_obsnoise_geometric.sh    # parts 1+2: 5 ladders x 2 datasets
+SUBMIT=1 bash scripts/run_goalmask_geometric.sh    # part 3:    1 mask   x 2 datasets
+python scripts/make_goal_mask.py --margins 0 3 5   # -> media/goal_mask/ renders
+python scripts/goal_mask_smoke.py                  # compute node: 2.8GB img array
+```
+
+| part | arms | mechanism | run-name key |
+| --- | --- | --- | --- |
+| 1 flat | t = 800, 400, 200 | every slot pinned at the same timestep | `_son-flat<t>` |
+| 2 ramp | 800→400, 400→200 | slot 0 at base, slot 15 at **half that timestep**, linear in t | `_son-ramp<a>to<b>` |
+| 3 goal mask | t = 800 | image-space noise inside a mask on the goal T | `_gm-t800-T3px` |
+
+**Parts 1 and 2 are config-only.** Both are `slot_obs_noise.mode=list` with an explicit
+16-entry profile; `_slot_obs_profile` enforces `len(timesteps) == n_candidates` at policy
+construction, so a wrong-length ramp is a startup error. The flat arms deliberately trip the
+degenerate-ladder warning (`15/15 adjacent slot pairs differ by < 0.005 in sqrt(alpha_bar)`)
+— flatness is the point, it is the control the graded arms are read against. Half the
+*timestep* is not half the corruption: `alpha_bar` is a cumulative product, so t 800→400
+moves `sqrt(alpha_bar)` 0.039 → 0.440.
+
+**The levels transfer from the SD-VAE calibration unchanged.** `_corrupt_obs_features`
+scales the noise by `obs_feature_std`, a running per-dimension EMA, so a timestep fixes an
+SNR rather than a magnitude — and that holds for any encoder. Measured on 32 real frames,
+mean-centred cosine at t = 800 / 400 / 200:
+
+| | t=800 | t=400 | t=200 |
+|---|--:|--:|--:|
+| ResNet18 | 0.041 | 0.448 | 0.792 |
+| SD-VAE | 0.003 | 0.426 | 0.810 |
+
+Raw (uncentred) cosine disagrees wildly — 0.97 vs 0.28 at t=800 — but that is an artefact:
+ResNet features are ReLU outputs, 0% negative with mean 0.77σ, and that DC component
+dominates the cosine while carrying no per-sample information. Frame discriminability agrees
+with the centred figure (0.72 vs 0.75 at t=400; both at chance by t=800). **At t=800 and 600
+the observation is already unidentifiable for both encoders**, so those levels measure total
+destruction rather than a graded condition.
+
+**Part 3 is a different mechanism and its numbers do not compare to parts 1/2.**
+`slot_obs_noise` corrupts `obs_features` — the encoded vector, which has no spatial
+structure — so "noise only where the goal is" cannot be expressed there. Part 3 noises the
+observation IMAGE before the encoder, inside a fixed mask:
+
+- The goal pose is a constant (`[256, 256, π/4]` for every episode), so the mask is built
+  once by `diffusion_policy/env/pusht/goal_mask.py` and only the noise is redrawn.
+- `margin_px` is in **IMAGE pixels** of the 96px observation, not the 512px arena. The goal
+  T spans only ~26 image px, so the two readings of a margin differ by 5.3×. Coverage:
+  2.1% of the frame at margin 0, **5.8% at 3**, 8.2% at 5.
+- Noise is drawn with **torch's** RNG, not numpy's: PyTorch re-seeds `torch` per dataloader
+  worker but not numpy, so a numpy draw would give every worker the same noise stream.
+- **TRAIN SPLIT ONLY.** `PushTImageDataset._split_copy` clears the flag, so val and test are
+  clean and the env runner never sees it. Every rollout number is measured on an
+  uncorrupted observation. `scripts/goal_mask_smoke.py` asserts this against the real zarr:
+  outside-mask pixels bit-identical, inside-mask corrupted, noise redrawn per read, val and
+  test identical to a no-corruption dataset.
+
+`gm_suffix` is load-bearing for the same reason `split_suffix` is — two levels sharing a run
+name would resolve to one `hydra.run.dir`.
+
+**Eval.** `scripts/slurm/submit_geometric_readouts.sh` covers all 27 runs and picks the rule
+set by run name: arms carrying `_son-` get **four** readouts (argmax / final_pass ×
+obs-clean / obs-corrupt), because `--corrupt-obs-eval` reproduces the slot→level mapping the
+loss trained under. Everything else — the baselines and the `_gm-` arms — has no registered
+ladder, so the corrupt flag is a no-op and would record the same experiment twice; those get
+the two clean rows only. 74 watchers at full coverage.
+
+
+### 2.5 The `t_goal`-moving arms — 6 ST + 1 BC on the transitions the verifier can see
+
+The `t_contact_experiments` generation (wandb group). Every arm before this trained on all
+demo transitions, including the ones its own verifier is blind on: `t_goal` scores a candidate
+by where the T ends up and nothing else, so on a decision that moves the block nowhere every
+candidate ties. `docs/reports/ppo_sac_lstm-bc_eval_2026-09-17.md` §1 measures that at 15-25%
+of decisions. These arms drop those windows.
+
+**All 206 episodes**, 176 train / **0 val** / 30 test, and the 30 are *selected* so the
+**moving**-transition ratio is 100:20 — episodes hold 22 to 145 moving windows each, so which
+30 moves that ratio by several points. Filtered: **12,972 train / 2,595 test** windows.
+
+| arm | config | override |
+| --- | --- | --- |
+| UNet BC | `train_pusht_unet_bc` | — |
+| ST k=16 / k=4, uniform | `train_pusht_diffusion_search` | `n_candidates={16,4}` |
+| ST k=16 / k=4, flat400 | same | `slot_obs_noise.mode=list` + a K-length `[400]*K` |
+| ST k=16 / k=4, ramp400to200 | same | same, 400→200 linear over K |
+
+```bash
+python scripts/make_moving_ratio_split.py    # -> config/splits/pusht_seed42_train176.json
+python scripts/make_moving_transitions.py    # -> config/splits/transitions/..._moving_ta8.json
+bash scripts/run_tgoal_moving.sh             # dry run: 7 run names, where they land
+SUBMIT=1 bash scripts/run_tgoal_moving.sh    # ...and sbatch
+```
+
+**If an arm dies with `assert ports_found`, just re-run the launcher.** Two jobs starting on
+the same node at the same instant race in wandb's service startup and one loses; it has killed
+four runs in this project's history, always minutes in and always *after* the dataset has
+loaded, so it reads like a real failure and is not. `run_tgoal_moving.sh` skips arms already
+training or already finished, so `SUBMIT=1` a second time resubmits exactly what died.
+
+**Preflight before spending the GPU time.** A 50-step run exercises everything that can fail
+at startup — the K-length ladder assert, `check_transition_filter_labels`, the transition
+manifest's validation, the empty-val path, `write_splits` — in about ten minutes:
+
+```bash
+python train.py --config-name=train_pusht_diffusion_search n_candidates=4 \
+  slot_obs_noise.mode=list +slot_obs_noise.timesteps='[400,333,267,200]' \
+  son_suffix=_son-ramp400to200 son_tag=ramp-400-200 obs_noise_tag=obs_noised \
+  n_demos=176 split_suffix=_split-mv \
+  transition_file=diffusion_policy/config/splits/transitions/pusht_seed42_train176_moving_ta8.json \
+  training.max_gradient_steps=50 training.checkpoint_every=50
+```
+
+Point `DP_OUTPUT_ROOT` at a scratch tree first: a preflight writing into the real run
+directory leaves a `splits.json` and checkpoints there that the real run then resumes from.
+And it is **`max_gradient_steps`**, not `max_train_steps` — the latter caps batches per
+*epoch* and does not end the run (`pusht_base.yaml` calls it "SAFETY BOUND ONLY"). Setting
+the wrong one and walking away costs a GPU-hour and ~8 GB of checkpoints.
+
+**Two manifests, and the second is pinned to the first.** The split manifest says which
+EPISODES; `config/splits/transitions/` says which TRANSITIONS inside them, as absolute
+decision frames (not window indices — those depend on `horizon` and the pad settings, a frame
+does not). `load_transition_manifest` refuses to start unless the transition file's
+`source_split_checksum` matches the episode manifest actually loaded, so the two can never be
+paired wrongly. They live in a subdirectory because `unit_tests/test_splits.py` globs
+`config/splits/*.json` and loads every hit as an episode manifest.
+
+**Not train-only, unlike `goal_mask_noise`.** The filter is part of what the dataset IS, so
+`_split_copy` carries it through and the held-out split is the held-out *transitions*. The
+consequence: `val_loss` is absent (there is no val split) and the test windows are a different
+population from every earlier arm's, so **no number here is comparable with §2.3/§2.4**.
+
+**`split_suffix` is load-bearing, again.** `run_name` has no transition component, so a
+filtered arm with an empty suffix resolves to the same `hydra.run.dir` as an unfiltered one at
+the same `n_demos` and `training.resume: True` continues it.
+`check_transition_filter_labels` refuses to start when the two disagree, in both training
+workspaces. `BaseWorkspace.write_splits` compares the filter's checksum separately from the
+episode checksum, because the episode lists are identical between a filtered and an unfiltered
+run — absent means "no filter", so every pre-existing `splits.json` still resumes.
+
+**The K=4 ladders are not the K=16 ladders.** `_slot_obs_profile` requires
+`len(timesteps) == max_actions`, so the launcher builds each profile at the arm's own K.
+Both span 400→200, but at 4 points versus 16 — endpoints matched, granularity not.
+
+**No in-training rollouts.** The runner resets to the held-out val+test episodes, which with
+no val split is the test episodes. This generation reports no success rate at all, so the
+launcher sets `training.rollout_every_steps` past the end of training rather than scoring the
+held-out set five times per run for a number nobody reads.
+
+**Eval.** Three readouts, every one at the 10k checkpoint grid, and no rollout success curve:
+
+```bash
+N_STEPS=10 SUBMIT=1 bash attention_analysis/submit_all.sh     # context share per slot
+WANT_STEPS=10000,20000,30000,40000,50000,60000,70000,80000,90000,100000 \
+  SUBMIT=1 bash mode_analysis/submit_all.sh                   # candidate dispersion per slot
+
+# candidate ranking, twice: paired across widths at n=4, then the k=16 arms at full width
+python scripts/rank_arms_by_blockmotion.py --arms moving4  --n 4  --step <STEP> --out <out>.json
+python scripts/rank_arms_by_blockmotion.py --arms moving16 --n 16 --step <STEP> --out <out>.json
+```
+
+`rank_arms_by_blockmotion` already stratifies by `expert_moved` — the SAME predicate the
+filter is built from — so its `block_moving` rows are the readout on the held-out moving
+transitions and `block_still` is a free off-distribution readout. **Two arm sets because a
+K=4 arm cannot contribute 16 candidates**; mixing widths in one pool would give the wider arms
+more entries and bias every mid-rank toward them.
+
+Attention analysis probes **held-out transitions**, not episode t=0 (`--states`, defaulting to
+`test-windows` exactly when the run has a `transition_file`). At t=0 the T has not been touched,
+so every probe state would be one of the `still` states these arms never trained on. Arms
+without a filter keep the episode-t=0 probe, so their existing `attention.json` numbers stand.
+BC has no cross-attention at all (`ConditionalUnet1D`, FiLM) and is absent from that readout by
+construction; it IS included in mode analysis, but only by hand —
+`PushTUNetSearchPolicy.max_actions` is `None`, so `--n-actions 16` has to be passed explicitly.
+
+### 2.6 The learned-Q arms — 12 ST trained against a SAC chunk-Q
+
+Every arm before this trained on a `t_goal`-shaped search context. That is exactly why
+`sac/score.py` swaps the Q into the **ranking** only and leaves the context alone: handing a
+`t_goal`-trained arm a Q-shaped context confounds "Q ranks better" with "ST was given an input
+it has never seen". The only way out of the confound is to train arms whose context is Q, which
+is what these are. 2 widths × 3 ladders × 2 geometric splits = **12 runs to 100k**.
+
+```bash
+bash scripts/run_q_geometric.sh                              # dry run, 12 arms
+SUBMIT=1 bash scripts/run_q_geometric.sh                     # ...and sbatch
+VERIFIER=q_sac_106 SUBMIT=1 bash scripts/run_q_geometric.sh  # the leak control
+SUBMIT=1 bash scripts/slurm/submit_q_bon_geometric.sh        # the BC best-of-n sweep
+```
+
+**THE NAME IS THE CHECKPOINT.** `verifier_tag=q_sac_all` resolves through
+`pusht_verifier.Q_VERIFIERS` to a specific SAC checkpoint and lands in `run_name` as `ver-q_sac_all`.
+There is deliberately no path override: a directory that says which Q scored it and a config
+key that could say otherwise are two things that drift. `q_sac_all` is `sac_keypoint`'s 8.5M
+checkpoint (`demo_episodes: all`); `q_sac_106` is the demos106 archive at 3.3M, the control.
+
+| | `t_goal` | `q_sac_all` |
+| --- | --- | --- |
+| scores | the state the sim **reached** | `(current state, chunk)`, one forward pass |
+| costs | 8 sim steps × a 32-process pool | a matmul — **no pool is ever forked** |
+| context | `_normalize_value`, a torch mirror of the value | `_normalize_q`, a running z-score |
+| blind on | 15–25% of decisions (§2.5) | `bon/q_spread_zero_frac` 0.0 at every probe |
+
+**The context cannot be the raw Q, and the reason is measured.** Over 512 real decisions on
+both splits (`scripts/measure_q_spread.py` → `analysis/q_spread.json`) the Q runs 0.34–0.93 with
+mean 0.77, while its spread *across the 16 candidates of one decision* is **0.0011**. Beside an
+O(1) embedding in `action_value_emb` that is a dead input: it would train, teach nothing, and no
+loss or metric would report it. `PushTSearchMixin._normalize_q` makes it a running z-score
+instead — EMA mean/var at `Q_NORM_DECAY = 0.995` (matching `ema_decay`), clamped to ±5.
+
+Four things about that normalizer are load-bearing:
+
+- **Stale statistics, always.** They are applied first and updated after. Normalizing by the
+  batch's own mean and std is the BatchNorm trap — at deployment the batch is one episode, so
+  every statistic is taken over a single sample and the feature collapses to exactly 0. It
+  would look fine for all of training and be identically zero where it matters.
+- **Not gated on `self.training`.** The outer/inner trainer generates its context under
+  `policy.eval()` (`_fill_context_buffer`), which is precisely when it must update. The
+  workspace says so explicitly via `set_value_norm_training`, and that flag is **off by
+  default**, so any eval or analysis script normalizes with the statistics the arm trained
+  under and cannot drift them with its own ordering.
+- **One normalizer for every slot.** All slots' Q estimates the same quantity — the return of a
+  chunk from the same state. Per-slot statistics would subtract a different mean per slot and
+  manufacture a slot-index signal out of nothing.
+- **`EMAModel` never copies buffers.** It averages `parameters(recurse=False)`, so without
+  `sync_value_norm_from` (called beside `ema.step` in all three workspaces) the EMA copy — the
+  copy evaluation scores — would keep its construction-time `(0, 1)`. A silent, total
+  train/eval mismatch that nothing reports.
+
+The clamp is not tidiness: before the EMA has seen much, the running variance is a poor estimate
+and one outlying Q lands many sigma out, and unclamped that spike reaches every downstream head.
+
+**WHAT THE RUNNING NORMALIZER IS AND IS NOT TELLING THE MODEL.** It divides by the spread of Q
+across STATES, not across the candidates of one decision, and those are different numbers. On a
+freshly built arm the end-to-end check reads a context of mean +0.37, **std 0.96**, range
+−2.11…+3.53 — O(1), which is what it is for — while the raw Q's spread within one decision is
+0.020 against a running std of 0.027. So most of the context's range says *this state is
+promising*, and candidates within one decision are separated by the ratio of the two. On a
+TRAINED arm's candidates that within-decision spread falls to 0.0011 (§`analysis/q_spread.json`),
+so the per-candidate separation is the part to watch: in a decision where every candidate sits
+near the running mean, every slot reads ≈ the same number. That is the accepted cost of global
+statistics over per-decision ones, and the first checkpoints are where to check it is not the
+whole story.
+
+**`_normalize_value` raises on a learned value** rather than falling through. Everything in it
+recomputes the value from the state the sim *reached*; a Q does not simulate, so `state` is the
+CURRENT state and every branch would return the same number for every candidate — a constant
+context, which trains and teaches nothing. `search_context` must be `value` for the same reason,
+asserted at construction (`_check_learned_value_contract`): a Q reaches nothing, so there is no
+observation for a subgoal context to encode.
+
+⚠️ **NOTHING IS HELD OUT FROM `q_sac_all`.** `demo_episodes: all` means all 206 episodes seeded
+its replay buffer, including all 50 test episodes of both splits. `sac/score.py::assert_held_out`
+refuses this by design; `--allow-contaminated` is how the number gets taken anyway, and it is
+**recorded** in `bon_curves.json` rather than merely permitted, so a contaminated curve stays
+distinguishable from a clean one on a shared plot.
+
+⚠️ **THE CONTROLS ARE PARTIAL.** Under `t_goal` only blq137 k16 {uniform, flat400, ramp400to200}
+exist at 100k, plus brd100 k16 uniform. The k=4 arms on both splits and the brd100 ladders have
+**no matched twin** — those comparisons are across generations and must be labelled unpaired.
+
+---
+
+## 3. How to train and evaluate the current arms
+
+The `VAE_no_pos` generation: frozen SD-VAE obs backbone, **image-only** observation, 30
+demos, `t_goal` verifier, uniform slot weights. Everything lands under
+`$DP_OUTPUT_ROOT/pusht_search/pusht_image_search_imgonly/<trainer>/<run_name>/` and in the
+`VAE_no_pos` wandb group of the `pushT_diffusion_search` project.
+
+### The three baselines
+
+```bash
+bash scripts/run_vae_nopos_30demo.sh              # dry run: what would be submitted, where
+SUBMIT=1 bash scripts/run_vae_nopos_30demo.sh     # ...and sbatch
+```
+
+| arm | config | override |
+| --- | --- | --- |
+| UNet BC (the standard diffusion-policy baseline) | `train_pusht_unet_bc` | — |
+| ST k=1 | `train_pusht_diffusion_search_single` | `n_candidates=1` |
+| ST k=16 | `train_pusht_diffusion_search` | `n_candidates=16` |
+| LSTM BC (image) | `train_pusht_lstm_bc` | — |
+| LSTM BC (keypoint) | `train_pusht_lstm_bc_keypoint` | — |
+
+`n_candidates=1` is **load-bearing**: `..._single` pins the single-step *trainer*, not width
+one, and inherits `n_candidates: 16`. "BC" means the diffusion UNet and nothing else; the
+width-1 transformer is ST k=1.
+
+### The LSTM BC arms
+
+Behaviour cloning with `recurrent_ppo`'s architecture: a features extractor into
+`nn.LSTM(128, 1 layer)`, an MLP `[128,128]` with Tanh, and a Gaussian head with a
+**state-independent** `log_std` initialised to -1.0 — SB3's `DiagGaussianDistribution`, pinned
+key for key against `recurrent_ppo.config.DEFAULTS`, which is the source of truth for all four.
+PPO's critic, value head and Q head are dropped; they have no role in BC.
+
+```bash
+python train.py --config-name=train_pusht_lstm_bc          n_demos=30 training.seed=42
+python train.py --config-name=train_pusht_lstm_bc_keypoint n_demos=30 training.seed=42
+```
+
+What is held fixed against the other arms, and why the arm exists: the **split manifest** (so
+`<run_dir>/splits.json`'s checksum matches the UNet BC run's byte for byte) and the **rollout
+set** (the manifest's 30 val + 50 test episodes, reset to their recorded initial states, 300
+steps). The image arm additionally shares the `${obs_encoder}` block, so against UNet BC only
+the architecture varies. What is **not** held fixed is the optimisation: batch size, budget and
+LR schedule are tuned for the LSTM's own best result rather than matched, because matching them
+would measure the LSTM under UNet BC's hyperparameters rather than at its best.
+
+Three things about these arms differ structurally from every other PushT arm:
+
+- **Whole episodes, not windows.** `return_sequences: True`, so one sample is one demonstration
+  (60–188 steps on the 30-demo train split) and `sampler.collate_fn` pads the batch and emits
+  the `attention_mask` the loss masks with. The train split is therefore **30 samples**, not
+  ~3,800 windows, and one batch of 8 supervises ~1,000 action chunks against UNet BC's 32 — so
+  these arms are nothing like UNet BC *per gradient step*, and `max_gradient_steps` is 20k
+  rather than 100k. `decay_then_constant` is a pure function of the step index, so extending
+  the budget (and `decay_steps` with it) resumes cleanly if val is still improving.
+  This is also why `num_epochs` is 2e6: an epoch is 4 batches here, so pusht_base's 100000
+  would bind at exactly the same point as the step budget and silently become the real limit.
+- **`task.dataset.horizon` is not the chunk length.** In sequence mode `SequenceSampler`
+  replaces it with each episode's own length; it is set to 300 only to clear the `>= 100`
+  assert. The action chunk is the **top-level** `horizon` (16), which `policy.horizon` reads.
+  Two different numbers that happen to share a name — do not "fix" one to match the other.
+- **`n_obs_steps: 8` is frames ingested per call, not a concatenation width.**
+  `MultiStepWrapper` returns the `n_action_steps` frames it just stepped and the policy ticks
+  the LSTM once per frame, so the hidden state advances once per env step exactly as it does per
+  sequence index in training. The one exception is the first call after `reset()`, which
+  `MultiStepWrapper` pads to `n_obs_steps` copies of frame 0; the policy ingests one frame
+  there. `test_rollout_state_matches_teacher_forced_state` is what pins this correspondence, and
+  it is the only thing that would catch an off-by-one — a wrong offset still trains, still rolls
+  out, and only shows up as a disappointing success rate.
+
+`verifier_tag: null` on both masters: there is no verifier, so `check_verifier_value` is turned
+off at its own documented escape hatch rather than lied to. The consequence is that the
+inherited `logging.tags` carries `verifier-None`, which is accurate. Best-of-n is undefined for
+these arms and `n_search_actions` is asserted to be 1.
+
+The keypoint arm has its own task (`task/pusht_keypoint_manifest`), dataset
+(`PushTKeypointDataset`) and runner (`PushTSearchKeypointsRunner`), all siblings of the image
+ones that reuse the same manifest helpers. It needs them because `pusht_lowdim` derives its
+split from `val_ratio` and evaluates on procedurally generated env seeds
+(`test_start_seed: 100000`) — a different set of episodes from the ones every image arm is
+scored on. Its observation is the 20-d `keypoint` + `agent_pos` vector with **no visibility
+mask**: recurrent PPO's 40-d keypoint arm carries one because it studies occlusion, but these
+arms are clean in every observation mode, so it would be 20 constant dims.
+
+One protocol note. Resetting onto a recorded state runs `PushTEnv._set_state`, which ends with
+`self.space.step(1/sim_hz)` ("Run physics to take effect"). For 184 of the 206 episodes the
+block starts at rest and the observation reproduces the zarr exactly; for the ~22 whose first
+frame has it in contact it settles by up to ~2px. **The image arms reset through the same
+`_set_state`**, so their rendered first frame carries the identical offset — it is a property of
+the shared eval protocol, not of the keypoint arm, and does not affect comparability.
+
+### The obs-corruption ladder (`slot_obs_noise`)
+
+Slot *k*'s encoded observation is noised by a DDPM forward marginal at a per-slot timestep:
+slot 0 (no search context) most corrupted, slot K-1 (full context) clean. Set all three
+labels together — `_check_obs_noise_labels` refuses to start if the directory, the wandb tag
+and the ladder disagree:
+
+```bash
+sbatch --export=ALL,CONFIG_NAME=train_pusht_diffusion_search \
+  scripts/slurm/train_pusht_search.sbatch \
+  n_candidates=16 \
+  slot_obs_noise.mode=linear_signal \
+  son_suffix=_son-linsig son_tag=linear_signal obs_noise_tag=obs_noised
+
+# random_base; `shape` and `base_range` are commented out in the config, so they need `+`
+sbatch --export=ALL,CONFIG_NAME=train_pusht_diffusion_search \
+  scripts/slurm/train_pusht_search.sbatch \
+  n_candidates=16 \
+  slot_obs_noise.mode=random_base +slot_obs_noise.shape=linear_signal \
+  son_suffix=_son-rndlinsig son_tag=random_base-linsig obs_noise_tag=obs_noised
+```
+
+Override the **top-level** `slot_obs_noise`, not `policy.slot_obs_noise`: the policy block
+interpolates it (`slot_obs_noise: ${slot_obs_noise}`) and hydra cannot reach inside an
+interpolation. Same for the encoder — `obs_encoder.*` and `crop_shape`, not
+`policy.obs_encoder.*`.
+
+| `mode` | ladder |
+| --- | --- |
+| `uniform` | off. Bit-identical to the objective that predates the ladder; registers no buffers, so old checkpoints still load. |
+| `linear_t` | even in the timestep index — *not* even in corruption, since `alpha_bar` is a cumulative product |
+| `geometric` | needs `decay`; spends almost everything on slots 0–4 (at 0.7, eight of fifteen adjacent pairs are indistinguishable) |
+| `linear_signal` | even in `sqrt(alpha_bar)`. The only shape giving all K slots a distinct, evenly-spaced level. |
+| `list` | explicit K-length `timesteps` |
+| `random_base` | no fixed ladder. `shape` supplies the curve; a base is drawn **per sample** from `base_range` and the curve is rescaled into `[0, base]`, so slot 0's level is random and the schedule runs from it down to clean. `son_suffix=_son-rndlinsig son_tag=random_base-linsig`. |
+
+The startup print shows the resolved `(t_k, sqrt(alpha_bar_k))` per slot and warns when a
+shape collapses adjacent slots.
+
+### Preflight
+
+```bash
+python scripts/vae_nopos_smoke.py
+```
+
+CPU-only, no training. Asserts the four invariants the generation rests on, for every arm:
+`shape_meta.obs == {image}` and `obs_feature_dim == 324`; that re-adding a low_dim obs key
+**raises**; that the backbone is still in eval with no grads after `policy.train()`; and that
+`agent_pos` / `feedback` are still in the sample dict with `feedback` still fitted by the
+normalizer — removing too much would quietly break the verifier's sim reset and the context
+rescaling, which is as wrong as removing too little.
+
+### Seeing what the corruption does
+
+```bash
+python scripts/decode_obs_latents.py \
+  -o slot_obs_noise.mode=linear_signal --n-samples 4
+```
+
+Writes `media/obs_latents.{png,json}`: rows are `[input crop | clean reconstruction |
+slot 0 … slot K-1]`, captioned with each slot's timestep, `sqrt(alpha_bar)` and PSNR. No
+checkpoint needed — the encoder is frozen, so an untrained run's latents are a finished
+run's latents. **Run this before spending GPU time on a ladder arm:** if slot 0 decodes to
+noise rather than a blurred T, the floor is too aggressive.
+
+Run it ALONE on the login node, or on a compute node. It holds the zarr, the policy and a
+second full `AutoencoderKL` (for the decoder the policy drops) at once; two of them beside an
+editor will hit the shared ~10 GB login cgroup and be Killed.
+
+### The eval matrix
+
+`selection` and `corrupt_obs_eval` are both readout-time knobs on trained weights, so one
+checkpoint yields several rows. They are keyed into the output directory
+(`bon_search_sel-{argmax,final_pass}_obs-{corrupt,clean}/`) and into `_IDENTITY`, so no two
+of them can merge into one curve.
+
+```bash
+bash scripts/slurm/submit_vae_nopos_readouts.sh            # dry run
+SUBMIT=1 bash scripts/slurm/submit_vae_nopos_readouts.sh   # ...and sbatch
+```
+
+or one checkpoint by hand:
+
+```bash
+python eval_search_pusht.py -c <run>/checkpoints/step_0050000.ckpt \
+  --n-list 1,8,16 --selection argmax --no-corrupt-obs-eval --skip-val
+```
+
+`--n-list` buys exactly the levels named; the default powers-of-two rule would also pay for
+n=2 and n=4, and a level's cost is linear in n.
+
+**Reading n against slots.** n and slot are the same index. At n=8 with K=16 only slots 0–7
+are generated — the *noisy half* of the ladder; n=16 is the first level that reaches the
+clean end, and under `final_pass` the executed action is the cleanest reachable slot. So
+n ∈ {1, 8, 16} are three different conditionals under a ladder, where under the uniform
+baseline they are the same conditional sampled more times. `--corrupt-obs-eval` reproduces
+the slot→level mapping the loss trained under; `--no-corrupt-obs-eval` evaluates every slot
+clean, which is a legitimate arm but not the conditional that was trained. A clean-trained
+arm is only ever evaluated clean — the corrupt flag is a no-op on it.
+
+### The observation is identical on both arms, and encoded once
+
+Two changes landed together on 2026-08-30, both consequences of the encoder being frozen.
+
+**Same crop.** The UNet BC arm now owns its crop offsets the way the search transformer does:
+one offset per SAMPLE, shared by the observation window's frames. Left to itself
+`CropRandomizer` draws one per IMAGE, so at train time a sample's two obs frames were cropped
+differently while at eval both took the same centre crop — a train/eval mismatch in how the
+frames register against each other, and more scene coverage per sample than the ST arms get.
+**This changes the BC arm's training distribution, so BC runs from here are a new generation**
+and are not comparable to the pre-2026-08-30 numbers.
+
+*The base-class order is load-bearing.* `SearchProcedureMixin` defines `_crop_scope` as a
+no-op for hosts that own no crop, so `CropScopeMixin` must come **first**; with the other
+order the no-op wins, the scope never clears its cached offsets, and every batch after the
+first silently reuses the first batch's crops. `unit_tests/test_crop_scope.py` asserts the
+resolution for both policies.
+
+**The VAE encode is cached wherever it is provably redundant.** The backbone is frozen, so its
+output is a pure function of (image, crop offset) — which is what makes reuse sound. Two places
+were re-running it for nothing:
+
+| where | was | now |
+| --- | --- | --- |
+| BC best-of-n at eval | 34.2M-param VAE run **once per candidate** — 16× per control step at n=16 | once per decision, threaded through `predict_action(..., global_cond=...)` |
+| ST outer/inner inner loop | every pool window re-encoded on each of its `inner_epochs` passes | encoded once in the buffer fill, cached as features (663 kB for a 256-window pool) |
+
+The outer/inner cache also **pins the crop for the pool**, which is what makes a buffered
+subgoal image and the observation it was predicted from share one offset — previously the
+buffer filled under `eval()` (centre crop) while the inner step re-encoded with a random one.
+Cost: a window keeps one crop for all of its inner passes instead of getting a fresh one each
+time. `_can_cache_obs` checks the freeze at runtime and falls back to re-encoding if any
+encoder parameter requires grad — with a trainable encoder the cache would feed stale
+activations *and* cut the backbone out of the gradient.
+
+### Nothing nominates a best checkpoint
+
+Every `step_*.ckpt` at `checkpoint_every: 10000` is retained and none is deleted. Checkpoint
+choice comes from the eval curve at analysis time, with the step named explicitly — never
+from `val_loss`.
+
+---
+
+## 3a. Known limitations — design facts, not bugs
+
+Carried forward from `AUDIT.md`, which was removed on 2026-08-29 (its history is in git).
+State the relevant ones alongside any result.
+
+**The search context is conditionally uninformative under the current loss.**
+`compute_loss` expands one dataset expert action across all K decode slots
+(`diffusion_transformer_search_policy.py`), and the candidates in the context are themselves
+generated from `obs` alone — so the context is a deterministic function of `obs` and
+`p(a* | obs, context) = p(a* | obs)` exactly. The Bayes-optimal model **ignores the context**,
+and no gradient pressure exists for the feedback channel to matter. This is task-dependent and
+clean PushT is the worst case: image + agent_pos + feedback determine the state, so the
+redundancy is provable. **`slot_obs_noise` is the first change that breaks it** — under the
+ladder slot *k*'s observation genuinely differs from slot *k+1*'s, so the conditionals differ
+by slot and the context becomes information rather than decoration. That is the mechanism the
+`VAE_no_pos` generation is testing.
+
+**Search needs a ground-truth simulator at inference.** `PushTVerifier.rollout` resets a real
+PushT sim to the exact state and steps true dynamics. The block *state* is not privileged — it
+comes from `feedback` — but the *simulator* is. The `subgoal*` modes go further, putting an
+embedding of a sim-rendered future frame into the model's input distribution, so the trained
+model needs the oracle at inference, not merely for ranking.
+
+**The verifier's objective is not the eval metric.** The verifier scores a chunk's final state
+by −mean keypoint distance; success is `max` **coverage** over the episode. Keypoint distance
+is not monotone in coverage — a candidate that passes through the goal mid-chunk and slides off
+scores badly — so argmax-verifier ≠ argmax-success even with a perfect simulator.
+
+**The verifier's dynamics gap is measured and does not matter.** Each rollout starts with zero
+agent velocity, discarding a real 9.5 px of momentum (p95 22.6 px); after 15 steps the block
+still lands 0.51 px from truth on average (median 0.03). The keypoint-distance error is 0.18
+against a between-candidate spread of ~5 units, i.e. ~3% of the signal being ranked on. The
+proposed warm-up fix costs ~2× verifier time for a 20% mean-error reduction and is deliberately
+**not** implemented. Reproduce with `scripts/measure_verifier_fidelity.py`.
+
+**Search is fully sequential.** n candidates are n sequential DDIM loops at `K_decode = 1`,
+which is what makes the top of the eval sweep expensive. Batching them would change the
+sequential-conditioning semantics.
+
+**The rolling window drops the incumbent best.** Past `max_actions`, `predict_n_actions` evicts
+the *oldest* candidate, so the conditioning never sees the current leader; only the final
+argmax over all scores recovers it.
+
+**Boundary padding is supervised as real data.** `sampler.py` repeats the last frame, so with
+`pad_after = n_action_steps - 1 = 7` up to 7 of the 16 target steps in an end-of-episode window
+are duplicates. Worse on the search path: the verifier physics-simulates a chunk of repeated
+targets that never occurred, and that fabricated outcome becomes the model's context.
+
+**`corrupt_obs` means opposite things in the two search paths.** Offline, `encode_obs_cond`
+corrupts the *observation*; online, `OnlineSearchPolicy.forward` corrupts the *context*. Same
+name, inverted target. (The offline per-slot ladder is `slot_obs_noise`, which refuses to
+coexist with `corrupt_obs` — both noise the same tensor.)
+
+---
+
+## 3b. Behavior-cloning baseline (feedback-conditioned)
+
+Standard diffusion-UNet BC on the modified Push-T task. The `task=pusht_image` override
+is required (the workspace defaults to `lift_image_abs`).
+
+```bash
+python train.py \
+  --config-name=train_diffusion_unet_image_workspace \
+  task=pusht_image \
+  training.device=cuda:0 training.seed=42
+```
+
+- Task adds a 16-dim `feedback` obs; splits into 50 held-out **test** episodes and 156
+  train, of which `task.dataset.train_ratio=0.2` → 31 episodes are actually trained on
+  (test is never subsampled). Override `train_ratio` to change the data budget. Note this
+  2-way `pusht_image` task still derives its split from the seed; only the search task
+  (`pusht_image_search`) uses the pinned manifest described below.
+- Rollouts run every `training.rollout_every_steps=5000` steps; success logged as
+  `test/mean_score`. Checkpoints keep top-5 by `test_mean_score` plus `latest.ckpt`.
+- Output: `data/outputs/<date>/<time>_train_diffusion_unet_image_pusht_image/` — note this
+  baseline uses the shared upstream config and so still writes to **home**, unlike the
+  PushT search configs (section 7). Pass `hydra.run.dir=$DP_OUTPUT_ROOT/...` for a long run.
+- W&B project defaults to `diffusion_policy_debug` (override `logging.project=...`).
+
+---
+
+## 4. Online-search policy (in-context)
+
+Single-step policy that conditions on on-policy rollouts. Task is pinned to
+`pusht_image_online` in the config's defaults — no `task=` override needed.
+
+```bash
+python train.py --config-name=train_online_search training.device=cuda:0
+```
+
+- `policy.n_trajs=8` context rollouts (built with `policy.n_envs=32` parallel Push-T
+  envs, up to `policy.max_rollout_steps=300` each). Set **`policy.n_trajs=0`** for the
+  pure-BC ablation (no env in the loop).
+- Checkpoints keep top-5 by `train_action_mse_error`; W&B project `pusht_online_search`.
+
+**Two things to know before comparing this arm with the others** (both in
+[`docs/reports/DEAD_CODE.md`](docs/reports/DEAD_CODE.md)):
+
+- Its data budget is **126 train episodes**, on `pusht_seed42_train126.json`. It read 150
+  until 2026-09-16, which was only reachable under the old two-way split; once 30 val
+  episodes are held out, 126 is every episode that is neither val nor test. Before that fix
+  the arm raised on construction — it passed `train_ratio`, which `PushTImageDataset` has not
+  accepted since 2026-08-29.
+- **Its encoder is not the shared one.** This config does not inherit `pusht_base.yaml`, so it
+  keeps a private block with no crop and `imagenet_norm: True` on a dataset already mapped to
+  [-1, 1] — a double normalisation. Its numbers are not comparable with the other image arms
+  until that is settled.
+
+---
+
+## 5. Training loop structures (read this before comparing runs)
+
+The two search families on this branch train in structurally different ways, which is easy
+to miss because both are called "search".
+
+**Offline conditional-diffusion search** — `train_pusht_diffusion_search` and the two
+`_subgoal*` ablations, via
+[`TrainMLPImageWorkspace`](diffusion_policy/workspace/train_mlp_image_workspace.py):
+
+```bash
+read A P < <(bash scripts/slurm/pick_gpu.sh)
+sbatch --account=$A --partition=$P scripts/slurm/train_pusht_search.sbatch
+```
+
+A plain offline epoch loop — one dataset batch, one `compute_loss`, one optimizer step.
+The search is *inside* the loss
+([`compute_loss`](diffusion_policy/policy/diffusion_transformer_search_policy.py#L825)):
+each step generates `max_actions - 1` = 15 candidates per batch element from the **current**
+weights, each an 8-step DDIM sample plus a physics-simulated `PushTVerifier` rollout, then
+trains the denoiser to predict the GT expert action conditioned on prefixes of them. All of
+it is discarded after the update. In outer/inner terms this is the maximally on-policy
+extreme: outer loop = one batch, inner loop = one update.
+
+Real hyperparameters, **current defaults**: 206 episodes → **50 test / 30 val / 30 train**
+(`n_demos: 30`; the 100-demo generation used the same 50/30 test/val and its own manifest).
+The split is not derived at runtime — it cannot be: `PushTImageDataset` requires a
+`split_file`, and the derive-from-the-seed branch was removed on 2026-08-29 (its
+`n_val_episodes == 0` path ran validation on the *test* set). See "Splits" below.
+Horizon 16, `n_obs_steps` 2, `n_action_steps` 8, `max_actions` 16, **frozen SD-VAE encoder
+(324-d latent at a 72×72 crop)**, 4-layer transformer at `n_emb` 256, AdamW 1e-4, EMA 0.995.
+The observation is **image only** — `agent_pos` and `feedback` are still emitted by the
+dataset, for the verifier, but are not in `shape_meta` and the policy asserts that no
+low_dim obs key is declared. Cost per update: 32 × 15 = **480 candidate samples + 480 verifier
+rollouts**, which is why the batch size is pinned at 32 — it is verifier-bound, not
+memory-bound, so the training budget above costs nothing extra per step.
+
+### Splits are pinned, not derived
+
+`task.dataset.split_file` names a committed manifest holding the exact train/val/test
+episode indices, plus a checksum of the zarr's `episode_ends`. The dataset, the env runner
+and `eval_search_pusht.py` all read it, and the `n_*_episodes` config keys are *validated*
+against it rather than generating anything — a disagreement raises.
+
+This exists because the splits used to be derived independently in those three places from
+`(seed, n_test_episodes, n_val_episodes, n_train_episodes, train_ratio)`, with nothing
+recording which episodes a checkpoint had trained on. Raising `n_val_episodes` from 10 to 30
+therefore shrank the pool that `train_ratio: 0.2` was a fraction *of*, silently cutting the
+training budget from 29 episodes to 25.
+
+```bash
+python scripts/dump_pusht_splits.py              # regenerate (shows up as a diff)
+python scripts/dump_pusht_splits.py --verify     # stored file still matches the derivation
+python scripts/dump_pusht_splits.py --check-zarr # zarr's episodes still match the manifest
+```
+
+**See §2.1** for which manifest each generation of runs actually used, the exact command
+that produced each one, and why the legacy 29-demo split is the one that cannot be
+re-derived from the CLI.
+
+Each training run also writes `<run_dir>/splits.json` recording the partition it resolved,
+and refuses to resume if that partition has since changed.
+
+**Online search (MLP)** — `train_online_search`, via
+[`TrainOnlineSearchWorkspace`](diffusion_policy/workspace/train_online_search_workspace.py).
+This one *does* have a genuine outer/inner loop: `num_outer_steps=100`, `outer_batch_size=128`
+episodes rolled out per outer step, then `num_inner_steps=100` updates at `inner_batch_size=8`
+that resample which of the `n_trajs=8` rollouts form the context.
+
+**Neither is PPO-like.** The online-search loss is masked negative log-likelihood of the
+*expert* action ([online_search_policy.py:346-350](diffusion_policy/policy/online_search_policy.py#L346-L350))
+— no reward, advantage, ratio, clipping, or KL term anywhere, and no frozen old-policy
+snapshot. The on-policy rollouts exist only to build the in-context conditioning. Note the
+irony: that policy has a tractable Gaussian logprob and so *could* report a real
+`KL(π_old‖π_θ)` cheaply, but does not.
+
+~~Also note `training.use_ema` was **inert** in `TrainMLPImageWorkspace` — the workspace has
+no EMA code — so no offline search run before section 6 has ever used EMA.~~
+
+**Corrected (2026-08-10).** That was true when written and is not any more: the silent
+no-op was fixed on 2026-08-10. `TrainMLPImageWorkspace` now honours `use_ema`, and every
+current run trains with `ema_decay: 0.995`. The exception is the **six legacy-29 arms**,
+which really did run with `use_ema: False` — their numbers come from the live weights while
+every 100-demo and r8 number comes from the EMA average. That is one of the two defects the
+`[no-EMA]` `[split-crop]` markers in `SUCCESS_RATES.md` §2 flag, and one of the three
+changes the r8 re-runs isolate.
+
+---
+
+## 6. Outer/inner search trainer
+
+`train_pusht_search_outer_inner`, via
+[`TrainSearchOuterInnerWorkspace`](diffusion_policy/workspace/train_search_outer_inner_workspace.py).
+Same policy, same data, same loss as the offline baseline — only the loop differs.
+
+```bash
+read A P < <(bash scripts/slurm/pick_gpu.sh)
+CONFIG_NAME=train_pusht_search_outer_inner \
+  sbatch --account=$A --partition=$P --export=ALL,CONFIG_NAME \
+         scripts/slurm/train_pusht_search.sbatch
+```
+
+The search context is generated **once per outer step** for a pool of `outer_batch_size`
+windows and reused for `inner_epochs` passes:
+
+| | |
+| --- | --- |
+| `max_gradient_steps` | 100000 — **the only run-length knob** |
+| `outer_batch_size` / `inner_batch_size` | 256 / 32 → 8 batches per pass |
+| `inner_epochs` | 4 → **32 updates per outer step** |
+| `drift_every` | 4 inner steps |
+| `ema_decay` | 0.995, constant |
+
+**The speedup is exactly `inner_epochs`, not the pool size.** 256 × 15 = 3,840 sims
+amortized over 32 updates = 120 sims/update, against the baseline's 480 — 4×. Over 100k
+steps that is 12.0M candidate sims instead of 48.0M. A larger pool does not change the
+ratio; only `inner_epochs` does.
+
+### Reading the drift metric
+
+The price of amortizing is staleness: the buffered context comes from weights up to 32
+updates old. So a frozen snapshot of the collector policy is kept for the whole inner loop
+and compared against the live one at matched inputs.
+
+A diffusion policy has no tractable `log π(a|s)` — sampling is an 8-step DDIM chain — so
+PPO's stored-logprob/ratio machinery does not apply. But for a fixed
+`(noisy_trajectory, timestep, obs, context)` the two snapshots' reverse transition kernels
+are Gaussians sharing the scheduler's model-independent variance, differing only in a mean
+that is affine in the predicted noise. Hence, exactly:
+
+```
+KL( p_old(a_{t-1}|·) ‖ p_θ(a_{t-1}|·) )  =  c(t) · ‖ε_θ − ε_old‖²
+```
+
+So **`train_drift_mse_eps` is a per-denoising-step KL**, at the cost of two extra forward
+passes and no sampling. Log keys:
+
+- `train_drift_mse_eps` — the primary signal. Plot it against `train_drift_inner_step`
+  (position within the inner loop). Flat ⇒ the buffered context is still effectively
+  on-policy and `inner_epochs` could go higher. Rising sharply by step 32 ⇒ the model is
+  training on context from a policy it no longer resembles; lower `inner_epochs` or the lr.
+- `train_drift_action_mse` — the same drift sampled in action space under a shared noise
+  seed (PushT pixel units, interpretable). Logged only on the sampling cadence, since it
+  costs two full sampling chains.
+
+Both run the live policy in `eval()` — with `p_drop_attn: 0.2` active the difference would
+otherwise be dominated by independent dropout draws rather than by real drift.
+
+Because the regression target is always the GT expert action, there is no importance weight
+to correct and no ratio to clip. "PPO-style" here means the monitoring and trust-region
+half of PPO, not its surrogate objective. To turn the diagnostic into a soft trust region,
+add `λ · train_drift_mse_eps` to the loss.
+
+### EMA
+
+EMA keeps a second copy of the weights updated after every optimizer step,
+
+```
+θ_ema ← d·θ_ema + (1−d)·θ
+```
+
+and **that copy is what gets evaluated and checkpointed** — rollouts, nRMSE, and every
+`step_*.ckpt` the `--watch` eval scores. It never receives gradients. The effective
+averaging window is `1/(1−d)`, so `ema_decay: 0.995` averages ~200 steps.
+
+Why it matters here specifically: each training sample draws one random timestep out of 100
+and one random noise vector, so consecutive gradients estimate different parts of the
+denoising problem (t≈90 is coarse structure, t≈5 is fine detail) and the live iterate
+rattles. That jitter is zero-mean and averaging cancels it. It also makes checkpoint
+selection more honest — `eval_search_pusht --watch` picks a winner from per-checkpoint
+scores, and noisy weights mean partly picking lucky noise.
+
+**The decay here is constant, unlike the rest of the repo.** `EMAModel`'s default is a
+warmup curve, `decay(step) = 1 − (1+step)^−0.75` capped at `max_value`
+([get_decay](diffusion_policy/model/diffusion/ema_model.py#L43)) — 0.405 at step 1, 0.99 at
+~460, 0.995 at ~1168, 0.999 at 10k; the upstream cap of 0.9999 needs 215k steps and is
+never reached. Two reasons not to use it: the averaging window becomes a function of where
+you are in the run, and the counter driving it **is not checkpointed**, so a resumed run
+re-enters the curve at step 0. Setting `min_value == max_value` clamps the curve flat, which
+is step-independent and identical across restarts. Override with
+`training.ema_decay=0.999` for a 1000-step window.
+
+### Changing the run length
+
+`training.max_gradient_steps` is the only knob. The outer loop is
+`while global_step < max_gradient_steps`; `num_inner = inner_epochs × ceil(outer_batch_size
+/ inner_batch_size)` and there is no outer-step constant at all. Cadences
+(`rollout_every_steps`, `val_every_steps`, `sample_every_steps`, `checkpoint_every`) are in
+gradient steps, and both the LR and EMA schedules are defined independently of the total.
+
+---
+
+## 7. Run output, resume, and disk
+
+**All run output goes to `/gscratch`, never home.** Home is a **10 GB hard quota** and one
+100k-step run writes 50 `step_*.ckpt` plus `latest.ckpt`, each holding the policy, AdamW's
+two moment buffers and the EMA copy — more than the entire quota on its own. The run
+*directory* lives there, not just a symlinked `checkpoints/`, so wandb files,
+`logs.json.txt` and the watcher's `bon_search/` all follow:
+
+```yaml
+output_root: ${oc.env:DP_OUTPUT_ROOT,/gscratch/robotics/harine/diffusion_policy_outputs}
+```
+
+Set `DP_OUTPUT_ROOT` to relocate. SLURM logs go to
+`/gscratch/robotics/harine/slurm_logs`. [`scripts/slurm/monitor_pusht_search.sh`](scripts/slurm/monitor_pusht_search.sh)
+warns if anything training-related starts accumulating in `data/outputs` on home.
+
+**Resuming requires naming the old run directory.** `training.resume: True` looks for
+`latest.ckpt` under the *current* Hydra output dir, and `hydra.run.dir` embeds
+`${now:...}` — a new timestamped directory on every launch. A plain re-submit therefore
+finds nothing and starts from scratch. The new workspace prints a loud warning when this
+happens; to actually continue:
+
+```bash
+sbatch --account=$A --partition=$P scripts/slurm/train_pusht_search.sbatch \
+  hydra.run.dir=$DP_OUTPUT_ROOT/<date>/<time>_<name>_<task>
+```
+
+What is and is not restored:
+
+- **Restored:** model and EMA weights, optimizer state, `global_step`, `epoch`, and the
+  `last_*_step` eval cadence counters. The normalizer is kept from the checkpoint rather
+  than recomputed, so resumed weights keep the scaling they were trained under.
+- **Rebuilt, but exactly:** the LR schedule. It is not checkpointed; it is reconstructed at
+  `last_epoch=global_step-1`, which is exact because
+  [`get_decay_then_constant_schedule`](diffusion_policy/model/common/lr_scheduler.py#L10-L31)
+  is a `LambdaLR` whose lambda is a closed-form function of the step index alone. This holds
+  provided the optimizer is restored *before* the scheduler is built (it supplies the
+  `initial_lr` that `LambdaLR` requires at `last_epoch != -1`) and `lr`, `lr_warmup_steps`,
+  `decay_steps` and `min_lr_ratio` are unchanged. `decay_then_constant` also ignores
+  `num_training_steps`, so the curve is independent of `max_gradient_steps` — that stops
+  being true if you switch to `cosine`/`linear`.
+- **Not restored:** RNG state. Diffusion noise and timestep draws repeat their opening
+  sequence, which is harmless (they are i.i.d. and carry no information). *Data selection*
+  repeating would not be, so the outer/inner workspace derives its pool and shuffle RNG
+  from **position** (`default_rng([seed, outer_idx])`) rather than from call count — a
+  resumed run draws the pool that outer step would have drawn anyway, instead of replaying
+  the pools of outer steps 0, 1, 2… `TrainOnlineSearchWorkspace` does *not* do this.
+- **Not restored:** the context buffer. A resume begins a fresh outer step, discarding at
+  most the tail of the interrupted inner loop.
+- `use_ema` cannot be flipped on resume — `load_payload` assigns into `self.__dict__` for
+  every saved `state_dict`, so a `use_ema: True` checkpoint needs a workspace that built an
+  `ema_model`.
+
+---
+
+## 8. Evaluation
+
+**Single rollout eval** (upstream script) — one rollout per held-out test reset:
+
+```bash
+python eval.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
+  -o data/pusht_eval_output -d cuda:0
+# -> eval_log.json (test/mean_score + rollout videos)
+```
+
+**Best-of-N** — roll each test reset out N times, report best-of-n and regret curves
+([`eval_bon.py`](eval_bon.py)):
+
+```bash
+python eval_bon.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
+  -o $DP_OUTPUT_ROOT/<run>/bon --n-samples 64 --n-envs 50
+# -> bon_summary.json, bon_rewards.npz, bon_curves.png
+```
+
+Success = `max_reward >= 1.0` (coverage ≥ 95%). Options: `--n-resets` (default all
+test resets), `--max-steps 300`, `--seed`.
+
+**Best-of-N contact sheet** — one mp4, resets as rows × samples as columns, each cell
+green-bordered on success ([`bon_video.py`](bon_video.py)):
+
+```bash
+python bon_video.py -c $DP_OUTPUT_ROOT/<run>/checkpoints/latest.ckpt \
+  -o $DP_OUTPUT_ROOT/<run>/bon --n-resets 5 --n-samples 8
+# -> bon_grid_5x8.mp4  (--reset-idxs 47,12,2,22,6 to pick specific resets)
+```
+
+### 8.1 Selection-criteria sweep (fixed n, six read-out rules)
+
+The sweep above varies `n`. This one holds `n` FIXED at 16 and varies how the executed
+candidate is picked out of the 16 that were generated and scored. All six are pure read-outs
+on trained weights — generation is byte-identical across them — so this isolates selection
+from everything else.
+
+Candidate order carries meaning: candidate *k* is conditioned on candidates 0..*k*-1, so the
+trailing candidates are the deeply-conditioned ones. That is what the six criteria separate:
+
+| criterion | rule | pool |
+|---|---|---|
+| `cand-last` | fixed index -1 | — |
+| `cand-8th-from-last` | fixed index -8 | — |
+| `argmax-all` | argmax verifier value | all 16 |
+| `argmax-last8` | argmax verifier value | last 8 |
+| `softmax-all` | softmax(z/T) | all 16 |
+| `softmax-last8` | softmax(z/T) | last 8 |
+
+The `cand-*` pair ignores the verifier entirely, so `(argmax-all − cand-last)` is what the
+ranking contributes on top of conditioning depth, and `(argmax-last8 − argmax-all)` says
+whether restricting the oracle to well-conditioned candidates helps or merely removes
+options.
+
+```bash
+python eval_search_pusht.py -c <run>/checkpoints/step_0020000.ckpt \
+  --criteria-sweep --criteria-n 16 --n-envs 50 --skip-val
+# -> <run>/criteria_search/step_0020000/<criterion>.json
+#    <run>/criteria_search/step_0020000/traces/<criterion>.npz
+#    <run>/criteria_search/criteria_curves.jsonl   (run-level index, one row per step+criterion)
+```
+
+Results go to `criteria_search/`, **not** `bon_search/`: these rows are keyed by criterion at
+fixed n rather than by n, so merging them would put two different experiments in one file.
+
+**Traces.** Each `.npz` holds the per-control-step search state — `scores` (n_episodes, T,
+16) for *every* candidate, `chosen_idx` (n_episodes, T) for the one executed, `step_reward`,
+and `valid_len` (episodes are padded to the longest in their chunk, with NaN, since every env
+keeps being stepped until all are done). `chosen_idx` is `-1` under `final_pass` (the executed
+action is not a candidate) and `-2` where the episode had already ended.
+
+The verifier value is ≤ 0 and *higher is better*. Which value depends on the run's
+`verifier_value` (`pusht_verifier.VALUE_FNS`):
+
+* `armT` — `-(mean per-keypoint distance of the T from the goal + arm distance to the T's
+  centre)`. Added 2026-08-19 and the default for new runs: without the approach term the
+  value is identical across candidates until the arm touches the block, so argmax ranked at
+  random on every approach step.
+* `t_goal` — `-(mean per-keypoint distance to the goal)` alone. What every run before that
+  date was trained on, and still the code default, so an old checkpoint re-evaluated with
+  no flag reproduces itself. Pass `--verifier-value` to `eval_search_pusht.py` to override;
+  results land in `bon_search_ver-<value>/` so the two never merge. It is stored exactly as produced; label plot axes accordingly rather than
+flipping the sign, so the stored array keeps agreeing with the `action_value*` series in the
+training logs.
+
+Validate a trace with `python scripts/check_criteria_traces.py <.../step_XXXXXXX>` — the
+load-bearing assertion is that `argmax-all`'s recorded `chosen_idx` equals
+`scores.argmax(-1)` at every step, which is the cheapest proof that the trace and the action
+actually executed correspond.
+
+On SLURM, one job per (run, checkpoint) runs all six criteria — they share a policy load and
+an env pool:
+
+```bash
+bash scripts/slurm/submit_criteria_sweep.sh          # safe to re-run as checkpoints appear
+DRY=1 bash scripts/slurm/submit_criteria_sweep.sh    # list what would be submitted
+```
+
+---
+
+## 9. SLURM
+
+[`job.sh`](job.sh) has a usable preamble (`module load conda; conda activate robodiff2`)
+but its body targets an unrelated `peg_insertion` experiment on another account/path —
+swap in one of the `python train.py ...` commands above and set your own
+`--account`/paths before submitting.
+```
