@@ -830,6 +830,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         n_latency_steps=0,
         seed=42,
         val_ratio=0.0,
+        val_dataset_dir: str = None,
         use_cache: bool = True,
         use_disk: bool = True,
         use_streaming: bool = False,
@@ -843,6 +844,30 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         if isinstance(dataset_class, str):
             dataset_class = eval(dataset_class)
         self.dataset_class = dataset_class
+        # Optional external validation set: validate on a SEPARATE dataset dir
+        # (e.g. the held-out testset) instead of a val_ratio split of the train
+        # data. When set, force val_ratio=0 so ALL train demos are used to train,
+        # and get_validation_dataset() returns the full external dataset.
+        self.val_dataset_dir = val_dataset_dir
+        if val_dataset_dir is not None:
+            val_ratio = 0.0
+        self._external_val = None
+        # NOTE: the external val set is loaded with use_cache=False, use_disk=False.
+        #  * use_cache=False: caching writes a cache zip INTO the .zarr dir (mutating
+        #    its mtime -> hash churn) and the two same-task runs (sub100/sub50) share
+        #    one testset, so concurrent cache builds race across NFS (FileLock is
+        #    unreliable there) and leave a corrupt partial zip.
+        #  * use_disk=False: load the val obs fully into MEMORY. Disk-backed
+        #    (memory-mapped) access does slow random reads per batch (~90s/batch on
+        #    the 599-ep testset), which made per-epoch validation take ~75 min. A
+        #    one-time in-memory read at init is fast thereafter.
+        self._val_build_kwargs = dict(
+            shape_meta=shape_meta, horizon=horizon, pad_before=pad_before,
+            pad_after=pad_after, n_obs_steps=n_obs_steps,
+            n_latency_steps=n_latency_steps, seed=seed, use_cache=False,
+            use_disk=False, return_sequences=return_sequences,
+            dataset_class=dataset_class, success_only=success_only,
+            success_reward_key=success_reward_key)
         # Handle different input formats
         if dataset_dir is not None:
             file_paths = discover_zarr_files(dataset_dir)
@@ -984,6 +1009,14 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
 
     def get_validation_dataset(self):
         """Create validation version of this multi-dataset wrapper."""
+        if getattr(self, 'val_dataset_dir', None) is not None:
+            # Validate on the FULL external dataset (e.g. the held-out testset),
+            # built once and cached. Its own val_dataset_dir is None (no recursion).
+            if self._external_val is None:
+                self._external_val = Sim2RealImageMultiDataset(
+                    dataset_dir=self.val_dataset_dir, val_ratio=0.0,
+                    val_dataset_dir=None, **self._val_build_kwargs)
+            return self._external_val
         if self.is_streaming:
             return self.streaming_dataset.get_validation_dataset()
 

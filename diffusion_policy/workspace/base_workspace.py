@@ -10,6 +10,53 @@ import torch
 import threading
 
 
+def clone_policy(policy):
+    """Deep-copy a policy WITHOUT duplicating its verifier.
+
+    ``policy.verifier`` owns heavyweight external state that must not be duplicated --
+    ``DQCVerifier`` holds a live flax/JAX agent plus its loaded checkpoint, and the maze /
+    PushT verifiers hold pools of worker subprocesses. ``copy.deepcopy`` would either
+    choke on those or silently create a second copy on every clone. The verifier carries
+    no policy state (it is handed the obs and the candidate chunk on each call), so every
+    clone shares the original one, and only the live model's ``close()`` is ever called.
+
+    Lives here rather than in one workspace because the outer/inner trainer needs it for
+    both its EMA copy and its frozen collector snapshot.
+    """
+    verifier = getattr(policy, 'verifier', None)
+    if verifier is None:
+        return copy.deepcopy(policy)
+    policy.verifier = None
+    try:
+        clone = copy.deepcopy(policy)
+    finally:
+        policy.verifier = verifier
+    clone.verifier = verifier
+    return clone
+
+
+def set_initial_lr(optimizer):
+    """Backfill ``initial_lr`` in every param group, if it is not already there.
+
+    A torch LRScheduler constructed with ``last_epoch >= 0`` (which is how every workspace
+    here resumes a step-indexed schedule) REQUIRES ``initial_lr`` in each param group, and
+    normally gets it from the optimizer state restored out of the checkpoint. But a
+    checkpoint written by a run launched with ``training.resume: False`` contains no
+    optimizer state at all, so relaunching that same output dir with ``resume: True``
+    used to die with::
+
+        KeyError: param 'initial_lr' is not specified in param_groups[0]
+                  when resuming an optimizer
+
+    Seeding it from the group's configured ``lr`` is exactly what the scheduler's own
+    ``last_epoch == -1`` path does, so a resumed schedule lands on the same LR it would
+    have had. Kept as a backfill (``setdefault``) so a genuinely restored optimizer state
+    always wins.
+    """
+    for group in optimizer.param_groups:
+        group.setdefault('initial_lr', group['lr'])
+
+
 class BaseWorkspace:
     include_keys = tuple()
     exclude_keys = tuple()
@@ -45,7 +92,7 @@ class BaseWorkspace:
         if include_keys is None:
             include_keys = tuple(self.include_keys) + ('_output_dir',)
 
-        path.parent.mkdir(parents=False, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             'cfg': self.cfg,
             'state_dicts': dict(),
@@ -63,13 +110,28 @@ class BaseWorkspace:
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
         if use_thread:
+            # Join the previous save before starting another. Without this, two saves
+            # close together (e.g. latest.ckpt then step_*.ckpt on the same step) run
+            # concurrently and race on the same file, and the handle was never joined at
+            # all -- so a run could exit with its last checkpoint truncated.
+            self.join_saving_thread()
             self._saving_thread = threading.Thread(
                 target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
             self._saving_thread.start()
         else:
             torch.save(payload, path.open('wb'), pickle_module=dill)
         return str(path.absolute())
-    
+
+    def join_saving_thread(self):
+        """Block until any in-flight threaded checkpoint save has finished.
+
+        Call at the end of ``run()``: the process exiting while a save is still writing
+        leaves that checkpoint truncated on disk.
+        """
+        if self._saving_thread is not None:
+            self._saving_thread.join()
+            self._saving_thread = None
+
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
 
@@ -122,7 +184,7 @@ class BaseWorkspace:
         Use save_checkpoint for long-term storage.
         """
         path = pathlib.Path(self.output_dir).joinpath('snapshots', f'{tag}.pkl')
-        path.parent.mkdir(parents=False, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self, path.open('wb'), pickle_module=dill)
         return str(path.absolute())
     

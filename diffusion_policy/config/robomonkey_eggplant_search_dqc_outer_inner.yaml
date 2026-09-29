@@ -1,0 +1,70 @@
+# Outer/inner trainer for the eggplant conditional-diffusion search policy.
+#
+# Same policy, same data, same loss as robomonkey_eggplant_search_dqc -- only the training
+# LOOP differs. The baseline regenerates the search context inside compute_loss on every
+# gradient step (max_actions-1 = 15 DDIM samples + 15 DQC verifier calls per batch, then
+# discarded). Here the context is generated once per outer step for a pool of
+# outer_batch_size windows and reused for inner_epochs passes, dividing the search cost
+# per update by exactly inner_epochs.
+#
+# The cost of that amortization is staleness -- the buffered context comes from weights up
+# to num_inner updates old -- so a frozen snapshot of the collector policy is kept and
+# train_drift_mse_eps reports how far the live policy has moved from it. For fixed
+# (noisy_trajectory, timestep, obs, context) the two snapshots' reverse kernels are
+# Gaussians sharing the scheduler's variance, so that MSE is proportional to the
+# per-denoising-step KL: the tractable stand-in for the policy KL PPO would monitor.
+#
+# NOTE the defaults order: `_self_` LAST, so this file's values win over the base. With
+# `_self_` first the base is applied afterwards and silently overrides everything it also
+# defines -- including `name` and, fatally, `_target_`.
+#
+# Run in the `dqc` conda env (the only one with both JAX and torch):
+#   python diffusion_policy/workspace/train_search_outer_inner_robomonkey_workspace.py \
+#     --config-name=robomonkey_eggplant_search_dqc_outer_inner
+defaults:
+  - robomonkey_eggplant_search_dqc
+  - _self_
+
+name: robomonkey_eggplant_search_dqc_outer_inner_noise${policy.obs_noise_level}
+_target_: diffusion_policy.workspace.train_search_outer_inner_robomonkey_workspace.TrainSearchOuterInnerRoboMonkeyWorkspace
+
+training:
+  # THE knob. Loop counts, the LR schedule and every cadence below are defined
+  # independently of it, so changing this changes the run length and nothing else.
+  max_gradient_steps: 20000
+
+  # STARTING POINT, not a measured optimum. The right outer_batch_size is set by DQC
+  # verifier throughput (how long one context buffer takes to fill) against how much
+  # staleness train_drift_mse_eps shows across the inner loop. Tune both on the first run.
+  outer_batch_size: 512    # windows whose context is generated per outer step
+  inner_batch_size: 256    # matches the offline arm's dataloader.batch_size
+  inner_epochs: 4          # 512/256 = 2 batches/epoch x 4 = 8 updates per outer step
+  drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
+
+  # Left False to match the offline arm, so the two are comparable and the loop is the
+  # only difference. The workspace implements EMA (the offline workspace does not -- there
+  # use_ema is a silent no-op, see AUDIT.md), so flipping this to True changes what gets
+  # rolled out and shipped, which is a separate experiment.
+  use_ema: False
+  # Constant, NOT the repo's warmup curve. EMAModel's default decay is a function of the
+  # step index, which makes the averaging window depend on where you are in the run -- and
+  # its counter is not checkpointed, so a resumed run re-enters the curve at 0. A flat
+  # decay is the same at every step and identical across restarts.
+  # 1/(1-0.995) = a 200-step averaging window throughout.
+  ema_decay: 0.995
+
+  # Cadences in GRADIENT STEPS, so they are unaffected by run length or by changes to
+  # inner_epochs / batch sizes. The offline arm mixes epoch-based val/sample with
+  # step-based checkpointing, which is why no rollout number there is reproducible from a
+  # checkpoint (AUDIT.md P1).
+  rollout_every_steps: 5000
+  val_every_steps: 1000
+  sample_every_steps: 1000
+  checkpoint_every: 1000   # -> 20 step_*.ckpt over the run
+
+  # The verifier is called max_actions times per window here, so this is not free.
+  nrmse_max_batches: 4
+  max_val_steps: 20
+
+logging:
+  tags: ["${name}", "${task_name}", "${exp_name}", "dqc", "outer_inner"]

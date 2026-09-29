@@ -7,6 +7,7 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+import math
 import os
 import hydra
 import torch
@@ -21,7 +22,7 @@ import numpy as np
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
 
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from diffusion_policy.workspace.base_workspace import BaseWorkspace, set_initial_lr
 from diffusion_policy.policy.mlp_image_policy import MLPImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -33,6 +34,18 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.common.sampler import get_collate_fn
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
+
+
+def _is_search_policy(policy) -> bool:
+    """Whether this policy exposes the best-of-n search interface.
+
+    One explicit capability check, in place of the ad-hoc `hasattr(policy, 'verifier')`
+    probes used elsewhere in this file. Search policies add `search_candidates` /
+    `predict_n_actions` on top of the standard `predict_action` contract; everything else
+    is driven through `predict_action` alone.
+    """
+    return hasattr(policy, 'search_candidates') and hasattr(policy, 'verifier')
+
 
 class TrainMLPImageWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch', 'last_checkpoint_step']
@@ -64,9 +77,27 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         self.accelerator = Accelerator(
             kwargs_handlers=[ddp_kwargs],
         )
-        # do not save optimizer if resume=False
-        if not cfg.training.resume:
-            self.exclude_keys = ['optimizer']
+        # NOTE: the optimizer is ALWAYS persisted. This used to be dropped when
+        # cfg.training.resume was False, but `resume` is a property of the LAUNCH, not of
+        # the checkpoint: relaunching that same output dir with resume=True then found no
+        # optimizer state and died with KeyError: 'initial_lr' while building the
+        # scheduler. A checkpoint should always be resumable; see set_initial_lr for the
+        # backfill that lets already-written optimizer-less checkpoints load too.
+
+    def _close_worker_pools(self, env_runner):
+        """Release any subprocess pools held by the policy's verifier and the env runner.
+
+        Best-effort: this runs during teardown (including after an exception), so a
+        failure to close must not mask the original error.
+        """
+        for owner in (self.accelerator.unwrap_model(self.model), env_runner):
+            close = getattr(owner, 'close', None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception as e:
+                print(f'warning: failed to close {type(owner).__name__}: {e}')
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -78,15 +109,32 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+            else:
+                # hydra.run.dir is timestamped in every config here, so a plain re-submit
+                # mints a NEW output dir and looks for latest.ckpt somewhere that cannot
+                # contain it -- silently starting over despite resume: True. Say so.
+                print(f"training.resume=True but no checkpoint found at "
+                      f"{lastest_ckpt_path} -- STARTING FROM SCRATCH. To continue a "
+                      f"previous run, relaunch with hydra.run.dir=<that run's output dir>.")
 
-        if cfg.checkpoint.get('pretrained_ckpt_path', None) is not None:
+        # Pretrained weights are the INITIALIZATION for a fresh finetune run only. If we
+        # just resumed, the resumed weights are strictly newer -- loading the pretrained
+        # ones on top would discard all progress while KEEPING the resumed optimizer
+        # state and global_step, so the run continues as though nothing happened. Every
+        # search config sets resume: True, so this fired on every restart.
+        if cfg.checkpoint.get('pretrained_ckpt_path', None) is not None \
+                and not checkpoint_loaded:
             pretrained_ckpt_path = pathlib.Path(
                 hydra.utils.to_absolute_path(cfg.checkpoint.pretrained_ckpt_path))
             if pretrained_ckpt_path.is_file():
                 print(f"Loading pretrained weights from {pretrained_ckpt_path}")
+                # include_keys=[] because it filters payload['pickles'], NOT state_dicts:
+                # ['model'] never selected the weights (those come from state_dicts and
+                # are governed by exclude_keys), it only let the pretrained run's
+                # global_step / epoch / last_checkpoint_step leak into this fresh run.
                 self.load_checkpoint(path=pretrained_ckpt_path,
                     exclude_keys=['optimizer'],
-                    include_keys=['model']
+                    include_keys=[]
                 )
             else:
                 # print(f"Pretrained checkpoint path {pretrained_ckpt_path} not found - skipping")
@@ -128,12 +176,20 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         # lr_decay_steps and then HOLDS constant at lr_end for the remaining steps.
         lr_decay_steps = cfg.training.get('lr_decay_steps', None)
         if lr_decay_steps is None:
-            lr_decay_steps = (
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every
+            # Optimizer steps, not batches. The epoch's final partial accumulation window
+            # is always flushed, so there are ceil(len/accum) steps per epoch -- floor
+            # division here left the schedule short by up to one step per epoch, and a
+            # cosine schedule then never reached its floor.
+            lr_decay_steps = math.ceil(
+                len(train_dataloader) / cfg.training.gradient_accumulate_every
+                ) * cfg.training.num_epochs
         _lsk = cfg.training.get('lr_scheduler_kwargs', None)
         lr_scheduler_kwargs = (OmegaConf.to_container(_lsk, resolve=True)
                                if _lsk is not None else {})
+        # Building at last_epoch >= 0 requires initial_lr in every param group. It is
+        # normally restored with the optimizer state; backfill it so a checkpoint written
+        # before optimizer state was persisted still resumes instead of raising KeyError.
+        set_initial_lr(self.optimizer)
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
@@ -199,7 +255,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     self.accelerator.unwrap_model(self.model).obs_encoder.requires_grad_(False)
 
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                n_batches = len(train_dataloader)
+                accumulate_every = cfg.training.gradient_accumulate_every
+                max_train_steps = cfg.training.max_train_steps
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
@@ -209,14 +268,33 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
                         # compute loss
                         raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
-                        loss = raw_loss / cfg.training.gradient_accumulate_every
+                        loss = raw_loss / accumulate_every
                         self.accelerator.backward(loss)
-                        if self.global_step % cfg.training.gradient_accumulate_every == 0:
+
+                        # Accumulation windows are counted in BATCHES. Keying them on
+                        # global_step (which counts optimizer steps) meant a counter could
+                        # not delimit its own windows: the window shifted by one every
+                        # epoch, the very first batch stepped on a single micro-batch, and
+                        # each epoch's final partial window was dropped with its gradients
+                        # leaking into the next epoch (zero_grad only ran inside the
+                        # branch). Inert while every config sets accumulate=1, but silently
+                        # wrong the moment one does not.
+                        is_last_batch = (batch_idx == (n_batches - 1)) or (
+                            max_train_steps is not None
+                            and batch_idx >= (max_train_steps - 1))
+                        is_optimizer_step = \
+                            ((batch_idx + 1) % accumulate_every == 0) or is_last_batch
+                        if is_optimizer_step:
                             if cfg.training.get('gradient_clip_norm', None) is not None:
                                 self.accelerator.clip_grad_norm_(self.model.parameters(), cfg.training.gradient_clip_norm)
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
+                            # global_step is exactly the number of optimizer steps taken.
+                            # That is what checkpoint_every, max_gradient_steps and the
+                            # step_*.ckpt names (which the eval/BoN scripts parse) mean.
+                            self.global_step += 1
+
                         raw_loss_cpu = raw_loss.item()
                         tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
                         train_losses.append(raw_loss_cpu)
@@ -227,17 +305,23 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
-                        if not is_last_batch:
+                        # The last batch's slot is left for the end-of-epoch summary log
+                        # at the same global_step, so wandb steps stay strictly increasing.
+                        if is_optimizer_step and not is_last_batch:
                             if self.accelerator.is_main_process:
                                 wandb_run.log(step_log, step=self.global_step)
                                 json_logger.log(step_log)
-                            self.global_step += 1
 
-                            # checkpoint based on gradient steps - check right after step increment
+                        # checkpoint on the gradient-step schedule
+                        if is_optimizer_step:
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                # Anchor BEFORE writing, so the value that lands inside the
+                                # checkpoint is the step it was taken at; setting it after
+                                # persists the previous anchor and a resumed run believes
+                                # it is overdue and fires an extra checkpoint immediately.
+                                self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:
@@ -251,11 +335,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
-                                # Update last checkpoint step
-                                self.last_checkpoint_step = self.global_step
-
-                        if (cfg.training.max_train_steps is not None) \
-                            and batch_idx >= (cfg.training.max_train_steps-1):
+                        if max_train_steps is not None \
+                            and batch_idx >= (max_train_steps - 1):
                             break
 
                 # at the end of each epoch
@@ -296,7 +377,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        obs_dict = batch['obs']
+                        # Copy, never mutate: train_sampling_batch is held on GPU for the
+                        # whole run, so an attention_mask inserted into its obs dict below
+                        # would stick there forever and be fed to every later epoch.
+                        obs_dict = dict(batch['obs'])
                         gt_action = batch['action'][
                             :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
                         ]
@@ -323,6 +407,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             step_log['train_action_mse_error_avg_unnormalized'] = avg_mse.mean().item()
                             step_log['train_action_mse_error_min_normalized'] = min_n.mean().item()
                             step_log['train_action_mse_error_avg_normalized'] = avg_n.mean().item()
+                            # RMSE = sqrt(per-sample MSE), then mean over batch.
+                            step_log['train_action_rmse_error_min_normalized'] = min_n.sqrt().mean().item()
+                            step_log['train_action_rmse_error_avg_normalized'] = avg_n.sqrt().mean().item()
+                            step_log['train_action_rmse_error_min_unnormalized'] = min_mse.sqrt().mean().item()
+                            step_log['train_action_rmse_error_avg_unnormalized'] = avg_mse.sqrt().mean().item()
                             step_log['train_action_value'] = values.mean().item()
                         else:
                             result = policy.predict_action(obs_dict)
@@ -343,7 +432,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 if (self.epoch % cfg.training.sample_every) == 0 and val_sampling_batch is not None:
                     with torch.no_grad():
                         batch = dict_apply(val_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        obs_dict = batch['obs']
+                        # copy, never mutate -- see the train sampling block above
+                        obs_dict = dict(batch['obs'])
                         gt_action = batch['action'][
                             :, policy.n_obs_steps-1:policy.n_obs_steps+policy.n_action_steps-1
                         ]
@@ -369,6 +459,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             step_log['val_action_mse_error_avg_unnormalized'] = avg_mse.mean().item()
                             step_log['val_action_mse_error_min_normalized'] = min_n.mean().item()
                             step_log['val_action_mse_error_avg_normalized'] = avg_n.mean().item()
+                            # RMSE = sqrt(per-sample MSE), then mean over batch.
+                            step_log['val_action_rmse_error_min_normalized'] = min_n.sqrt().mean().item()
+                            step_log['val_action_rmse_error_avg_normalized'] = avg_n.sqrt().mean().item()
+                            step_log['val_action_rmse_error_min_unnormalized'] = min_mse.sqrt().mean().item()
+                            step_log['val_action_rmse_error_avg_unnormalized'] = avg_mse.sqrt().mean().item()
                             step_log['val_action_value'] = values.mean().item()
                         else:
                             result = policy.predict_action(obs_dict)
@@ -391,8 +486,14 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
-                self.global_step += 1
+                # NOTE: global_step is deliberately NOT incremented here. It counts
+                # optimizer steps and is advanced only in the training loop; incrementing
+                # it per epoch as well drifted it +1/epoch away from the true step count,
+                # and from the step_*.ckpt names the eval/BoN scripts parse.
                 self.epoch += 1
+        # A threaded checkpoint save may still be in flight; without this the process can
+        # exit and leave the final checkpoint truncated.
+        self.join_saving_thread()
         # Guard: end_training() iterates self.accelerator.trackers, which is
         # only set inside init_trackers(); we never call it (no log_with=),
         # so skip cleanly on accelerate versions that don't lazy-init it.

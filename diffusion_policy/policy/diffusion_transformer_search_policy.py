@@ -602,7 +602,66 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
         return all_actions, all_values
 
-    def compute_loss(self, batch):
+    def generate_search_context(self, obs_dict, action=None):
+        """The search context ``compute_loss`` conditions on: ``(actions, values)``.
+
+        Split out so a trainer can generate the context ONCE for a pool of windows and
+        reuse it across several gradient steps (see TrainSearchOuterInnerWorkspace)
+        instead of paying for ``max_actions - 1`` candidate samples plus their verifier
+        calls on every update.
+
+        Deliberately ``no_grad`` rather than ``inference_mode``: inference tensors carry a
+        permanent restriction against taking part in autograd-recorded operations, which
+        makes them unsafe to buffer and feed to the model on a LATER step. ``no_grad``
+        yields ordinary tensors, so the returned context can be stored for as long as the
+        caller likes. The search builds no graph either way.
+
+        ``actions`` come back in RAW action units; normalization happens at the model
+        boundary, see ``_normalize_context_actions``.
+        """
+        search_obs = dict(obs_dict)
+        if action is not None:
+            search_obs['action'] = action
+        with torch.no_grad():
+            return self.search_candidates(
+                search_obs,
+                verifier=self.verifier,
+                n_actions=self.max_actions - 1,
+            )
+
+    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
+        """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
+
+        Used to compare two snapshots of this policy at matched inputs; see
+        ``SearchPolicyRoboMonkeyDiffusion.predict_epsilon`` for why the epsilon-space MSE
+        at matched inputs is proportional to the per-denoising-step KL. Obs corruption is
+        deliberately not applied (it would book corruption noise as policy drift), and the
+        obs are re-encoded here because the encoder is part of what drifts.
+        """
+        with torch.no_grad():
+            nobs = self.normalizer.normalize(batch['obs'])
+            To = self.n_obs_steps
+            B = next(iter(nobs.values())).shape[0]
+            this_nobs = dict_apply(
+                nobs, lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]))
+            obs_cond = self.obs_encoder(this_nobs).reshape(B, To, -1)
+            return self.model(
+                noisy_trajectory,
+                timesteps,
+                obs_cond=obs_cond,
+                actions=self._normalize_context_actions(actions),
+                values=values,
+            )
+
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+        """Denoising loss for the expert action, conditioned on a best-of-n search context.
+
+        ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the
+        form ``generate_search_context`` returns it; ``None`` generates it here, which is
+        the offline path that pays the full search cost on every gradient step.
+        ``return_aux`` additionally returns the exact denoiser inputs, so a frozen snapshot
+        can be re-run on identical inputs via ``predict_epsilon``.
+        """
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon, \
@@ -612,12 +671,8 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
         obs_cond = self.encode_obs_cond(batch['obs'])
 
-        with torch.inference_mode():
-            actions, values = self.search_candidates(
-                batch['obs'],
-                verifier=self.verifier,
-                n_actions=self.max_actions - 1,
-            )
+        if actions is None:
+            actions, values = self.generate_search_context(batch['obs'])
 
         trajectory = target_actions.unsqueeze(1).expand(
             -1,
@@ -666,5 +721,13 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
         loss = F.mse_loss(pred, target, reduction='none')
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        return loss.mean()
+        loss = reduce(loss, 'b ... -> b (...)', 'mean').mean()
+        if not return_aux:
+            return loss
+        # everything a frozen snapshot needs to reproduce this exact denoiser forward
+        return loss, {
+            'noisy_trajectory': noisy_trajectory,
+            'timesteps': timesteps,
+            'actions': actions,
+            'values': values,
+        }

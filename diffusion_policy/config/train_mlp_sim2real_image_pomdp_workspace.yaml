@@ -96,11 +96,13 @@ logging:
   group: null
 
 checkpoint:
-  topk:
-    monitor_key: train_action_mse_error
-    mode: min
-    k: 5
-    format_str: 'epoch={epoch:04d}-train_action_mse_error={train_action_mse_error:.3f}.ckpt'
+  # No topk/best checkpoint. TrainMLPImageWorkspace / TrainDiffusionUnetImageWorkspace
+  # never instantiate a TopKCheckpointManager, so this block only ever looked like model
+  # selection -- nothing read it and no best-metric checkpoint was written. It also could
+  # not have selected the right checkpoint if it had been wired up: it monitored a LOSS
+  # (train_loss / val_loss / train_action_mse_error), and on this task loss does not rank
+  # policies -- success rate does. Selection is done from real evaluation instead
+  # (scriptsv2/eval_search), against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 

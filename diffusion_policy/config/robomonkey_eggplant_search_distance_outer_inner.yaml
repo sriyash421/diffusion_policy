@@ -1,0 +1,218 @@
+# Eggplant conditional-diffusion SEARCH policy verified by a closed-form SHAPED
+# DISTANCE oracle instead of the learned DQC chunk critic, trained with the
+# outer/inner loop on the 50-demo strict-distance subset.
+#
+#   value = -( ||ee - eggplant|| + ||eggplant - basket|| )   after the 8-action chunk
+#
+# WHY a standalone config rather than `defaults: [robomonkey_eggplant_search_dqc]`:
+# hydra MERGES nested mappings, it does not replace them. Inheriting the DQC config
+# and rewriting `policy.verifier._target_` would leave that block's `ckpt_dir`,
+# `instruction`, `text_emb_file`, `critic_type`, `q_agg`, `score_full_horizon` and
+# `score_executed_chunk` in place, and DistanceVerifier.__init__ accepts none of them
+# -> TypeError several minutes into the run, after the dataset has loaded. Everything
+# else below is a deliberate copy of robomonkey_eggplant_search_dqc.yaml so the two
+# arms differ ONLY in the verifier.
+#
+# GEOMETRY (unchanged from the DQC arm): predict 8 actions from the current frame,
+# score all 8 as one chunk, execute the first 4, re-search. So `horizon` is the scored
+# window and `n_action_steps` is the executed one.
+#
+# Run in the `dqc_jax` env (no JAX needed here, but it is the env the launcher and the
+# rest of this pipeline use). Train:
+#   bash scriptsv2/train_search/launch_distance_search_sub50.sh
+defaults:
+  - _self_
+  - task: robomonkey_eggplant_state
+
+name: robomonkey_eggplant_search_distance
+_target_: diffusion_policy.workspace.train_search_outer_inner_robomonkey_workspace.TrainSearchOuterInnerRoboMonkeyWorkspace
+output_dir: null
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 8
+n_obs_steps: 1
+n_action_steps: 4      # rollout 4 of the 8 predicted, then recalculate
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+policy:
+  _target_: diffusion_policy.policy.search_policy_robomonkey.SearchPolicyRoboMonkeyDiffusion
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+    shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 8
+
+  n_layer: 4
+  n_cond_layers: 2
+  n_head: 4
+  n_emb: 256
+  p_drop_emb: 0.0
+  p_drop_attn: 0.2
+  causal_attn: False
+
+  corrupt_obs: True
+  obs_noise_level: 0.0
+
+  max_actions: 16
+
+  verifier:
+    _target_: diffusion_policy.policy.distance_verifier.DistanceVerifier
+    # Score the FULL predicted chunk (all 8), matching the DQC arm's
+    # score_full_horizon=True — the chunk starting at the current frame IS what the
+    # policy predicts, so the scored and predicted windows coincide.
+    horizon: ${horizon}
+    ee_key: end_effector_pose
+    object_key: insertive_asset_pose
+    target_key: receptive_asset_pose
+    # last_gripper_action is already in the task shape_meta, so this verifier needs no
+    # change to the policy's obs contract and the arm stays comparable to DQC.
+    # binary_contact is the truer signal but is not in shape_meta yet.
+    grasp_key: last_gripper_action
+    # MEASURED: last_gripper_action is {0.0, 0.996} on this dataset, so closed is
+    # POSITIVE and 0.5 splits it (fires on 55% of frames). The Bridge gripper<0
+    # convention gives a grasped fraction of exactly 0.000, which freezes the object
+    # and makes ||eggplant - basket|| identical across all candidates — the verifier
+    # would silently collapse to reach-only.
+    grasp_closed_is_negative: False
+    grasp_threshold: 0.5
+    # "chunk": the object accrues travel only over the steps the CANDIDATE's own
+    # gripper channel keeps it held, so a chunk that releases drops the eggplant at the
+    # point of release instead of carrying it to the end. "obs" freezes grasp at its
+    # value at time t and ignores the candidate's gripper entirely — kept as the
+    # ablation. The two are identical on any chunk whose gripper never toggles; the
+    # verifier's health check prints the release fraction so you can see which regime
+    # you are in.
+    grasp_mode: chunk
+    gripper_index: 6
+    gripper_closed_threshold: 0.5
+    w_reach: 1.0
+    w_place: 1.0
+    # DATASET CONSTANTS — overridden by the launcher from
+    # scriptsv2/train_search/calibrate_distance_verifier.py. The defaults here are
+    # deliberately the identity so an uncalibrated run announces itself in the log
+    # rather than quietly ranking candidates on a wrong length scale.
+    # PER-AXIS (x, y, z), not a scalar: the measured map on this data is
+    # diag(-0.61, -0.71, +0.73) — a 180-degree flip about z. A pooled scalar averages
+    # the two negative axes against the positive one and nearly cancels.
+    action_pos_scale: [1.0, 1.0, 1.0]
+    normalize: fixed
+    value_mean: 0.0
+    value_std: 1.0
+    health_check: True
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 256
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: polynomial
+  lr_warmup_steps: 500
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  freeze_encoder: False
+  tqdm_interval_sec: 1.0
+
+  max_gradient_steps: 20000
+
+  # Same outer/inner geometry as the DQC arm so wall-clock and drift stay comparable.
+  # 4 epochs x ceil(512/256) = 8 updates per outer step -> 2500 outer steps.
+  #
+  # NOTE the amortization argument is WEAKER here than on the DQC arm. There the
+  # verifier was the dominant term in step time, so reusing the context was nearly a
+  # 4x saving. This verifier is a handful of vector norms — essentially free — so what
+  # outer/inner still buys is 4x fewer DDIM candidate SAMPLES per update, and the
+  # staleness cost is unchanged. If train_drift_mse_eps climbs across the inner loop,
+  # this arm can afford inner_epochs=1 (i.e. the offline trainer) far more cheaply
+  # than the DQC arm could.
+  outer_batch_size: 512
+  inner_batch_size: 256
+  inner_epochs: 4
+  drift_every: 4
+
+  use_ema: False
+  ema_decay: 0.995
+
+  # Cadences in GRADIENT STEPS. checkpoint_every=1000 (not 5000) so a preempted run
+  # loses at most 1000 steps; the 5k/10k/15k/20k eval milestones are a subset of what
+  # this writes.
+  rollout_every_steps: 5000
+  val_every_steps: 1000
+  sample_every_steps: 1000
+  checkpoint_every: 1000
+
+  # The verifier is ~free here, so the normalized-RMSE readout can afford more batches
+  # than the DQC arm's 4. On a 50-demo set this is most of the val split anyway.
+  nrmse_max_batches: 8
+  max_val_steps: 20
+
+logging:
+  project: distance_search_sub50
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}", "distance_verifier", "outer_inner", "sub50"]
+  id: null
+  group: null
+
+checkpoint:
+  # No topk/best checkpoint, deliberately: it would monitor a LOSS, and loss does not
+  # rank policies on this task — success rate does. Selection is done from real
+  # evaluation (scriptsv2/eval_search) against checkpoints/step_*.ckpt.
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

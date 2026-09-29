@@ -7,6 +7,7 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
+import math
 import os
 import hydra
 import torch
@@ -22,7 +23,7 @@ import pickle
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
 
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from diffusion_policy.workspace.base_workspace import BaseWorkspace, set_initial_lr
 from diffusion_policy.policy.diffusion_unet_image_policy import (
     DiffusionUnetImagePolicy)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
@@ -71,37 +72,63 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             # mixed_precision=cfg.training.mixed_precision,
             kwargs_handlers=[ddp_kwargs]
         )
-        # do not save optimizer if resume=False
-        if not cfg.training.resume:
-            self.exclude_keys = ['optimizer']
+        # NOTE: the optimizer is ALWAYS persisted. This used to be dropped when
+        # cfg.training.resume was False, but `resume` is a property of the LAUNCH, not of
+        # the checkpoint: relaunching that same output dir with resume=True then found no
+        # optimizer state and died with KeyError: 'initial_lr' while building the
+        # scheduler. A checkpoint should always be resumable; see set_initial_lr for the
+        # backfill that lets already-written optimizer-less checkpoints load too.
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
 
         # resume training
+        checkpoint_loaded = False
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+                checkpoint_loaded = True
+            else:
+                # hydra.run.dir is timestamped in every config here, so a plain re-submit
+                # mints a NEW output dir and looks for latest.ckpt somewhere that cannot
+                # contain it -- silently starting over despite resume: True. Say so.
+                print(f"training.resume=True but no checkpoint found at "
+                      f"{lastest_ckpt_path} -- STARTING FROM SCRATCH. To continue a "
+                      f"previous run, relaunch with hydra.run.dir=<that run's output dir>.")
 
         # configure dataset
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer)
-        if cfg.training.use_ema:
-            self.ema_model.set_normalizer(normalizer)
+        # A resumed checkpoint's normalizer is the one its weights were trained under.
+        # Re-fitting it here (which this workspace did unconditionally, AFTER
+        # load_checkpoint) silently changes the input/output scaling mid-run -- and the
+        # statistics do move, because the dataset's split is derived at load time and
+        # discover_zarr_files() picks up whatever is in dataset_dir today. Matches the
+        # preserve-on-resume rule train_mlp_image_workspace already follows.
+        if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
+            print("Checkpoint loaded with normalizer - preserving existing normalizer statistics")
+        else:
+            print("Computing normalizer from dataset")
+            normalizer = dataset.get_normalizer()
+            self.model.set_normalizer(normalizer)
+            if cfg.training.use_ema:
+                self.ema_model.set_normalizer(normalizer)
 
         # configure lr scheduler
         # last_epoch=global_step-1 resumes the (step-indexed) schedule exactly.
+        # Building at last_epoch >= 0 requires initial_lr in every param group. It is
+        # normally restored with the optimizer state; backfill it so a checkpoint written
+        # before optimizer state was persisted still resumes instead of raising KeyError.
+        set_initial_lr(self.optimizer)
         if cfg.training.lr_scheduler == 'cosine_then_constant':
             # Cosine decay to a small floor by lr_decay_steps, then constant.
             # Decouples LR shape from epoch count, so extending a run (raising
@@ -118,9 +145,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 cfg.training.lr_scheduler,
                 optimizer=self.optimizer,
                 num_warmup_steps=cfg.training.lr_warmup_steps,
-                num_training_steps=(
-                    len(train_dataloader) * cfg.training.num_epochs) \
-                        // cfg.training.gradient_accumulate_every,
+                # Optimizer steps, not batches. The epoch's final partial accumulation
+                # window is always flushed, so there are ceil(len/accum) steps per epoch;
+                # floor division here left the schedule short by up to one step per epoch
+                # and a cosine schedule then never reached its floor.
+                num_training_steps=math.ceil(
+                    len(train_dataloader) / cfg.training.gradient_accumulate_every
+                    ) * cfg.training.num_epochs,
                 # pytorch assumes stepping LRScheduler every epoch
                 # however huggingface diffusers steps it every batch
                 last_epoch=self.global_step-1
@@ -195,7 +226,10 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     self.model.obs_encoder.requires_grad_(False)
 
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                n_batches = len(train_dataloader)
+                accumulate_every = cfg.training.gradient_accumulate_every
+                max_train_steps = cfg.training.max_train_steps
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
@@ -205,14 +239,32 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
                         # compute loss
                         raw_loss = self.accelerator.unwrap_model(self.model).compute_loss(batch)
-                        loss = raw_loss / cfg.training.gradient_accumulate_every
+                        loss = raw_loss / accumulate_every
                         self.accelerator.backward(loss)
-                        if self.global_step % cfg.training.gradient_accumulate_every == 0:
+
+                        # Accumulation windows are counted in BATCHES; keying them on
+                        # global_step (which counts optimizer steps) meant the counter
+                        # could not delimit its own windows, and each epoch's final
+                        # partial window was dropped with its gradients leaking into the
+                        # next epoch. Inert while every config sets accumulate=1.
+                        is_last_batch = (batch_idx == (n_batches - 1)) or (
+                            max_train_steps is not None
+                            and batch_idx >= (max_train_steps - 1))
+                        is_optimizer_step = \
+                            ((batch_idx + 1) % accumulate_every == 0) or is_last_batch
+                        if is_optimizer_step:
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
-                        if cfg.training.use_ema:
-                            ema.step(self.accelerator.unwrap_model(self.model))
+                            # EMA tracks OPTIMIZER steps, not batches -- otherwise its
+                            # decay schedule advances faster than the weights do.
+                            if cfg.training.use_ema:
+                                ema.step(self.accelerator.unwrap_model(self.model))
+                            # global_step is exactly the number of optimizer steps taken.
+                            # That is what checkpoint_every, max_gradient_steps and the
+                            # step_*.ckpt names (parsed by the eval/BoN scripts) mean.
+                            self.global_step += 1
+
                         raw_loss_cpu = raw_loss.item()
                         tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
                         train_losses.append(raw_loss_cpu)
@@ -223,17 +275,23 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
-                        if not is_last_batch:
+                        # The last batch's slot is left for the end-of-epoch summary log
+                        # at the same global_step, so wandb steps stay strictly increasing.
+                        if is_optimizer_step and not is_last_batch:
                             if self.accelerator.is_main_process:
                                 wandb_run.log(step_log, step=self.global_step)
                                 json_logger.log(step_log)
-                            self.global_step += 1
 
-                            # checkpoint based on gradient steps - check right after step increment
+                        if is_optimizer_step:
+                            # checkpoint on the gradient-step schedule
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                # Anchor BEFORE writing, so the value inside the checkpoint
+                                # is the step it was taken at; setting it after persists
+                                # the previous anchor and a resumed run fires an extra
+                                # checkpoint on its first step.
+                                self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:
@@ -247,9 +305,6 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                 self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
-                                # Update last checkpoint step
-                                self.last_checkpoint_step = self.global_step
-
                             # Hard stop at the gradient-step cap (if set), after
                             # this step's checkpoint has been written.
                             if max_grad_steps is not None \
@@ -257,8 +312,8 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                 should_stop = True
                                 break
 
-                        if (cfg.training.max_train_steps is not None) \
-                            and batch_idx >= (cfg.training.max_train_steps-1):
+                        if max_train_steps is not None \
+                            and batch_idx >= (max_train_steps - 1):
                             break
 
                 # at the end of each epoch
@@ -330,7 +385,10 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 if self.accelerator.is_main_process:
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
-                self.global_step += 1
+                # NOTE: global_step is deliberately NOT incremented here. It counts
+                # optimizer steps and is advanced only in the training loop; incrementing
+                # it per epoch as well drifted it +1/epoch away from the true step count,
+                # and from the step_*.ckpt names the eval/BoN scripts parse.
                 self.epoch += 1
                 if should_stop:
                     break
@@ -340,8 +398,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # final step). Join any in-flight async save first to avoid racing the
         # same file.
         if self.accelerator.is_main_process:
-            if self._saving_thread is not None:
-                self._saving_thread.join()
+            self.join_saving_thread()
             model_ddp = self.model
             self.model = self.accelerator.unwrap_model(self.model)
             self.save_checkpoint(use_thread=False)

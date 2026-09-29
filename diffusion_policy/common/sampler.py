@@ -11,7 +11,10 @@ def create_indices(
     episode_mask: np.ndarray,
     pad_before: int=0, pad_after: int=0,
     debug:bool=True, return_sequences: bool = False) -> np.ndarray:
-    episode_mask.shape == episode_ends.shape        
+    # A bare expression here silently accepted a mismatched mask, which then either
+    # indexes out of range or under-iterates -- i.e. trains on a different set of
+    # episodes than the split intended, with nothing to notice it.
+    assert episode_mask.shape == episode_ends.shape
     pad_before = min(max(pad_before, 0), sequence_length-1)
     pad_after = min(max(pad_after, 0), sequence_length-1)
 
@@ -187,12 +190,12 @@ class SequenceSampler:
                 k_data = min(self.key_first_k[key], n_data)
                 # fill value with Nan to catch bugs
                 # the non-loaded region should never be used
-                sample = np.full((n_data,) + input_arr.shape[1:], 
+                sample = np.full((n_data,) + input_arr.shape[1:],
                     fill_value=np.nan, dtype=input_arr.dtype)
-                try:
-                    sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-                except Exception as e:
-                    import pdb; pdb.set_trace()
+                # No try/except: this used to drop into pdb, which under a
+                # num_workers>0 DataLoader hangs the worker on a stdin read instead of
+                # surfacing the error. Let it propagate.
+                sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
             data = sample
             if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
                 data = np.zeros(

@@ -406,7 +406,29 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch):
+    def generate_search_context(self, obs_dict, action=None):
+        """The search context ``compute_loss`` conditions on: ``(actions, values)``.
+
+        Same contract as ``SearchPolicyRoboMonkeyDiffusion.generate_search_context`` -- see
+        there for why this is ``no_grad`` and not ``inference_mode`` (buffered inference
+        tensors cannot legally be fed to an autograd-recorded op on a later step).
+        """
+        search_obs = dict(obs_dict)
+        if action is not None:
+            search_obs['action'] = action
+        with torch.no_grad():
+            return _run_search(self, search_obs, self.max_actions - 1)
+
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+        """NLL of the expert action under a best-of-n search context.
+
+        ``actions``/``values`` optionally supply a PRE-GENERATED context (see
+        ``generate_search_context``); ``None`` generates it here, which is the offline path.
+        ``return_aux`` is accepted for interface parity with the diffusion search policies,
+        but this head is Gaussian rather than a denoiser, so there is no
+        ``(noisy_trajectory, timestep)`` to reproduce and no ``predict_epsilon`` to feed --
+        the aux dict carries only the context.
+        """
         nobs = self.normalizer.normalize(batch['obs'])
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
@@ -429,10 +451,9 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         obs_features = nobs_features.reshape(B, -1)
         obs_features = self.obs_projection(obs_features) # B, hidden_dim
 
-        with torch.inference_mode():
-            actions, values = _run_search(
-                self, batch['obs'], self.max_actions - 1,
-            ) # B, max_actions, horizon*action_dim and B, max_actions
+        if actions is None:
+            actions, values = self.generate_search_context(batch['obs'])
+        raw_actions = actions
 
         actions = self._normalize_context_actions(actions)
         actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
@@ -465,7 +486,9 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             logp_pi = dist.log_prob(a_pi_n).sum(dim=(-1, -2))        # (B, ma)
             loss_pg = -(adv * logp_pi).mean()
             loss = loss + self._pg_lambda * loss_pg
-        return loss
+        if not return_aux:
+            return loss
+        return loss, {'actions': raw_actions, 'values': values}
 
 
 class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
@@ -764,7 +787,80 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
 
         return all_actions, all_values
 
-    def compute_loss(self, batch):
+    def generate_search_context(self, obs_dict, action=None):
+        """The search context ``compute_loss`` conditions on: ``(actions, values)``.
+
+        Exactly the search the training loss runs, split out so a trainer can generate the
+        context ONCE for a pool of windows and reuse it across several gradient steps (see
+        TrainSearchOuterInnerRoboMonkeyWorkspace) instead of paying for ``max_actions - 1`` candidate
+        samples plus their verifier calls on every update.
+
+        ``action`` is the expert action, passed through so ground-truth verifiers (e.g.
+        MSEVerifier) can read it; verifiers that ignore it are unaffected.
+
+        Deliberately ``no_grad`` rather than ``inference_mode``: inference tensors carry a
+        permanent restriction against taking part in autograd-recorded operations, which
+        makes them unsafe to buffer and feed to the model on a LATER step. ``no_grad``
+        yields ordinary tensors, so the returned context can be stored for as long as the
+        caller likes. The search builds no graph either way.
+
+        ``actions`` come back in RAW action units (the verifier scores them there); the
+        normalization the model needs happens at the model boundary, see
+        ``_normalize_context_actions``.
+        """
+        search_obs = dict(obs_dict)
+        if action is not None:
+            search_obs['action'] = action
+        with torch.no_grad():
+            return _run_search(self, search_obs, self.max_actions - 1)
+
+    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
+        """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
+
+        Used to compare two snapshots of this policy at matched inputs. For a fixed
+        ``(noisy_trajectory, timestep, obs, context)`` the two snapshots' reverse
+        transition kernels are Gaussians whose variance comes from the scheduler and so is
+        identical between them; they differ only in a mean that is affine in the predicted
+        noise. Their KL is therefore proportional to ``||eps_a - eps_b||^2``, which makes
+        epsilon-space MSE at matched inputs a per-denoising-step KL -- the tractable stand-in
+        for the policy KL that PPO would monitor (a diffusion policy has no closed-form
+        ``log p(a|s)`` to take a ratio of).
+
+        Obs corruption is deliberately NOT applied: ``corrupt_obs_features`` draws fresh
+        noise per call, so including it would book corruption noise as policy drift. The
+        obs ARE re-encoded from ``batch`` rather than taken from the caller, because the
+        obs encoder is part of what drifts and each snapshot must use its own.
+        """
+        with torch.no_grad():
+            nobs = self.normalizer.normalize(batch['obs'])
+            To = self.n_obs_steps
+            B = next(iter(nobs.values())).shape[0]
+            this_nobs = dict_apply(
+                {k: nobs[k] for k in self._state_keys},
+                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]),
+            )
+            obs_cond = self.obs_encoder(this_nobs).reshape(B, To, -1)
+            return self.model(
+                noisy_trajectory,
+                timesteps,
+                obs_cond=obs_cond,
+                actions=self._normalize_context_actions(actions),
+                values=values,
+            )
+
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+        """Denoising loss for the expert action, conditioned on a best-of-n search context.
+
+        ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the form
+        ``generate_search_context`` returns it. ``None`` (the default) generates it here from
+        the current weights -- the offline path, which pays the full search cost on every
+        gradient step. A trainer that amortizes the search across several updates passes the
+        buffered context back in instead.
+
+        ``return_aux`` additionally returns the exact inputs the denoiser was called with,
+        so a frozen snapshot of this policy can be re-run on identical inputs via
+        ``predict_epsilon``; matched inputs are what make that comparison a KL.
+        """
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon, \
@@ -774,13 +870,9 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
 
         obs_cond = self.encode_obs_cond(batch['obs'])
 
-        with torch.inference_mode():
-            # Pass the expert action alongside obs so verifiers that score
-            # against ground truth (e.g. MSEVerifier) can read it.
-            actions, values = _run_search(
-                self, {**batch['obs'], 'action': batch['action']},
-                self.max_actions - 1,
-            )
+        if actions is None:
+            actions, values = self.generate_search_context(
+                batch['obs'], action=batch['action'])
 
         trajectory = target_actions.unsqueeze(1).expand(
             -1,
@@ -879,7 +971,15 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
                 mse2 = reduce(F.mse_loss(pred2, tgt2, reduction='none'), 'b ... -> b', 'mean')
                 loss_pg = (adv * mse2).mean()
                 loss = loss + self._pg_lambda * loss_pg
-        return loss
+        if not return_aux:
+            return loss
+        # everything a frozen snapshot needs to reproduce this exact denoiser forward
+        return loss, {
+            'noisy_trajectory': noisy_trajectory,
+            'timesteps': timesteps,
+            'actions': actions,
+            'values': values,
+        }
 
 
 class BCSearchWrapper(nn.Module):
@@ -1250,7 +1350,31 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             )
         return all_actions, all_values
 
-    def compute_loss(self, batch):
+    def generate_search_context(self, obs_dict, action=None):
+        """Not supported for the noise-conditioned variant.
+
+        This class draws a fresh ``tcont`` per batch and uses that SAME value both to noise
+        the encoded state and to generate the search context, so the candidates and the
+        observation they were produced from share one noise level (see ``compute_loss``).
+        A buffered context breaks that coupling: the context would carry the ``tcont`` of
+        the outer step while the obs it is paired with is re-encoded at a freshly drawn one.
+
+        Raising is deliberate. Inheriting the parent's implementation would silently drop
+        the ``tcont`` argument and train on mismatched pairs with no error. Buffering
+        ``tcont`` alongside the context would fix it, but that is a change to what this
+        variant measures and should be a deliberate decision, not a side effect.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support a buffered search context: its "
+            "tcont noise level couples the context to the observation encoding, and "
+            "buffering one without the other trains on mismatched pairs. Train this "
+            "variant with TrainMLPImageWorkspace (context regenerated per step).")
+
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
+        if actions is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__} cannot consume a pre-generated search context; "
+                "see generate_search_context.")
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
         assert T == self.horizon
