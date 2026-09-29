@@ -1,6 +1,6 @@
 name: procgen_maze
 
-image_shape: &image_shape [3, 11, 11]
+image_shape: &image_shape [3, 23, 23]
 shape_meta: &shape_meta
   obs:
     image:
@@ -22,7 +22,8 @@ env_runner:
 
 dataset:
   _target_: diffusion_policy.dataset.sim2real_image_dataset.Sim2RealImageMultiDataset
-  dataset_dir: data/procgen_maze_expert
+  dataset_dir: data/procgen_maze_expert_maze1
+  split_file: diffusion_policy/config/splits/procgen_maze1_inner50.json
   use_streaming: false
   samples_per_file_multiplier: 1.0
   shape_meta: *shape_meta

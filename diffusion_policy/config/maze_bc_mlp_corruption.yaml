@@ -25,6 +25,9 @@ policy:
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
     shape_meta: ${shape_meta}
+    # Flatten the maze image too (this FlattenObsEncoder skips rgb by default); the
+    # maze arms on harine/maze were trained on image + agent_pos + goal_pos.
+    flatten_image_types: True
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}

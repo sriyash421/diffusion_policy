@@ -25,6 +25,9 @@ policy:
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
     shape_meta: ${shape_meta}
+    # Flatten the maze image too (this FlattenObsEncoder skips rgb by default); the
+    # maze arms on harine/maze were trained on image + agent_pos + goal_pos.
+    flatten_image_types: True
 
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
@@ -52,7 +55,7 @@ policy:
   corrupt_obs: False
 
   max_actions: 16
-  maze_path: null
+  maze_path: data/procgen_maze_expert_maze1/maze.npy
   device: ${training.device}
 
 dataloader:

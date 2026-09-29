@@ -99,9 +99,7 @@ class SearchPolicy(ObsCorruptionMixin, CropScopeMixin, SearchProcedureMixin, Bas
             print("Corrupting obs with a separate noise scheduler")
 
     def _build_verifier(self, **kwargs):
-        """`l2s` is imported here, not at module scope, so this module stays importable in
-        environments that lack the maze-only package."""
-        from l2s.verifier import MazeVerifier
+        from diffusion_policy.common.maze_verifier import MazeVerifier
         return MazeVerifier(
             maze_path=kwargs.get('maze_path', None),
             device=kwargs.get('device', 'cpu'),
