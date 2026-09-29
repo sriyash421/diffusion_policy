@@ -71,7 +71,10 @@ policy:
   n_emb: 256
   p_drop_emb: 0.0
   p_drop_attn: 0.2
-  causal_attn: False
+  # Same ST as maze / PushT: causal GPT-2 over the obs+context memory, causal decoder.
+  # Checkpoints are not interchangeable with cond_encoder: transformer / causal_attn: False.
+  causal_attn: True
+  cond_encoder: gpt2
 
   # No-noise search policy (override on the command line for a sweep).
   corrupt_obs: True

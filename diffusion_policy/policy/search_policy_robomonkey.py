@@ -17,6 +17,12 @@ from transformers import GPT2Config, GPT2Model
 
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 
+import numpy as np
+
+# SeedSequence keys that separate the per-episode noise streams (see set_sample_seeds).
+_SEED_KEY_CANDIDATE = 0
+_SEED_KEY_OBS = 1
+
 
 def _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps):
     """Derive the chunk-sum verifier's scoring window from the policy.
@@ -343,7 +349,9 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
-            n_actions
+            n_actions,
+            return_scores: bool = False,
+            return_subgoals: bool = False,
     ):
         actions = None
         values = None
@@ -361,7 +369,13 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
             else:
                 actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                 values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        return actions, values # B, n_actions, horizon, action_dim and B, n_actions
+        # (actions, values[, scores][, subgoals]), as SearchProcedureMixin.search_candidates
+        out = (actions, values) # B, n_actions, horizon, action_dim and B, n_actions
+        if return_scores:
+            out = out + (values,)
+        if return_subgoals:
+            out = out + (None,)
+        return out
 
     @torch.inference_mode()
     def predict_n_actions(
@@ -502,6 +516,10 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         for the verifier and never enter the policy's obs encoder.
     """
 
+    # The eval harness seeds candidate + obs-corruption noise per episode via
+    # set_sample_seeds (see _candidate_noise / corrupt_obs_features).
+    supports_sample_seeds = True
+
     def __init__(
             self,
             shape_meta: dict[str, Any],
@@ -556,6 +574,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         self._pg_lambda = float(pg_lambda)
         self._pg_mode = str(pg_mode)
 
+        # Same network as the maze / PushT search transformer. cond_encoder and
+        # context_decay default to the pre-unification values so old checkpoints rebuild.
         self.model = SearchTransformerForDiffusion(
             action_dim=action_dim,
             obs_feature_dim=obs_feature_dim,
@@ -569,6 +589,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             p_drop_emb=p_drop_emb,
             p_drop_attn=p_drop_attn,
             causal_attn=causal_attn,
+            cond_encoder=kwargs.get('cond_encoder', 'transformer'),
+            context_decay=kwargs.get('context_decay', 1.0),
         )
 
         if num_inference_steps is None:
@@ -586,6 +608,43 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         if corrupt_obs:
             level_str = "random" if obs_noise_level is None else f"fixed={obs_noise_level}"
             print(f"Corrupting obs with a separate noise scheduler (level={level_str})")
+        # Eval-only switch: False feeds clean obs at eval even when the policy was trained
+        # with a fixed obs_noise_level. Set by the eval harness (--obs-corruption clean).
+        self.corrupt_obs_eval = True
+        # Per-episode sampling seeds, set by the eval harness (set_sample_seeds). None ->
+        # global RNG, which is what training uses.
+        self._sample_seeds = None
+
+    def set_sample_seeds(self, seeds):
+        """Make eval noise a pure function of (episode seed, candidate index).
+
+        ``seeds`` is one int per batch row (None restores the global RNG). Both the
+        initial diffusion noise and the obs-corruption noise are then drawn from per-row
+        CPU generators, so a row's samples do not depend on its batch position, on how
+        many other envs are active, or on the device. DDIM (eta=0) draws nothing else.
+        """
+        self._sample_seeds = None if seeds is None else [int(s) for s in seeds]
+
+    def _seeded_randn(self, shape, key, device, dtype):
+        """(B, *shape) standard normal; row b is drawn from SeedSequence([seed_b, *key])."""
+        rows = []
+        for base in self._sample_seeds:
+            g = torch.Generator()
+            g.manual_seed(int(np.random.SeedSequence([base, *key]).generate_state(1)[0]))
+            rows.append(torch.randn(tuple(shape), generator=g, dtype=torch.float32))
+        return torch.stack(rows).to(device=device, dtype=dtype)
+
+    def _check_seed_rows(self, batch_size):
+        assert len(self._sample_seeds) == batch_size, (
+            f'set_sample_seeds got {len(self._sample_seeds)} seeds, batch is {batch_size}')
+
+    def _candidate_noise(self, index, batch_size, device, dtype):
+        """Seeded initial noise for candidate ``index`` of this decision, or None."""
+        if self._sample_seeds is None:
+            return None
+        self._check_seed_rows(batch_size)
+        return self._seeded_randn(
+            (self.horizon, self.action_dim), (_SEED_KEY_CANDIDATE, int(index)), device, dtype)
 
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
@@ -610,14 +669,20 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
         # Tunable mode (obs_noise_level set): apply the configured level at
         # both train and eval — `obs_noise_level` in [0, 1] maps to a discrete
         # DDPM timestep. Random mode (None): random timestep at train time only,
-        # eval is clean.
+        # eval is clean. corrupt_obs_eval=False also makes the tunable mode clean at eval.
         if not self.corrupt_obs:
             return obs_features
-        if self.obs_noise_level is None and not self.training:
+        if not self.training and (self.obs_noise_level is None or not self.corrupt_obs_eval):
             return obs_features
 
-        obs_noise = torch.randn_like(obs_features)
         bsz = obs_features.shape[0]
+        if self._sample_seeds is not None and not self.training:
+            self._check_seed_rows(bsz)
+            obs_noise = self._seeded_randn(
+                obs_features.shape[1:], (_SEED_KEY_OBS,),
+                obs_features.device, obs_features.dtype)
+        else:
+            obs_noise = torch.randn_like(obs_features)
         max_t = self.obs_noise_scheduler.config.num_train_timesteps
         if self.obs_noise_level is None:
             timesteps = torch.randint(
@@ -702,9 +767,13 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             actions: Optional[torch.Tensor] = None,
             values: Optional[torch.Tensor] = None,
             noise: Optional[torch.Tensor] = None,
+            obs_cond: Optional[torch.Tensor] = None,
         ) -> Dict[str, torch.Tensor]:
+        """``obs_cond`` is an already-encoded (and, if enabled, corrupted) obs; the search
+        loop encodes once per decision so every candidate sees the same observation."""
         assert 'past_action' not in obs_dict
-        obs_cond = self.encode_obs_cond(obs_dict)
+        if obs_cond is None:
+            obs_cond = self.encode_obs_cond(obs_dict)
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
             actions=self._normalize_context_actions(actions),
@@ -722,15 +791,32 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             'action_pred': action_pred,
         }
 
+    def _init_candidate_noise(self, noise_seq, index, obs_cond):
+        """Candidate ``index``'s initial noise: ``noise_seq`` if given, else the per-episode
+        seeded stream, else None (global RNG)."""
+        if noise_seq is not None:
+            return noise_seq[index]
+        return self._candidate_noise(index, obs_cond.shape[0], obs_cond.device, obs_cond.dtype)
+
     def search_candidates(
             self,
             obs_dict: Dict[str, torch.Tensor],
             verifier,
             n_actions,
             noise_seq: Optional[torch.Tensor] = None,
+            return_scores: bool = False,
+            return_subgoals: bool = False,
+            obs_cond: Optional[torch.Tensor] = None,
         ):
-        # noise_seq: optional (n_actions, B, horizon, action_dim) per-candidate init
-        # noise. Candidate i uses noise_seq[i] (else the seeded global RNG).
+        """``n_actions`` candidates, each conditioned on the previous ones.
+
+        Returns ``(actions, values[, scores][, subgoals])``, the same tuple contract as the
+        maze / PushT ``SearchProcedureMixin.search_candidates``: ``scores`` is the verifier
+        value itself (the context here is scalar) and ``subgoals`` is always None.
+        ``noise_seq``: optional (n_actions, B, horizon, action_dim) initial noise.
+        """
+        if obs_cond is None:
+            obs_cond = self.encode_obs_cond(obs_dict)
         actions = None
         values = None
         for _i in range(n_actions):
@@ -738,7 +824,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
                 obs_dict,
                 actions=actions,
                 values=values,
-                noise=(noise_seq[_i] if noise_seq is not None else None),
+                noise=self._init_candidate_noise(noise_seq, _i, obs_cond),
+                obs_cond=obs_cond,
             )['action_pred']
             new_value = verifier.get_value(obs_dict, new_action)
             if actions is None:
@@ -747,7 +834,12 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             else:
                 actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                 values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        return actions, values
+        out = (actions, values)
+        if return_scores:
+            out = out + (values,)
+        if return_subgoals:
+            out = out + (None,)
+        return out
 
     @torch.inference_mode()
     def predict_n_actions(
@@ -757,15 +849,17 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             n_actions,
             noise_seq: Optional[torch.Tensor] = None,
         ):
-        # noise_seq: optional (n_actions, B, horizon, action_dim) per-candidate init
-        # noise (see conditional_sample). Drives per-env-seeded candidate generation
-        # so tiled/batched rollouts are reproducible + decorrelated across episodes.
+        # n_actions > max_actions slides a (max_actions - 1) context window. The obs is
+        # encoded once for the whole decision, and candidate j's noise is keyed on j.
+        obs_cond = self.encode_obs_cond(obs_dict)
         if n_actions <= self.max_actions:
-            return self.search_candidates(obs_dict, verifier, n_actions, noise_seq=noise_seq)
+            return self.search_candidates(
+                obs_dict, verifier, n_actions, noise_seq=noise_seq, obs_cond=obs_cond)
 
         actions, values = self.search_candidates(
             obs_dict, verifier, self.max_actions,
-            noise_seq=(noise_seq[:self.max_actions] if noise_seq is not None else None))
+            noise_seq=(noise_seq[:self.max_actions] if noise_seq is not None else None),
+            obs_cond=obs_cond)
         all_actions = actions.clone()
         all_values = values.clone()
 
@@ -776,7 +870,8 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
                 obs_dict,
                 actions=action_history,
                 values=value_history,
-                noise=(noise_seq[_j] if noise_seq is not None else None),
+                noise=self._init_candidate_noise(noise_seq, _j, obs_cond),
+                obs_cond=obs_cond,
             )['action_pred']
             new_value = verifier.get_value(obs_dict, new_action)
 
@@ -1155,6 +1250,10 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
     action.
     """
 
+    # Its own search_candidates / encode_obs_cond do not use the per-episode seed streams,
+    # so the eval harness falls back to seeding the global RNG for it.
+    supports_sample_seeds = False
+
     def __init__(
             self,
             *args,
@@ -1293,6 +1392,8 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             verifier,
             n_actions,
             tcont_context: Optional[torch.Tensor] = None,
+            return_scores: bool = False,
+            return_subgoals: bool = False,
         ):
         actions = None
         values = None
@@ -1310,7 +1411,12 @@ class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
             else:
                 actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                 values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        return actions, values
+        out = (actions, values)
+        if return_scores:
+            out = out + (values,)
+        if return_subgoals:
+            out = out + (None,)
+        return out
 
     @torch.inference_mode()
     def predict_n_actions(
