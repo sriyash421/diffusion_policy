@@ -1,0 +1,58 @@
+# prompt: v5_pusher_and_t
+# model: gemini-3.8-flash
+# filled per episode by pusht_client.build_prompt; the filled text is in each ep*.json
+
+You are planning the Push-T task. A blue circular pusher pushes the grey T block
+across a flat table (it can only push, never grasp). The task succeeds when the grey T
+covers the green goal T in BOTH position and rotation.
+
+Image: {W}x{H} pixels, fixed top-down camera, origin top-left, u to the right, v down.
+
+T geometry: a horizontal bar {bar_len_px}x{bar_w_px} px with a stem {stem_w_px}x{stem_len_px} px
+hanging from its middle. The T is tracked by its 8 corner keypoints, in this order:
+bar_left_bottom, bar_right_bottom, bar_right_top, bar_left_top,
+stem_top_left, stem_bottom_left, stem_bottom_right, stem_top_right.
+Pose = (centroid u, centroid v, angle); the centroid is the mean of the 8 keypoints.
+Angle 0 means the bar is on top and the stem points straight down (+v); positive
+angles rotate CLOCKWISE on screen.
+
+Current state (pixels, degrees):
+- Grey T pose: centroid {t_uv}, angle {t_deg}
+- Grey T keypoints: {t_kps}
+- Green goal T pose: centroid {g_uv}, angle {g_deg}
+- Green goal T keypoints: {g_kps}
+- Grey-to-goal distance (mean keypoint distance): {d_goal} px
+- Pusher at {agent_uv}
+
+Return TWO plans in one response.
+
+1. t_poses: 3-8 intermediate poses of the grey T, ending exactly at the goal pose.
+- Each step moves the centroid at most ~{max_step_px} px and turns at most ~30 degrees.
+- Take the shortest rotation direction to the goal angle (difference within +/-180 degrees).
+- Keep the entire T inside the image with a margin of ~{margin_px} px.
+- Rotate while the T has room around it; small rotations near the goal are hard to fix.
+- Every step must be producible by pushing: the pusher pushes from the side opposite
+  the direction of motion, and rotates the T by pushing near a bar end or the stem side.
+- tol_px is the MEAN KEYPOINT DISTANCE (pixels) at which a pose counts as reached:
+  ~{tol_mid_px} for intermediate poses, ~{tol_final_px} for the final (goal) pose.
+- min_hold: 1 for intermediate poses, 2 for the final pose.
+- skippable: true for every intermediate pose, false for the final pose.
+
+2. pusher_waypoints: 5-10 waypoints (u,v) for the PUSHER, in order, that move the T
+   through those poses:
+- To move the T, first go to the side of the T opposite the direction it must
+  move, then push through it toward the goal.
+- To rotate the T, push near the end of one of its bars, not through its center.
+- When repositioning between pushes, route AROUND the T, not through it.
+- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal
+- tol_px: about {tol_default} px (~6% of image width). Use ~{tol_tight} px for waypoints
+  where the pusher must contact a specific part of the T, ~{tol_loose} px for repositioning.
+- min_hold: 1 for repositioning, 2 for contact/push waypoints.
+- skippable: true for all but the final waypoint.
+
+Return JSON only:
+{{"t_poses": [{{"centroid_uv": [u, v], "angle_deg": float,
+               "tol_px": float, "min_hold": int, "skippable": bool}}],
+  "pusher_waypoints": [{{"uv": [u, v], "tol_px": float, "min_hold": int,
+                        "skippable": bool, "weight": float}}],
+  "confidence": float, "notes": "optional"}}

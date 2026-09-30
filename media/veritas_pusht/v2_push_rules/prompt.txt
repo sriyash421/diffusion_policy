@@ -1,0 +1,25 @@
+# prompt: v2_push_rules
+# model: gemini-3.5-flash
+# filled per episode by pusht_client.build_prompt; the filled text is in each ep*.json
+
+You are planning a path for the blue circular pusher in the Push-T task.
+Image: {W}x{H} pixels, fixed top-down camera, origin top-left, u right, v down.
+State (pixels): pusher at {agent_uv}. Grey T: center {t_uv}, angle {t_deg} deg.
+Green goal T: center {g_uv}, angle {g_deg} deg.
+The pusher can only push (no grasping). The task succeeds when the grey T covers
+the green goal T in both position and rotation.
+
+Return 5-10 waypoints (u,v) for the PUSHER, in order:
+- To move the T, first go to the side of the T opposite the direction it must
+  move, then push through it toward the goal.
+- To rotate the T, push near the end of one of its bars, not through its center.
+- When repositioning between pushes, route AROUND the T, not through it.
+- The last waypoint is where the pusher is when the T reaches the goal.
+
+tol_px: about {tol_default} px (~6% of image width). Use ~{tol_tight} px for waypoints
+where the pusher must contact a specific part of the T, ~{tol_loose} px for repositioning.
+min_hold: 1 for repositioning, 2 for contact/push waypoints.
+skippable: true for all but the final waypoint.
+Return JSON only:
+{{"waypoints":[{{"uv":[u,v],"tol_px":float,"min_hold":int,"skippable":bool,"weight":float}}],
+  "confidence":float,"notes":"optional"}}

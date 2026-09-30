@@ -1,0 +1,216 @@
+{
+  "model": "gemini-3.5-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      70.5,
+      50.4375
+    ],
+    "block_uv": [
+      20.062498092651367,
+      58.125
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": -66.45827906560925,
+    "goal_deg": 45.0
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [70.5, 50.4]. Grey T: center [20.1, 58.1], angle -66 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal.\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          45.0,
+          28.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          32.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          8.0,
+          52.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          8.0,
+          66.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          25.0,
+          63.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          78.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          58.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          35.0,
+          52.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          45.0,
+          50.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Route around the top to the left side of the T, push the bottom tip to rotate it clockwise, then slide it from the left into the goal."
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          45.0,
+          28.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          32.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          8.0,
+          52.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          8.0,
+          66.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          25.0,
+          63.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          78.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          15.0,
+          58.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          35.0,
+          52.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          45.0,
+          50.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Route around the top to the left side of the T, push the bottom tip to rotate it clockwise, then slide it from the left into the goal."
+  }
+}

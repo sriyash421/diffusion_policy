@@ -1,0 +1,133 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      34.3125,
+      27.75
+    ],
+    "block_uv": [
+      48.9375,
+      74.0625
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": -65.03918453710493,
+    "goal_deg": 45.0,
+    "goal_dist_px": 25.472728729248047
+  },
+  "prompt": "You are planning how the grey T block should move in the Push-T task.\nA blue circular pusher pushes the T across a flat table (it can only push, never grasp).\nThe task succeeds when the grey T covers the green goal T in BOTH position and rotation.\n\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u to the right, v down.\n\nT geometry: a horizontal bar 22.5x5.6 px with a stem 5.6x16.9 px\nhanging from its middle. The T is tracked by its 8 corner keypoints, in this order:\nbar_left_bottom, bar_right_bottom, bar_right_top, bar_left_top,\nstem_top_left, stem_bottom_left, stem_bottom_right, stem_top_right.\nPose = (centroid u, centroid v, angle); the centroid is the mean of the 8 keypoints.\nAngle 0 means the bar is on top and the stem points straight down (+v); positive\nangles rotate CLOCKWISE on screen.\n\nCurrent state (pixels, degrees):\n- Grey T pose: centroid [48.9, 74.1], angle -65\n- Grey T keypoints: {bar_left_bottom: [41.6, 83.1], bar_right_bottom: [51.1, 62.7], bar_right_top: [46.0, 60.3], bar_left_top: [36.5, 80.7], stem_top_left: [45.2, 75.4], stem_bottom_left: [60.5, 82.5], stem_bottom_right: [62.9, 77.4], stem_top_right: [47.6, 70.3]}\n- Green goal T pose: centroid [42.0, 54.0], angle 45\n- Green goal T keypoints: {bar_left_bottom: [36.1, 44.0], bar_right_bottom: [52.0, 59.9], bar_right_top: [56.0, 56.0], bar_left_top: [40.0, 40.0], stem_top_left: [42.0, 50.0], stem_bottom_left: [30.1, 61.9], stem_bottom_right: [34.1, 65.9], stem_top_right: [46.0, 54.0]}\n- Grey-to-goal distance (mean keypoint distance): 25.5 px\n- Pusher at [34.3, 27.8]\n\nPlan 3-8 intermediate poses of the grey T, ending exactly at the goal pose.\nRules:\n- Each step moves the centroid at most ~19 px and turns at most ~30 degrees.\n- Take the shortest rotation direction to the goal angle (difference within +/-180 degrees).\n- Keep the entire T inside the image with a margin of ~5 px.\n- Rotate while the T has room around it; small rotations near the goal are hard to fix.\n- Every step must be producible by pushing: the pusher pushes from the side opposite\n  the direction of motion, and rotates the T by pushing near a bar end or the stem side.\n\nTolerances are the MEAN KEYPOINT DISTANCE (pixels) at which a pose counts as reached:\n- tol_px ~6 for intermediate poses, ~2 for the final (goal) pose.\n- min_hold: 1 for intermediate poses, 2 for the final pose.\n- skippable: true for every intermediate pose, false for the final pose.\n\nReturn JSON only:\n{\"waypoints\": [{\"centroid_uv\": [u, v], \"angle_deg\": float,\n                 \"tol_px\": float, \"min_hold\": int, \"skippable\": bool}],\n  \"confidence\": float, \"notes\": \"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "centroid_uv": [
+          47.2,
+          69.1
+        ],
+        "angle_deg": -37.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          45.5,
+          64.0
+        ],
+        "angle_deg": -10.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          43.7,
+          59.0
+        ],
+        "angle_deg": 18.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          42.0,
+          54.0
+        ],
+        "angle_deg": 45.0,
+        "tol_px": 2.0,
+        "min_hold": 2,
+        "skippable": false
+      }
+    ],
+    "confidence": 0.95,
+    "notes": "Smoothly rotate clockwise by 110 degrees while translating up toward the goal pose."
+  },
+  "usage": {
+    "candidates_token_count": 315,
+    "prompt_token_count": 2014,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 925
+      }
+    ],
+    "thoughts_token_count": 1435,
+    "total_token_count": 3764
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "centroid_uv": [
+          47.2,
+          69.1
+        ],
+        "angle_deg": -37.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          45.5,
+          64.0
+        ],
+        "angle_deg": -10.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          43.7,
+          59.0
+        ],
+        "angle_deg": 18.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          42.0,
+          54.0
+        ],
+        "angle_deg": 45.0,
+        "tol_px": 2.0,
+        "min_hold": 2,
+        "skippable": false
+      }
+    ],
+    "confidence": 0.95,
+    "notes": "Smoothly rotate clockwise by 110 degrees while translating up toward the goal pose."
+  }
+}
