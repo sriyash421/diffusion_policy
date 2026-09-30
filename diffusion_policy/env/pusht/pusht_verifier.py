@@ -341,9 +341,37 @@ CROSS_CANDIDATE_VALUES = {
 # run: the search-context copy (_normalize_value), a direct search_candidates call, the
 # sim's own per-chunk scoring. armTn, because it is armTd's closest sibling AND the current
 # production value -- so the fallback is never something arbitrary.
+#
+# The waypoint values map to d_t_goal: it is the reached-state scalar wp_v5_dtg ADDS, so
+# the one VALUE_FNS entry their `_score_key` resolves to is also the one their combined
+# score is built from (PushTWaypointVerifier._chunk_values).
 BASE_VALUE_FN = {
     'armTd': 'armTn',
+    'wp_v5': 'd_t_goal',
+    'wp_v5_dtg': 'd_t_goal',
+    'wp_v3': 'd_t_goal',
+    'wp_v3_dtg': 'd_t_goal',
 }
+
+# VLM-waypoint values, scored by PushTWaypointVerifier: the Veritas tracker score
+# (diffusion_policy/env/pusht/veritas/tracker.py) at the end of the simulated chunk,
+# alone or plus VALUE_FNS['d_t_goal'] at the reached state (the *_dtg variants). The
+# version names the PLAN KIND the run was scored against, so the eval must be handed
+# plans of that kind and the run directory cannot lie about which signal ranked it:
+#   wp_v5* -- v5_pusher_and_t dual plans, both tracks (0..1 each) averaged;
+#   wp_v3* -- v3_end_outside pusher-only plans, the agent track alone.
+# The tracker score is 0..1; *_dtg adds a <= 0 pixel term rescaled by T_GOAL_SPREAD, so
+# the sum moves ~1 unit per candidate step on each side.
+WAYPOINT_VALUES = ('wp_v5', 'wp_v5_dtg', 'wp_v3', 'wp_v3_dtg')
+
+# The waypoint values a run may TRAIN under (verifier_tag / search context). The plain
+# scores are bounded 0..1 by construction and _score_candidates feeds them to the model
+# raw, so they carry training semantics; the workspace supplies per-sample trackers from
+# a demo-replay snapshot store (veritas.tracker.TrackerSnapshotStore). The *_dtg
+# variants stay EVAL-ONLY, like armTd: they add a reached-state pixel term whose
+# training-context semantics were never designed, and check_verifier_value keeps
+# rejecting them as tags.
+TRAINABLE_WAYPOINT_VALUES = ('wp_v3', 'wp_v5')
 
 # LEARNED values: a trained SAC chunk-Q, scored by `sac.score.PushTQVerifier`. Not a
 # VALUE_FNS entry, and the reason is structural rather than bookkeeping -- a VALUE_FNS entry
@@ -385,13 +413,24 @@ Q_VERIFIERS = {
     'q_sac_brd100': (f'{_VALUE_ARMS}/sac_keypoint_brd100/model_1200000_steps.zip', -1),
 }
 
-# Every string `verifier_value` accepts: per-candidate, cross-candidate and learned alike.
-VERIFIER_VALUES = tuple(VALUE_FNS) + tuple(CROSS_CANDIDATE_VALUES) + tuple(Q_VERIFIERS)
+# Every string `verifier_value` accepts: per-candidate, cross-candidate, learned and
+# waypoint alike.
+VERIFIER_VALUES = (tuple(VALUE_FNS) + tuple(CROSS_CANDIDATE_VALUES) + tuple(Q_VERIFIERS)
+                   + WAYPOINT_VALUES)
 
 
 def base_value_fn(value: str) -> str:
     """The VALUE_FNS key backing `value` -- itself, unless it is cross-candidate."""
     return BASE_VALUE_FN.get(value, value)
+
+
+def is_waypoint_value(value: str) -> bool:
+    """Is this value scored against a per-episode VLM waypoint plan?
+
+    Same one-predicate rationale as `is_q_value`: verifier construction, the eval CLI
+    and the config check all branch on it, and must not drift.
+    """
+    return value in WAYPOINT_VALUES
 
 
 def is_q_value(value: str) -> bool:
@@ -466,16 +505,25 @@ def check_verifier_value(cfg):
             f'< k, so a statistic over all n does not exist yet when k is scored). Train '
             f'under {BASE_VALUE_FN[tag]!r} and evaluate with '
             f'`eval_search_pusht.py --verifier-value {tag}`.')
+    if is_waypoint_value(tag) and tag not in TRAINABLE_WAYPOINT_VALUES:
+        # Only the *_dtg variants remain untrainable -- see TRAINABLE_WAYPOINT_VALUES.
+        raise ValueError(
+            f'verifier_tag={tag!r} is an eval-only waypoint value: its reached-state '
+            f'pixel term has no designed training-context semantics. Train under '
+            f'{tag[:-4]!r} (pusht_verifier.TRAINABLE_WAYPOINT_VALUES) and evaluate with '
+            f'`eval_search_pusht.py --verifier-value {tag}`.')
     if is_q_value(tag):
         # Resolve now rather than at policy construction: a missing checkpoint or a missing
         # params/args.yaml should stop the run at config time, not thirty minutes in once the
         # dataset has loaded and the GPU is allocated.
         q_verifier_spec(tag)
-    elif tag not in VALUE_FNS:
+    elif tag not in VALUE_FNS and tag not in TRAINABLE_WAYPOINT_VALUES:
         raise ValueError(
             f'verifier_tag={tag!r} is not a known verifier value; expected one of '
-            f'{sorted(VALUE_FNS)} (pusht_verifier.VALUE_FNS) or a learned '
-            f'{sorted(Q_VERIFIERS)} (pusht_verifier.Q_VERIFIERS).')
+            f'{sorted(VALUE_FNS)} (pusht_verifier.VALUE_FNS), a learned '
+            f'{sorted(Q_VERIFIERS)} (pusht_verifier.Q_VERIFIERS) or a trainable waypoint '
+            f'value {sorted(TRAINABLE_WAYPOINT_VALUES)} '
+            f'(pusht_verifier.TRAINABLE_WAYPOINT_VALUES).')
     declared = (cfg.get('policy', None) or {}).get('verifier_value', None)
     if declared is None:
         raise ValueError(
@@ -496,6 +544,11 @@ class PushTVerifier:
     # normalizable with the policy's own normalizer (see PushTDiffusionSearchPolicy).
     AGENT_DIM = 2
     STATE_DIM = AGENT_DIM + 2 * N_KEYPOINTS   # 18
+
+    # Does `rollout` keep the per-step sim states? The base scores the REACHED state
+    # only, so it does not; PushTWaypointVerifier flips this and walks each episode's
+    # waypoint trackers along the path.
+    _collect_path = False
 
     def __init__(self, n_envs: int = 32, legacy: bool = False, use_async: bool = True,
                  verifier_steps: int = None, render_size: int = 96,
@@ -555,6 +608,15 @@ class PushTVerifier:
                 f'{value!r} is a LEARNED value and PushTVerifier simulates; it cannot score '
                 f'one. Build a sac.score.PushTQVerifier instead (PushTSearchMixin.'
                 f'_build_verifier does this automatically from verifier_value).')
+        # Same early-failure move for the waypoint values: they need per-episode trackers
+        # (set_trackers), which only the subclass carries. `_allows_waypoint_values` rather
+        # than an isinstance, because the subclass is defined below this class.
+        if is_waypoint_value(value) and not getattr(self, '_allows_waypoint_values', False):
+            raise ValueError(
+                f'{value!r} is a WAYPOINT value: it scores the simulated path against a '
+                f'per-episode VLM plan, which plain PushTVerifier does not hold. Build a '
+                f'PushTWaypointVerifier and hand it the episode trackers via set_trackers '
+                f'(PushTSearchMixin._build_verifier does the construction automatically).')
         self._value_fn = value
         # What the SIM scores each chunk with. Identical to value_fn for every
         # per-candidate value; for a cross-candidate one it is the base scalar, because
@@ -666,16 +728,20 @@ class PushTVerifier:
 
             self._set_reset_states(vec, list(chunk_states))
             obs = vec.reset()                                   # (n_envs, 5)
+            # (n_envs, n_steps, 5) per-step sim states, only when the subclass scores the
+            # PATH rather than the reached state (the waypoint trackers advance per step).
+            path = (np.empty((self.n_envs, n_steps, 5), dtype=np.float64)
+                    if self._collect_path else None)
             for t in range(n_steps):
                 obs, _, _, _ = vec.step(chunk_actions[:, t])    # obs (n_envs, 5)
+                if path is not None:
+                    path[:, t] = obs
             obs = np.asarray(obs)
             agent_pos = obs[:, :2]                              # (n_envs, 2)
             block_pose = obs[:, 2:5]                            # (n_envs, 3): x, y, angle
             feedback = compute_feedback_from_pose(block_pose)   # (n_envs, 16)
-            # agent_pos and feedback are both already in hand, so no value in VALUE_FNS
-            # costs an extra sim step -- the choice is free at this point.
-            values[start:end] = VALUE_FNS[self._score_key](
-                agent_pos, feedback)[:m].astype(np.float32)
+            values[start:end] = self._chunk_values(
+                agent_pos, feedback, path, start, m)
             end_states[start:end] = np.concatenate(
                 [agent_pos[:m], feedback[:m]], axis=-1).astype(np.float32)
 
@@ -694,6 +760,19 @@ class PushTVerifier:
                 torch.as_tensor(images, dtype=action.dtype, device=action.device),)
         return out
 
+    def _chunk_values(self, agent_pos, feedback, path, start, m):
+        """(m,) float32 scores for one sim chunk.
+
+        `agent_pos` (n_envs, 2) / `feedback` (n_envs, 16) are the REACHED state; `path`
+        is the (n_envs, n_steps, 5) per-step states when `_collect_path`, else None.
+        `start` is the chunk's offset in the rollout batch, so a subclass can index
+        per-episode state; padded rows are already dropped by `[:m]`.
+
+        agent_pos and feedback are both already in hand, so no value in VALUE_FNS costs
+        an extra sim step -- the choice is free at this point.
+        """
+        return VALUE_FNS[self._score_key](agent_pos, feedback)[:m].astype(np.float32)
+
     def close(self):
         # force_close, not _vec.close(): a plain close() first tries to drain whatever call
         # is in flight, with no timeout, so a worker that died mid-reply hangs teardown
@@ -703,3 +782,50 @@ class PushTVerifier:
         if self._vec is not None:
             vec, self._vec = self._vec, None
             force_close(vec)
+
+
+class PushTWaypointVerifier(PushTVerifier):
+    """PushTVerifier that scores the simulated PATH against per-episode VLM waypoint plans.
+
+    Same sim pool, same reset, same reached-state outputs; the only change is the scoring:
+    each candidate walks a COPY of its episode's live ``DualTracker``
+    (diffusion_policy/env/pusht/veritas/tracker.py) through the chunk's per-step sim
+    states, and the value is the tracker's dual score at the end -- alone (``wp_v5``) or
+    plus ``VALUE_FNS['d_t_goal']`` at the reached state (``wp_v5_dtg``).
+
+    The trackers are LIVE EPISODE STATE, not configuration: the eval loop reads them off
+    the real envs before every decision (they advanced on what actually executed) and
+    hands them in via ``set_trackers``, parallel to the batch dimension of the next
+    ``rollout``/``get_value`` calls. Copying per candidate is what lets n candidates
+    branch from the same progress without perturbing it.
+    """
+
+    _collect_path = True
+    _allows_waypoint_values = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert is_waypoint_value(self.value_fn), \
+            f'PushTWaypointVerifier needs a waypoint value {sorted(WAYPOINT_VALUES)}, ' \
+            f'got {self.value_fn!r} -- plain PushTVerifier already scores that.'
+        self._trackers = None
+
+    def set_trackers(self, trackers):
+        """The live per-episode DualTrackers, parallel to the next rollout's batch."""
+        self._trackers = list(trackers)
+
+    def _chunk_values(self, agent_pos, feedback, path, start, m):
+        assert self._trackers is not None, \
+            'set_trackers was never called: the waypoint score is defined against the ' \
+            'live episode trackers, which the eval loop must hand in before each decision.'
+        assert start + m <= len(self._trackers), \
+            f'rollout batch row {start + m - 1} has no tracker (got {len(self._trackers)})'
+        scores = np.empty(m, dtype=np.float32)
+        for j in range(m):
+            tracker = self._trackers[start + j].copy()
+            for t in range(path.shape[1]):
+                tracker.update(path[j, t, :2], path[j, t, 2:5])
+            scores[j] = tracker.score
+        if self.value_fn.endswith('_dtg'):
+            scores = scores + VALUE_FNS['d_t_goal'](agent_pos, feedback)[:m].astype(np.float32)
+        return scores

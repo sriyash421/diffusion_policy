@@ -47,10 +47,10 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.policy.diffusion_transformer_search_policy import (
     DiffusionTransformerSearchPolicy)
 from diffusion_policy.env.pusht.pusht_verifier import (
-    PushTVerifier, VALUE_FNS, DEFAULT_VALUE_FN, VERIFIER_VALUES,
-    CROSS_CANDIDATE_VALUES, base_value_fn, value_terms_from_state,
+    PushTVerifier, PushTWaypointVerifier, VALUE_FNS, DEFAULT_VALUE_FN, VERIFIER_VALUES,
+    CROSS_CANDIDATE_VALUES, WAYPOINT_VALUES, base_value_fn, value_terms_from_state,
     T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE,
-    is_q_value, q_verifier_spec)
+    is_q_value, is_waypoint_value, q_verifier_spec)
 from diffusion_policy.env.pusht.feedback_util import GOAL_KEYPOINTS, N_KEYPOINTS
 
 # obs keys the verifier reads to reset the sim: agent_pos plus feedback, from which the
@@ -125,6 +125,25 @@ class PushTSearchMixin:
         the GPU is allocated.
         """
         mode = self._verifier_value_mode(self.search_kwargs)
+        if is_waypoint_value(mode) and self.consumes_search_context:
+            from diffusion_policy.env.pusht.pusht_verifier import TRAINABLE_WAYPOINT_VALUES
+            if mode not in TRAINABLE_WAYPOINT_VALUES:
+                # The *_dtg variants stay eval-only selection rules (see
+                # TRAINABLE_WAYPOINT_VALUES); a context arm cannot train under them.
+                raise ValueError(
+                    f'{type(self).__name__}: verifier_value={mode!r} is an eval-only '
+                    f'waypoint value and cannot feed a search context. Train under '
+                    f'{mode[:-4]!r} instead.')
+            context = self._search_context_mode(self.search_kwargs)
+            if context != 'value':
+                # Same contract as the learned Q below: the wp context is the scalar
+                # tracker score. The subgoal modes would work mechanically (the sim still
+                # reaches a state and can render it), but pairing them with a waypoint
+                # ranking is an undesigned arm -- refuse until someone designs it.
+                raise ValueError(
+                    f'{type(self).__name__}: verifier_value={mode!r} trains with the '
+                    f'scalar tracker score as context; search_context={context!r} is not '
+                    f'supported for it. Use search_context=value.')
         if not is_q_value(mode):
             return
         context = self._search_context_mode(self.search_kwargs)
@@ -218,13 +237,29 @@ class PushTSearchMixin:
             checkpoint, rung = q_verifier_spec(mode)
             return PushTQVerifier(checkpoint, rung=rung, value_fn=mode,
                                   device=kwargs.get('verifier_device', 'auto'))
-        return PushTVerifier(
+        # Waypoint values ride the same sim pool with a path-walking score; everything
+        # else about the construction is identical, hence the shared kwargs below.
+        cls = PushTWaypointVerifier if is_waypoint_value(mode) else PushTVerifier
+        return cls(
             n_envs=kwargs.get('verifier_n_envs', 32),
             legacy=kwargs.get('verifier_legacy', False),
             use_async=kwargs.get('verifier_use_async', True),
             verifier_steps=kwargs.get('verifier_steps', None),
-            value_fn=self._verifier_value_mode(kwargs),
+            value_fn=mode,
         )
+
+    def set_waypoint_trackers(self, trackers):
+        """Hand the live per-episode DualTrackers to the waypoint verifier.
+
+        Mirrors `set_sample_seeds`: called by the eval loop before every decision,
+        parallel to the obs batch. Touching `self.verifier` here forces the UNet arm's
+        lazy build, which is correct -- the very next call is the search that needs it.
+        """
+        mode = self._verifier_value_mode(self.search_kwargs)
+        assert is_waypoint_value(mode), \
+            f'set_waypoint_trackers is only meaningful under a waypoint verifier_value ' \
+            f'{sorted(WAYPOINT_VALUES)}; this policy ranks with {mode!r}.'
+        self.verifier.set_trackers(trackers)
 
     @staticmethod
     def _verifier_value_mode(kwargs) -> str:
@@ -327,6 +362,16 @@ class PushTSearchMixin:
                 f'of the reached state (there is no reached state -- it does not simulate). '
                 f'The context for a learned value is built by _normalize_q from the raw '
                 f'score instead; this method should never be reached for one.')
+        if is_waypoint_value(mode):
+            # TRIPWIRE, like the Q refusal above: _score_candidates returns the raw
+            # tracker score as the context BEFORE this method is reached (the score is
+            # 0..1 by construction, so there is nothing to rescale), so reaching this is
+            # a bug in a caller, not a configuration a message can redirect.
+            raise ValueError(
+                f'_normalize_value cannot mirror {mode!r}: the waypoint score depends on '
+                f'the simulated path and the live episode tracker, not the reached state '
+                f'alone. _score_candidates handles waypoint values before this point; '
+                f'reaching here means a caller bypassed it.')
 
         agent_dim = PushTVerifier.AGENT_DIM
         feedback = state[..., agent_dim:]              # (B, 2*N_KEYPOINTS), raw pixels
@@ -528,6 +573,17 @@ class PushTSearchMixin:
         out = verifier.rollout(now, exec_action, render=render)
         value, state = out[0], out[1]                # (B,), (B, STATE_DIM)
         image = out[2] if render else None           # (B, 3, 96, 96)
+
+        if is_waypoint_value(self._verifier_value_mode(self.search_kwargs)):
+            # The tracker score IS the context: bounded 0..1 by construction
+            # (0.7*progress + 0.3*exp(-d/sigma), averaged over 0..1 tracks), deterministic,
+            # and identical at train and eval -- so unlike Q there is no scale to normalize
+            # away (no buffers, no sync_value_norm_from) and unlike the pixel values there
+            # is no _normalize_value mirror to keep in step: context == score, a monotone
+            # identity with what argmax ranks on. `terms` is still derived from the reached
+            # state -- the walk analysis and _fuse_scores plumbing read it, and it is ~free.
+            subgoal = {'image': image, 'value': value} if want_subgoals else None
+            return value, value, subgoal, value_terms_from_state(state)
 
         # context gets the rescaled scalar; `value` stays raw and is returned as the score.
         nvalue = self._normalize_value(state)        # (B,)

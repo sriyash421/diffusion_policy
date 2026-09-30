@@ -86,14 +86,18 @@ def resolved_verifier_value(policy, cfg):
     pre-cutover default and is scored on exactly what it was trained on -- but an artifact
     that does not SAY so cannot be told apart from one produced under armT.
     """
-    from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN, VALUE_FNS
+    from diffusion_policy.env.pusht.pusht_verifier import (
+        DEFAULT_VALUE_FN, VERIFIER_VALUES)
     mode = None
     try:
         mode = cfg.policy.get('verifier_value', None)
     except Exception:
         pass
     mode = str(mode or DEFAULT_VALUE_FN)
-    assert mode in VALUE_FNS, f'unknown verifier_value {mode!r}'
+    # VERIFIER_VALUES, not VALUE_FNS: a checkpoint trained under a waypoint or learned
+    # value carries that value natively, and this function's job is to REPORT it, not to
+    # police which values exist (check_verifier_value already did, at training time).
+    assert mode in VERIFIER_VALUES, f'unknown verifier_value {mode!r}'
     return mode
 
 

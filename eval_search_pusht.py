@@ -65,9 +65,11 @@ from diffusion_policy.dataset.pusht_image_dataset import (
     get_split_masks_3way, get_episode_init_states,
     load_split_manifest, masks_from_manifest)
 from diffusion_policy.env.pusht.pusht_verifier import (DEFAULT_VALUE_FN, is_q_value,
-                                                       q_verifier_spec)
+                                                       is_waypoint_value, q_verifier_spec)
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
+from diffusion_policy.env.pusht.veritas.tracker import (
+    WAYPOINT_PLAN_DIRS, VeritasTrackerWrapper, load_plan, load_split_plans)
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 
@@ -94,9 +96,15 @@ CKPT_RE = re.compile(r'step_(\d+)\.ckpt$')
 
 def build_envs(n_envs, n_obs_steps, n_action_steps, max_steps, render_size=96):
     def env_fn():
+        # VeritasTrackerWrapper sits INSIDE MultiStepWrapper so it sees every single env
+        # step of an action chunk (the outer info deques only keep the last n_obs_steps).
+        # It is inert until an episode init fn hands it a plan, so the non-waypoint evals
+        # run through it unchanged.
         return MultiStepWrapper(
-            PushTFeedbackWrapper(
-                PushTImageEnv(legacy=False, render_size=render_size)
+            VeritasTrackerWrapper(
+                PushTFeedbackWrapper(
+                    PushTImageEnv(legacy=False, render_size=render_size)
+                )
             ),
             n_obs_steps=n_obs_steps,
             n_action_steps=n_action_steps,
@@ -233,6 +241,12 @@ def get_test_states(cfg):
     return get_split_states(cfg, 'test')
 
 
+# Moved to diffusion_policy/env/pusht/veritas/tracker.py so the training workspace can
+# use them without importing this module (~88s/440MB); the old names stay importable
+# from here because the walk/analysis scripts read them off this module.
+_WAYPOINT_PLAN_DIRS = WAYPOINT_PLAN_DIRS
+
+
 # `wilson_interval` is imported above from diffusion_policy.common.stats_util and
 # re-exported here, since several scripts import it from this module by name. It moved
 # because the read-only reporting scripts need it without paying this module's ~88 s /
@@ -269,7 +283,8 @@ def _reduce_episode_rewards(rewards):
     return float(r.max()), float(r[-1]), float((1.0 - GAMMA) * np.sum(w * r))
 
 
-def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=None):
+def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=None,
+                        plans=None):
     """Roll one episode per env (reset to its state) using best-of-n search.
 
     ``seeds``: optional list parallel to ``states``. Where ``states[i] is None`` the env is
@@ -291,28 +306,46 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
     and only its ORDER within a step is meaningful. Captured here because
     predict_action_best returns it and it is otherwise discarded; storing it costs one
     .cpu() per step and nothing else.
+
+    ``plans``: optional list of VeritasDualPlan parallel to ``states``, for the waypoint
+    verifier values. Each env's VeritasTrackerWrapper builds a live tracker from its plan
+    at reset and advances it on every REAL step; before every decision the trackers are
+    read back off the envs and handed to the policy (set_waypoint_trackers), so candidate
+    scoring branches from the progress that actually happened. The last two return arrays
+    are the per-episode final (pusher, T) waypoint progress, NaN when ``plans`` is None.
     """
-    def make_init_fn(state, seed=None):
-        if state is None:
-            def _fn(env, seed=seed):
-                env.unwrapped.reset_to_state = None   # -> RandomState(seed) in reset()
-                env.seed(seed)
-            return _fn
-        state = np.asarray(state, dtype=np.float64)
-        def _fn(env):
+    def make_init_fn(state, seed=None, plan=None):
+        state = None if state is None else np.asarray(state, dtype=np.float64)
+        def _fn(env, seed=seed):
+            # set unconditionally (None clears): envs are reused across chunks, and a
+            # stale plan would silently keep tracking an episode it does not belong to.
+            env.set_veritas_plan(plan)
             env.unwrapped.reset_to_state = state
+            if state is None:
+                env.seed(seed)                  # -> RandomState(seed) in reset()
         return _fn
 
     if seeds is None:
         seeds = [None] * len(states)
+    if plans is None:
+        plan_list = [None] * len(states)
+    else:
+        plan_list = plans
+        assert len(plan_list) == len(states)
     env.call_each('run_dill_function',
-        args_list=[(dill.dumps(make_init_fn(st, sd)),) for st, sd in zip(states, seeds)])
+        args_list=[(dill.dumps(make_init_fn(st, sd, pl)),)
+                   for st, sd, pl in zip(states, seeds, plan_list)])
     obs = env.reset()
     policy.reset()
     done = False
     step_i = 0
     while not done:
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
+        if plans is not None:
+            # The live trackers, advanced by every step that actually executed. Read
+            # fresh each decision -- the verifier copies them per candidate, so the
+            # originals must carry the real episode's progress, not a candidate's.
+            policy.set_waypoint_trackers(env.call('get_attr', 'tracker'))
         with torch.no_grad():
             if not hasattr(policy, 'predict_action_best'):
                 # A policy with no search interface at all -- the diffusion-UNet BC
@@ -341,7 +374,15 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
     # Same channel as `reward`: an attribute the base env accumulates over the episode, read
     # once at the end. `get_attr` falls through the wrapper stack to PushTEnv.
     coverage = np.asarray(env.call('get_attr', 'max_coverage'), dtype=float)
-    return red[:, 0], red[:, 1], red[:, 2], coverage
+    n_envs_ = red.shape[0]
+    wp_pusher = np.full(n_envs_, np.nan)
+    wp_t = np.full(n_envs_, np.nan)
+    if plans is not None:
+        # final waypoint progress of the REAL trajectory, per track (anchor included)
+        for i, tr in enumerate(env.call('get_attr', 'tracker')):
+            if tr is not None:
+                wp_pusher[i], wp_t[i] = tr.progress
+    return red[:, 0], red[:, 1], red[:, 2], coverage, wp_pusher, wp_t
 
 
 def _episode_seed(seed, n, episode_idx):
@@ -356,7 +397,7 @@ def _episode_seed(seed, n, episode_idx):
 
 
 def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
-                     score_sink=None, env_seeds=None):
+                     score_sink=None, env_seeds=None, plans=None):
     """Best-of-n success rate over one split at ONE n.
 
     Returns (rate, ci, rewards) where `rewards` is a dict of three per-episode arrays --
@@ -379,18 +420,24 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     np.random.seed(seed)
     # 'coverage' rides alongside the three reward kinds but is NOT one of them: REWARD_KINDS is
     # what success and the per-kind reporting are defined over, and adding it there would make
-    # coverage look like a reward that could be thresholded at SUCCESS_REWARD.
-    out = {k: np.full(n_resets, np.nan) for k in REWARD_KINDS + ('coverage',)}
+    # coverage look like a reward that could be thresholded at SUCCESS_REWARD. The two
+    # wp_*_progress kinds (waypoint runs only) are likewise reporting, never thresholded.
+    kinds = REWARD_KINDS + ('coverage',) + (
+        ('wp_pusher_progress', 'wp_t_progress') if plans is not None else ())
+    out = {k: np.full(n_resets, np.nan) for k in kinds}
     for start in tqdm.tqdm(range(0, n_resets, n_envs),
             desc=f'{label} n={n}', leave=False):
         chunk_states = list(states[start:start + n_envs])
         chunk_seeds = (None if env_seeds is None
                        else list(env_seeds[start:start + n_envs]))
+        chunk_plans = None if plans is None else list(plans[start:start + n_envs])
         pad = n_envs - len(chunk_states)
         if pad > 0:
             chunk_states = chunk_states + [states[0]] * pad
             if chunk_seeds is not None:
                 chunk_seeds = chunk_seeds + [env_seeds[0]] * pad
+            if chunk_plans is not None:
+                chunk_plans = chunk_plans + [plans[0]] * pad
         # Give every episode its own noise stream, keyed on its GLOBAL index in the split
         # rather than its slot in this chunk. That is what makes a curve independent of
         # --n-envs, of where the chunk boundary falls, and of the padding slots (which now
@@ -403,7 +450,7 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
         t0 = time.perf_counter()
         sink = [] if score_sink is not None else None
         chunk = rollout_max_rewards(env, policy, chunk_states, torch.device(device), n, sink,
-                                    seeds=chunk_seeds)
+                                    seeds=chunk_seeds, plans=chunk_plans)
         dt = time.perf_counter() - t0
         if sink is not None:
             # env_i is the slot within this chunk; map it back to the episode index, and
@@ -412,10 +459,12 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
                 if env_i < n_envs - pad:
                     score_sink.append({'episode': start + env_i, 'step': st,
                                        'scores': [round(v, 6) for v in scores]})
-        for kind, arr in zip(REWARD_KINDS + ('coverage',), chunk):
+        for kind, arr in zip(kinds, chunk):
             out[kind][start:start + n_envs - pad] = arr[:n_envs - pad]
         tqdm.tqdm.write(f'  {label} n={n} chunk {start}: {dt:.1f}s')
-    assert not any(np.isnan(v).any() for v in out.values())
+    # wp_t_progress is legitimately all-NaN under a pusher-only (wp_v3*) value, so the
+    # completeness check covers the measured kinds, not the optional reporting ones.
+    assert not any(np.isnan(out[k]).any() for k in REWARD_KINDS + ('coverage',))
     all_rewards = out['max']
     k = int(np.sum(all_rewards >= SUCCESS_REWARD))
     sr = k / n_resets
@@ -444,7 +493,7 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                     selection=None, selection_temperature=1.0, skip_val=False,
                     noise_scheduler=None, score_writer=None, verifier_value=None,
                     selection_index=None, corrupt_obs_eval=None, test_start_seed=None,
-                    n_test_seeds=50):
+                    n_test_seeds=50, plan_dir=None):
     """Sweep n_list, evaluating val and test at each n.
 
     ``test_start_seed``: switch the TEST split from held-out dataset episodes to fresh
@@ -489,7 +538,20 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         # would fork its 32-process sim pool just to check whether it exists.
         built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
-            built.value_fn = verifier_value
+            if is_waypoint_value(verifier_value) and not hasattr(built, 'set_trackers'):
+                # A waypoint value cannot be assigned onto a plain PushTVerifier (its
+                # setter refuses -- the score walks the PATH, which the base never
+                # keeps). Rebuild through the policy's own factory, which now reads the
+                # kwarg above and returns the path-walking subclass, and put it back in
+                # the slot the host actually built it into.
+                built.close()
+                rebuilt = policy._build_verifier(**policy.search_kwargs)
+                if '_verifier' in policy.__dict__:
+                    policy._verifier = rebuilt
+                else:
+                    policy.verifier = rebuilt
+            else:
+                built.value_fn = verifier_value
     print(f'  verifier value: {_verifier_value_of(policy)}'
           + (' (overridden)' if verifier_value is not None else ' (from checkpoint cfg)'))
     # Whether rollouts see the corruption the run TRAINED under is likewise a readout-time
@@ -531,6 +593,24 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # -- i.e. every real one, so eval died before running a single episode and never created
     # bon_search/. len() reads the same on both types.
     has_val = len(val_states) > 0
+
+    # Waypoint values score against per-episode VLM plans; resolve and load them all here
+    # so a missing plan stops the eval before a single rollout, not at chunk 4 of n=32.
+    test_plans = val_plans = None
+    wp_value = _verifier_value_of(policy)
+    if is_waypoint_value(wp_value):
+        if test_start_seed is not None:
+            raise ValueError(
+                f'--verifier-value {wp_value} needs a per-episode plan, keyed by dataset '
+                f'episode index; the fresh-seed protocol (--test-start-seed) has no '
+                f'dataset episodes to key on.')
+        if plan_dir is None:
+            plan_dir = _WAYPOINT_PLAN_DIRS[wp_value]
+        test_plans = load_split_plans(plan_dir, test_idxs, 'test', wp_value)
+        if has_val:
+            val_plans = load_split_plans(plan_dir, val_idxs, 'val', wp_value)
+        print(f'  waypoint plans: {plan_dir} '
+              f'({len(test_plans)} test{f" + {len(val_plans)} val" if has_val else ""})')
 
     # Read the horizon from cfg.policy, NOT the top-level cfg: the policy is built with
     # n_action_steps + n_latency_steps, so with a nonzero latency the top-level values
@@ -624,6 +704,24 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             # rate. Absent from every curve written before 2026-09-21; readers must treat a
             # missing key as unknown rather than zero.
             'mean_coverage': [float(np.mean(test_rewards[n]['coverage'])) for n in done],
+            # Waypoint runs only: per-track fraction of plan waypoints the REAL test
+            # trajectories latched (see DualTracker.progress). The T track is all-NaN
+            # under a pusher-only (wp_v3*) value, hence nanmean. Absent (None) from
+            # every non-waypoint curve.
+            'plan_dir': (str(plan_dir) if test_plans is not None else None),
+            'mean_wp_pusher_progress': (
+                [float(np.mean(test_rewards[n]['wp_pusher_progress'])) for n in done]
+                if test_plans is not None else None),
+            'mean_wp_t_progress': (
+                [float(np.nanmean(test_rewards[n]['wp_t_progress'])) for n in done]
+                if test_plans is not None and not np.all(np.isnan(
+                    np.concatenate([test_rewards[n]['wp_t_progress'] for n in done])))
+                else None),
+            'per_n_wp_progress': (
+                {int(n): {'pusher': test_rewards[n]['wp_pusher_progress'].tolist(),
+                          't': test_rewards[n]['wp_t_progress'].tolist()}
+                 for n in done}
+                if test_plans is not None else None),
             'mean_reward': [float(np.mean(test_rewards[n]['max'])) for n in done],
             'mean_reward_final': [float(np.mean(test_rewards[n]['final'])) for n in done],
             'mean_reward_discounted': [
@@ -654,13 +752,14 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             if has_val:
                 vsink = [] if score_writer else None
                 val_sr[n], val_ci[n], val_rewards[n] = _eval_split_at_n(
-                    env, policy, val_states, device, n, n_envs, seed, 'val', vsink)
+                    env, policy, val_states, device, n, n_envs, seed, 'val', vsink,
+                    plans=val_plans)
                 if score_writer:
                     score_writer('val', n, vsink)
             tsink = [] if score_writer else None
             test_sr[n], test_ci[n], test_rewards[n] = _eval_split_at_n(
                 env, policy, test_states, device, n, n_envs, seed, 'test', tsink,
-                env_seeds=test_env_seeds)
+                env_seeds=test_env_seeds, plans=test_plans)
             if score_writer:
                 score_writer('test', n, tsink)
             done.append(n)
@@ -723,6 +822,7 @@ def plot_curve(curve, out_path):
 # per-n lists that must stay index-aligned with curve['n'] whenever two curves are merged
 _PER_N_LISTS = ('success_rate', 'success_ci',
                 'mean_coverage',
+                'mean_wp_pusher_progress', 'mean_wp_t_progress',
                 'mean_reward', 'mean_reward_final', 'mean_reward_discounted',
                 'val_success_rate', 'val_success_ci',
                 'val_mean_reward', 'val_mean_reward_final', 'val_mean_reward_discounted')
@@ -743,6 +843,10 @@ _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              # differently, so their curves are different experiments. Curves written
              # before 2026-08-19 carry no key here and are all t_goal.
              'verifier_value',
+             # two waypoint runs under the same value but different plan directories are
+             # scored against different VLM plans -- different experiments. None (every
+             # non-waypoint curve) never clashes: only both-sides-set values are compared.
+             'plan_dir',
              # a clean rollout and a corrupted one are different experiments on one
              # checkpoint; see _bon_subdir
              'corrupt_obs_eval')
@@ -792,6 +896,13 @@ def merge_curves(old, new):
                              sorted(merged.items(), key=lambda kv: int(kv[0]))}
     if by_kind:
         out['per_n_rewards_by_kind'] = by_kind
+    # same union-by-n treatment for the waypoint diagnostics, or a partial resweep would
+    # shadow the ns the other side already measured
+    wp = dict(old.get('per_n_wp_progress') or {})
+    wp.update(new.get('per_n_wp_progress') or {})
+    if wp:
+        out['per_n_wp_progress'] = {int(k): v for k, v in
+                                    sorted(wp.items(), key=lambda kv: int(kv[0]))}
     return out
 
 
@@ -936,6 +1047,12 @@ def _row_from_curve(step, checkpoint, curve):
         # key added to the curve but not listed here never reaches the jsonl and the guard
         # silently passes everything. Absent in rows written before 2026-08-19 == 't_goal'.
         'verifier_value': curve.get('verifier_value'),
+        # which VLM plans a waypoint run was scored against (None otherwise); listed here
+        # for the same whitelist reason as verifier_value -- _IDENTITY's plan_dir guard
+        # only sees what this row carries.
+        'plan_dir': curve.get('plan_dir'),
+        'mean_wp_pusher_progress': curve.get('mean_wp_pusher_progress'),
+        'mean_wp_t_progress': curve.get('mean_wp_t_progress'),
         'n_generations': curve.get('n_generations'),
         'success_rate': curve['success_rate'],
         'success_ci': curve.get('success_ci'),
@@ -1061,7 +1178,8 @@ def read_curve_rows(out_root):
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
 @click.option('--verifier-value', default=None,
-              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd']),
+              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd',
+                                 'wp_v5', 'wp_v5_dtg', 'wp_v3', 'wp_v3_dtg']),
               help='override which value the verifier ranks candidates with. t_goal is '
                    'the pre-2026-08-19 value (-T-to-goal distance); d_t_goal is that '
                    'same term over its 13.6px spread, which RANKS IDENTICALLY but records '
@@ -1081,7 +1199,18 @@ def read_curve_rows(out_root):
                    'is deliberately absent -- it summed the two terms unnormalized, so the '
                    'arm term outvoted task progress ~4:1 and inverted best-of-n (UNet BC '
                    '0.70 -> 0.00 at n=64, step 10k). Its function stays in VALUE_FNS so '
-                   'the existing bon_search_ver-armT/ curves remain readable.')
+                   'the existing bon_search_ver-armT/ curves remain readable. The wp_* '
+                   'values rank on VLM waypoint progress: each candidate chunk is '
+                   'simulated and a copy of the episode\'s live Veritas tracker walks '
+                   'its path; wp_v5* tracks BOTH the pusher waypoints and the T poses '
+                   'of the v5 dual plans (scores averaged), wp_v3* the v3 pusher-only '
+                   'plans (agent track alone); *_dtg additionally adds d_t_goal at the '
+                   'reached state. They need a plan per evaluated episode (--plan-dir) '
+                   'and are eval-only, UNet-BC-only like armTd.')
+@click.option('--plan-dir', default=None,
+              help='directory of ep{idx}.json VLM plans for the wp_* verifier values '
+                   '(from scripts/veritas_pusht_overlays.py). Default: the value\'s own '
+                   'prompt dir under media/veritas_pusht/. Ignored otherwise.')
 @click.option('--corrupt-obs-eval/--no-corrupt-obs-eval', 'corrupt_obs_eval', default=None,
               help='override whether rollouts see the obs corruption the run trained under. '
                    'Unset keeps the checkpoint\'s own setting.')
@@ -1106,7 +1235,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
          store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg,
-         test_start_seed, n_test_seeds):
+         test_start_seed, n_test_seeds, plan_dir):
     grid = {int(2 ** k) for k in range(31)}
     if n_list_arg:
         n_list = sorted({int(x) for x in n_list_arg.split(',') if x.strip()})
@@ -1160,6 +1289,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 selection_index=selection_index,
                                 corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
+                                plan_dir=plan_dir,
                                 skip_val=skip_val,
                                 noise_scheduler=noise_scheduler,
                                 score_writer=_make_score_writer(
@@ -1238,6 +1368,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         selection_index=selection_index,
                                         corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
+                                        plan_dir=plan_dir,
                                         skip_val=skip_val,
                                         noise_scheduler=noise_scheduler)
             except Exception as e:

@@ -27,6 +27,9 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.common.sampler import get_collate_fn
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
+from diffusion_policy.env.pusht.pusht_verifier import TRAINABLE_WAYPOINT_VALUES
+from diffusion_policy.env.pusht.veritas.tracker import (
+    TrackerSnapshotStore, WAYPOINT_PLAN_DIRS, load_split_plans)
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
@@ -36,6 +39,41 @@ from diffusion_policy.workspace.train_mlp_image_workspace import (
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+
+
+class _TrackerSettingLoader:
+    """Iterates a SEQUENTIAL (shuffle=False) DataLoader, handing the policy the waypoint
+    trackers for each batch's samples immediately before yielding it.
+
+    Exists because the eval-side loops (val loss, `_search_action_nrmse`) consume plain
+    DataLoader batches that carry no dataset indices, while the waypoint verifier needs
+    the per-sample tracker state. A sequential loader's batch ``b`` covers dataset
+    indices ``[b*bs, b*bs + len(batch))`` exactly, so the wrapper recovers them by
+    counting. `clone_policy` shares ONE verifier across the live/EMA/collector copies,
+    so setting trackers through any policy reaches the verifier every copy scores with.
+    """
+
+    def __init__(self, loader, dataset, store, policy):
+        assert getattr(loader, 'sampler', None) is None or not isinstance(
+            loader.sampler, torch.utils.data.RandomSampler), \
+            'tracker recovery counts batches, so the loader must be sequential ' \
+            '(shuffle: False)'
+        self.loader = loader
+        self.dataset = dataset
+        self.store = store
+        self.policy = policy
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        i = 0
+        for batch in self.loader:
+            b = len(batch['action'])
+            self.policy.set_waypoint_trackers(
+                [self.store.for_dataset_index(self.dataset, j) for j in range(i, i + b)])
+            i += b
+            yield batch
 
 
 def _val_slot_weighting(policy) -> bool:
@@ -88,6 +126,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         self.last_rollout_step = 0
         self.last_val_step = 0
         self.last_sample_step = 0
+        # Waypoint-tracker snapshot store, built in run() for a trainable wp
+        # verifier_value; None on every other arm.
+        self._wp_store = None
 
         # Built here, BEFORE any load_checkpoint: load_payload assigns into
         # self.__dict__[key] for every saved state_dict, so a use_ema checkpoint cannot be
@@ -175,6 +216,33 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 policy.train()
         return F.mse_loss(preds[0], preds[1]).item()
 
+    # ------------------------------------------------------------------ waypoint store
+
+    def _build_waypoint_store(self, cfg, dataset):
+        """TrackerSnapshotStore over every episode this run can touch, or None.
+
+        Only a TRAINABLE waypoint value gets one (the eval-only `_dtg` variants are
+        rejected upstream by check_verifier_value). Coverage is train + val + test:
+        the context buffer draws train windows, and the val-loss / nrmse loops walk
+        the other two splits through the same shared verifier. `load_split_plans`
+        refuses any episode without a usable plan, which is the fail-fast that makes
+        "generate the plans first" an enforced prerequisite rather than a convention.
+        """
+        mode = (cfg.policy.get('verifier_value', None) or '')
+        if mode not in TRAINABLE_WAYPOINT_VALUES:
+            return None
+        plan_dir = cfg.get('plan_dir', None) or WAYPOINT_PLAN_DIRS[mode]
+        plans_by_ep = {}
+        for split, mask in (('train', dataset.train_pool), ('val', dataset.val_pool),
+                            ('test', dataset.test_pool)):
+            eps = [int(e) for e in np.nonzero(mask)[0]]
+            if eps:
+                plans_by_ep.update(zip(eps, load_split_plans(plan_dir, eps, split, mode)))
+        store = TrackerSnapshotStore.from_replay_buffer(dataset.replay_buffer, plans_by_ep)
+        print(f'waypoint snapshot store: {plan_dir} -- {len(plans_by_ep)} episodes '
+              f'({mode})')
+        return store
+
     # ------------------------------------------------------------------ context buffer
 
     def _fill_context_buffer(self, policy, dataset, collate, pool, device, chunk_size):
@@ -209,6 +277,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 idxs = pool[start:start + chunk_size]
                 batch = collate([dataset[int(i)] for i in idxs])
                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                if self._wp_store is not None:
+                    # trackers parallel to THIS chunk's rows, set immediately before the
+                    # search that scores them (the verifier keeps whatever it was last
+                    # handed, and an equal-width stale list would score silently wrong)
+                    policy.set_waypoint_trackers(
+                        [self._wp_store.for_dataset_index(dataset, int(i)) for i in idxs])
                 chunk_actions, chunk_values = policy.generate_search_context(batch['obs'])
                 actions.append(chunk_actions)
                 values.append(chunk_values)
@@ -264,6 +338,15 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             self.write_manifest()
             self.write_splits(dataset)
 
+        # ---- waypoint trackers ----------------------------------------------------
+        # For a trainable wp verifier_value the per-sample search context is the Veritas
+        # tracker score, and the tracker state at a training window is the demo replayed
+        # up to that window's decision frame. One store covers everything this run
+        # scores: the context buffer (train windows), the val loss and the nrmse
+        # readouts (val/test loaders). Built here so a missing plan stops the run before
+        # the normalizer fit, not thousands of steps in.
+        self._wp_store = self._build_waypoint_store(cfg, dataset)
+
         if checkpoint_loaded and len(self.model.normalizer.params_dict) > 0:
             print("Checkpoint loaded with normalizer - preserving existing normalizer statistics")
         else:
@@ -276,11 +359,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         val_dataset = dataset.get_validation_dataset()
         val_collate = get_collate_fn() if dataset.return_sequences else None
         val_dataloader = DataLoader(val_dataset, collate_fn=val_collate, **cfg.val_dataloader)
-        test_dataloader = None
+        test_dataset = test_dataloader = None
         if hasattr(dataset, 'get_test_dataset') and \
                 getattr(dataset, 'val_pool', None) is not getattr(dataset, 'test_pool', None):
+            test_dataset = dataset.get_test_dataset()
             test_dataloader = DataLoader(
-                dataset.get_test_dataset(), collate_fn=val_collate, **cfg.val_dataloader)
+                test_dataset, collate_fn=val_collate, **cfg.val_dataloader)
 
         # ---- loop geometry, all derived from max_gradient_steps -------------------
         max_steps = cfg.training.max_gradient_steps
@@ -302,7 +386,11 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             max_steps = 6
             outer_bs, inner_bs, inner_epochs = 8, 2, 1
             drift_every = 1
-            rollout_every_steps = val_every_steps = sample_every_steps = 1
+            val_every_steps = sample_every_steps = 1
+            # preserve None (= rollouts off): a debug run of a waypoint arm has no
+            # tracker-wired env runner to fire
+            if rollout_every_steps is not None:
+                rollout_every_steps = 1
             cfg.training.checkpoint_every = 1
             buffer_chunk = 4
 
@@ -319,9 +407,17 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             last_epoch=self.global_step - 1,
             **lr_scheduler_kwargs)
 
-        env_runner: BaseImageRunner = hydra.utils.instantiate(
-            cfg.task.env_runner, output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseImageRunner)
+        # rollout_every_steps: null turns in-training rollouts OFF entirely -- the runner
+        # is not even built, since its pool of ~30 env subprocesses would sit idle for the
+        # whole run. The waypoint arms use this: PushTSearchImageRunner has no tracker
+        # wrapper, so a rollout there would score against unset trackers; their success
+        # curves come from the offline watcher (eval_search_pusht.py --watch), which has
+        # the full tracker plumbing.
+        env_runner = None
+        if rollout_every_steps is not None:
+            env_runner = hydra.utils.instantiate(
+                cfg.task.env_runner, output_dir=self.output_dir)
+            assert isinstance(env_runner, BaseImageRunner)
 
         if self.accelerator.is_main_process:
             wandb_run = wandb.init(
@@ -354,6 +450,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             ema.optimization_step = self.global_step
 
         train_sampling_batch = None
+        train_sampling_idxs = None
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with contextlib.ExitStack() as stack:
             json_logger = stack.enter_context(JsonLogger(log_path))
@@ -409,6 +506,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
+                            # the DATASET indices behind it, for the waypoint trackers
+                            # _sample_log must set before it re-searches this batch
+                            train_sampling_idxs = [int(pool[p]) for p in sel]
                         # device from the batch, not the buffer: at k=1 the buffer is None.
                         sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
 
@@ -497,7 +597,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 eval_policy = self.ema_model if self.ema_model is not None else policy
                 eval_policy.eval()
 
-                if self.global_step - self.last_rollout_step >= rollout_every_steps:
+                if rollout_every_steps is not None and \
+                        self.global_step - self.last_rollout_step >= rollout_every_steps:
                     # Seed before the rollout so its success rate is reproducible from the
                     # checkpoint. The env is deterministic given a reset state, but
                     # conditional_sample draws from the global RNG, so without this the
@@ -508,9 +609,18 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                     self.last_rollout_step = self.global_step
 
                 if self.global_step - self.last_val_step >= val_every_steps:
+                    # Under a waypoint value, compute_loss regenerates the search context
+                    # and hits the shared verifier, which needs the per-sample trackers.
+                    # The wrapper recovers each batch's dataset indices by counting (the
+                    # val loaders are sequential) and sets them just in time.
+                    def _wp_loader(loader, ds):
+                        if self._wp_store is None or loader is None:
+                            return loader
+                        return _TrackerSettingLoader(loader, ds, self._wp_store, eval_policy)
                     with torch.no_grad():
                         val_losses = list()
-                        for batch_idx, batch in enumerate(val_dataloader):
+                        for batch_idx, batch in enumerate(
+                                _wp_loader(val_dataloader, val_dataset)):
                             batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                             val_losses.append(eval_policy.compute_loss(
                                 batch,
@@ -522,7 +632,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             step_log['val_loss'] = float(np.mean(val_losses))
                     if _is_search_policy(eval_policy):
                         nrmse_max_batches = cfg.training.get('nrmse_max_batches', None)
-                        for prefix, loader in (('val', val_dataloader), ('test', test_dataloader)):
+                        for prefix, loader in (
+                                ('val', _wp_loader(val_dataloader, val_dataset)),
+                                ('test', _wp_loader(test_dataloader, test_dataset))):
                             if loader is None:
                                 continue
                             metrics = self._search_action_nrmse(
@@ -535,6 +647,13 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
 
                 if self.global_step - self.last_sample_step >= sample_every_steps \
                         and train_sampling_batch is not None:
+                    if self._wp_store is not None:
+                        # the buffered trackers from _fill_context_buffer are long gone;
+                        # restore this batch's own before the re-search below (one shared
+                        # verifier serves eval_policy and policy alike, see clone_policy)
+                        eval_policy.set_waypoint_trackers(
+                            [self._wp_store.for_dataset_index(dataset, i)
+                             for i in train_sampling_idxs])
                     step_log.update(self._sample_log(
                         eval_policy, policy, collector, train_sampling_batch, device))
                     self.last_sample_step = self.global_step

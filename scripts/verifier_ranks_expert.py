@@ -126,6 +126,87 @@ def classify(t_cand, ref, eps_px=MOVE_EPS_PX):
     return np.where(k == 0, BLIND, np.where(k == n, INFORMATIVE, PARTIAL)), k, movers
 
 
+def nontouch_stats(v_pol, v_uni, v_star, movers_pol, movers_uni, star_mover):
+    """Can the verifier rank chunks that never TOUCH the T? Restricted to non-movers.
+
+    Under ``t_goal`` every non-mover scores the current T-to-goal distance bit-for-bit
+    (see `classify`), so ranking among them is undefined -- this function then reports
+    distinct counts of ~1 and that is the finding, not a bug. Under the waypoint values
+    the pusher track still varies on those same chunks, and this measures by how much:
+
+      per source (policy / uniform), over decisions with >= 2 non-mover candidates:
+        mean_distinct        distinct scores among the non-movers
+        frac_ranked          fraction of those decisions with any ordering at all (>1 distinct)
+        mean_spread          max-min of the non-mover scores
+      astar_nontouch         a*'s standing among the NON-MOVER policy candidates, only on
+                             decisions where a* itself is a non-mover: mean rank fraction
+                             (0 = better than all, ties count half -- the `_stats`
+                             convention) and p_best with tie credit split.
+      provenance_nontouch    top pick among {non-mover policy, non-mover uniform, a* if
+                             non-mover}; ties across sources excluded, as `provenance` does.
+
+    Point estimates only (no bootstrap): this is a mechanism diagnostic read next to the
+    stratified `_stats` tables, not a headline.
+    """
+    out = {}
+    for name, v, mv in (('policy', v_pol, movers_pol), ('uniform', v_uni, movers_uni)):
+        distinct, spread, counts = [], [], []
+        for i in range(len(v)):
+            x = v[i][~mv[i]]
+            if len(x) >= 2:
+                distinct.append(len(np.unique(x)))
+                spread.append(float(x.max() - x.min()))
+                counts.append(len(x))
+        out[name] = {
+            'n_decisions_2plus_nonmovers': len(distinct),
+            'mean_nonmovers': float(np.mean(counts)) if counts else None,
+            'mean_distinct': float(np.mean(distinct)) if distinct else None,
+            'frac_ranked': float(np.mean([d > 1 for d in distinct])) if distinct else None,
+            'mean_spread': float(np.mean(spread)) if spread else None,
+        }
+    ranks, bests = [], []
+    for i in range(len(v_star)):
+        if star_mover[i]:
+            continue
+        x = v_pol[i][~movers_pol[i]]
+        if len(x) == 0:
+            continue
+        lost = int((x > v_star[i]).sum())
+        tied = int((x == v_star[i]).sum())
+        ranks.append((lost + 0.5 * tied) / len(x))
+        bests.append((lost == 0) / (tied + 1.0))
+    out['astar_nontouch'] = {
+        'n_decisions': len(ranks),
+        'mean_rank_frac': float(np.mean(ranks)) if ranks else None,   # 0.5 == null
+        'p_best': float(np.mean(bests)) if bests else None,
+    }
+    top_of, n_tied, n_dec = {'policy': 0, 'uniform': 0, 'astar': 0}, 0, 0
+    for i in range(len(v_star)):
+        cand = {}
+        xp = v_pol[i][~movers_pol[i]]
+        xu = v_uni[i][~movers_uni[i]]
+        if len(xp):
+            cand['policy'] = float(xp.max())
+        if len(xu):
+            cand['uniform'] = float(xu.max())
+        if not star_mover[i]:
+            cand['astar'] = float(v_star[i])
+        if len(cand) < 2:
+            continue
+        top = max(cand.values())
+        at = [k for k, x in cand.items() if np.isclose(x, top, rtol=0, atol=MOVE_EPS_PX)]
+        if len(at) > 1:
+            n_tied += 1
+            continue
+        top_of[at[0]] += 1
+        n_dec += 1
+    out['provenance_nontouch'] = {
+        'n_decided': n_dec, 'n_tied_excluded': n_tied,
+        **{f'p_{k}': (v / n_dec if n_dec else None) for k, v in top_of.items()},
+    }
+    return out
+
+
 def _stats(star, cand, higher_is_better, ep_ids, n_boot=4000, seed=0):
     """a* against the n candidates, with a cluster bootstrap over episodes.
 
