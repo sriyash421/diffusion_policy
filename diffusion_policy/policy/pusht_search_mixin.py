@@ -126,14 +126,6 @@ class PushTSearchMixin:
         """
         mode = self._verifier_value_mode(self.search_kwargs)
         if is_waypoint_value(mode) and self.consumes_search_context:
-            from diffusion_policy.env.pusht.pusht_verifier import TRAINABLE_WAYPOINT_VALUES
-            if mode not in TRAINABLE_WAYPOINT_VALUES:
-                # The *_dtg variants stay eval-only selection rules (see
-                # TRAINABLE_WAYPOINT_VALUES); a context arm cannot train under them.
-                raise ValueError(
-                    f'{type(self).__name__}: verifier_value={mode!r} is an eval-only '
-                    f'waypoint value and cannot feed a search context. Train under '
-                    f'{mode[:-4]!r} instead.')
             context = self._search_context_mode(self.search_kwargs)
             if context != 'value':
                 # Same contract as the learned Q below: the wp context is the scalar

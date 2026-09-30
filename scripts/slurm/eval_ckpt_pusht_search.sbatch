@@ -35,7 +35,10 @@ source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
 DP_CONDA_ENV="${DP_CONDA_ENV:-vae_pushT_l2s}"
 conda activate "$DP_CONDA_ENV"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+# The repo to run from: the sbatch submit dir (every submit path runs from the repo root;
+# $0 is useless under sbatch, it is the spooled copy in /var/spool), else this file's own
+# repo when run outside SLURM. DP_REPO overrides both.
+cd "${DP_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/../..}}"
 
 # wandb writes its RUN files to the CWD unless told otherwise, and the CWD is the repo --
 # which lives under a 10GB HOME quota. train_pusht_search.sbatch already redirects these;

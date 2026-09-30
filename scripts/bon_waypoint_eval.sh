@@ -3,7 +3,7 @@
 # the t_goal baseline row.
 #
 #   CKPT=/path/to/step_0100000.ckpt bash scripts/bon_waypoint_eval.sh
-#   CKPT=... VALUES="wp_v5 wp_v5_dtg" MAX_N=16 bash scripts/bon_waypoint_eval.sh
+#   CKPT=... VALUES="wp_v5" MAX_N=16 bash scripts/bon_waypoint_eval.sh
 #
 # Intended for the 176-demo expert arm (train_pusht_unet_bc_expert), whose split is the
 # ONLY one the plans cover: media/veritas_pusht/{v5_pusher_and_t,v3_end_outside}/ hold one
@@ -18,8 +18,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CKPT="${CKPT:?set CKPT=/path/to/step_XXXXXXX.ckpt}"
-PY="${PY:-/home/harine/miniconda3/envs/robodiff2/bin/python}"
-VALUES="${VALUES:-t_goal wp_v5 wp_v5_dtg wp_v3 wp_v3_dtg}"
+PY="${PY:-/gscratch/robotics/harine/miniconda3/envs/vae_pushT_l2s/bin/python}"
+VALUES="${VALUES:-t_goal wp_v5 wp_v3}"
 MAX_N="${MAX_N:-64}"
 N_ENVS="${N_ENVS:-30}"
 

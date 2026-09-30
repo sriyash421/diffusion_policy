@@ -221,8 +221,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     def _build_waypoint_store(self, cfg, dataset):
         """TrackerSnapshotStore over every episode this run can touch, or None.
 
-        Only a TRAINABLE waypoint value gets one (the eval-only `_dtg` variants are
-        rejected upstream by check_verifier_value). Coverage is train + val + test:
+        Only a waypoint value gets one. Coverage is train + val + test:
         the context buffer draws train windows, and the val-loss / nrmse loops walk
         the other two splits through the same shared verifier. `load_split_plans`
         refuses any episode without a usable plan, which is the fail-fast that makes

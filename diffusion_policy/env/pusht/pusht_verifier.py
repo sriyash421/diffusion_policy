@@ -342,36 +342,26 @@ CROSS_CANDIDATE_VALUES = {
 # sim's own per-chunk scoring. armTn, because it is armTd's closest sibling AND the current
 # production value -- so the fallback is never something arbitrary.
 #
-# The waypoint values map to d_t_goal: it is the reached-state scalar wp_v5_dtg ADDS, so
-# the one VALUE_FNS entry their `_score_key` resolves to is also the one their combined
-# score is built from (PushTWaypointVerifier._chunk_values).
+# The waypoint values map to d_t_goal: the one VALUE_FNS entry their `_score_key`
+# resolves to wherever a reached-state scalar is needed (PushTWaypointVerifier._chunk_values).
 BASE_VALUE_FN = {
     'armTd': 'armTn',
     'wp_v5': 'd_t_goal',
-    'wp_v5_dtg': 'd_t_goal',
     'wp_v3': 'd_t_goal',
-    'wp_v3_dtg': 'd_t_goal',
 }
 
 # VLM-waypoint values, scored by PushTWaypointVerifier: the Veritas tracker score
-# (diffusion_policy/env/pusht/veritas/tracker.py) at the end of the simulated chunk,
-# alone or plus VALUE_FNS['d_t_goal'] at the reached state (the *_dtg variants). The
+# (diffusion_policy/env/pusht/veritas/tracker.py) at the end of the simulated chunk. The
 # version names the PLAN KIND the run was scored against, so the eval must be handed
 # plans of that kind and the run directory cannot lie about which signal ranked it:
-#   wp_v5* -- v5_pusher_and_t dual plans, both tracks (0..1 each) averaged;
-#   wp_v3* -- v3_end_outside pusher-only plans, the agent track alone.
-# The tracker score is 0..1; *_dtg adds a <= 0 pixel term rescaled by T_GOAL_SPREAD, so
-# the sum moves ~1 unit per candidate step on each side.
-WAYPOINT_VALUES = ('wp_v5', 'wp_v5_dtg', 'wp_v3', 'wp_v3_dtg')
-
-# The waypoint values a run may TRAIN under (verifier_tag / search context). The plain
-# scores are bounded 0..1 by construction and _score_candidates feeds them to the model
-# raw, so they carry training semantics; the workspace supplies per-sample trackers from
-# a demo-replay snapshot store (veritas.tracker.TrackerSnapshotStore). The *_dtg
-# variants stay EVAL-ONLY, like armTd: they add a reached-state pixel term whose
-# training-context semantics were never designed, and check_verifier_value keeps
-# rejecting them as tags.
-TRAINABLE_WAYPOINT_VALUES = ('wp_v3', 'wp_v5')
+#   wp_v5 -- v5_pusher_and_t dual plans, both tracks (0..1 each) averaged;
+#   wp_v3 -- v3_end_outside pusher-only plans, the agent track alone.
+# The tracker score is 0..1 by construction and _score_candidates feeds it to the model
+# raw, so every waypoint value carries training semantics (verifier_tag / search
+# context); the workspace supplies per-sample trackers from a demo-replay snapshot store
+# (veritas.tracker.TrackerSnapshotStore).
+WAYPOINT_VALUES = ('wp_v5', 'wp_v3')
+TRAINABLE_WAYPOINT_VALUES = WAYPOINT_VALUES
 
 # LEARNED values: a trained SAC chunk-Q, scored by `sac.score.PushTQVerifier`. Not a
 # VALUE_FNS entry, and the reason is structural rather than bookkeeping -- a VALUE_FNS entry
@@ -504,13 +494,6 @@ def check_verifier_value(cfg):
             f'search context, which is causal (candidate k is conditioned on candidates '
             f'< k, so a statistic over all n does not exist yet when k is scored). Train '
             f'under {BASE_VALUE_FN[tag]!r} and evaluate with '
-            f'`eval_search_pusht.py --verifier-value {tag}`.')
-    if is_waypoint_value(tag) and tag not in TRAINABLE_WAYPOINT_VALUES:
-        # Only the *_dtg variants remain untrainable -- see TRAINABLE_WAYPOINT_VALUES.
-        raise ValueError(
-            f'verifier_tag={tag!r} is an eval-only waypoint value: its reached-state '
-            f'pixel term has no designed training-context semantics. Train under '
-            f'{tag[:-4]!r} (pusht_verifier.TRAINABLE_WAYPOINT_VALUES) and evaluate with '
             f'`eval_search_pusht.py --verifier-value {tag}`.')
     if is_q_value(tag):
         # Resolve now rather than at policy construction: a missing checkpoint or a missing
@@ -790,8 +773,7 @@ class PushTWaypointVerifier(PushTVerifier):
     Same sim pool, same reset, same reached-state outputs; the only change is the scoring:
     each candidate walks a COPY of its episode's live ``DualTracker``
     (diffusion_policy/env/pusht/veritas/tracker.py) through the chunk's per-step sim
-    states, and the value is the tracker's dual score at the end -- alone (``wp_v5``) or
-    plus ``VALUE_FNS['d_t_goal']`` at the reached state (``wp_v5_dtg``).
+    states, and the value is the tracker's dual score at the end.
 
     The trackers are LIVE EPISODE STATE, not configuration: the eval loop reads them off
     the real envs before every decision (they advanced on what actually executed) and
@@ -826,6 +808,4 @@ class PushTWaypointVerifier(PushTVerifier):
             for t in range(path.shape[1]):
                 tracker.update(path[j, t, :2], path[j, t, 2:5])
             scores[j] = tracker.score
-        if self.value_fn.endswith('_dtg'):
-            scores = scores + VALUE_FNS['d_t_goal'](agent_pos, feedback)[:m].astype(np.float32)
         return scores

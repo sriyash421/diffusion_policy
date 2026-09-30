@@ -294,9 +294,7 @@ class DualTracker:
 # without paying that module's ~88s/440MB import.
 WAYPOINT_PLAN_DIRS = {
     'wp_v5': 'media/veritas_pusht/v5_pusher_and_t',
-    'wp_v5_dtg': 'media/veritas_pusht/v5_pusher_and_t',
     'wp_v3': 'media/veritas_pusht/v3_end_outside',
-    'wp_v3_dtg': 'media/veritas_pusht/v3_end_outside',
 }
 
 

@@ -1178,8 +1178,7 @@ def read_curve_rows(out_root):
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
 @click.option('--verifier-value', default=None,
-              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd',
-                                 'wp_v5', 'wp_v5_dtg', 'wp_v3', 'wp_v3_dtg']),
+              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd', 'wp_v5', 'wp_v3']),
               help='override which value the verifier ranks candidates with. t_goal is '
                    'the pre-2026-08-19 value (-T-to-goal distance); d_t_goal is that '
                    'same term over its 13.6px spread, which RANKS IDENTICALLY but records '
@@ -1202,11 +1201,10 @@ def read_curve_rows(out_root):
                    'the existing bon_search_ver-armT/ curves remain readable. The wp_* '
                    'values rank on VLM waypoint progress: each candidate chunk is '
                    'simulated and a copy of the episode\'s live Veritas tracker walks '
-                   'its path; wp_v5* tracks BOTH the pusher waypoints and the T poses '
-                   'of the v5 dual plans (scores averaged), wp_v3* the v3 pusher-only '
-                   'plans (agent track alone); *_dtg additionally adds d_t_goal at the '
-                   'reached state. They need a plan per evaluated episode (--plan-dir) '
-                   'and are eval-only, UNet-BC-only like armTd.')
+                   'its path; wp_v5 tracks BOTH the pusher waypoints and the T poses '
+                   'of the v5 dual plans (scores averaged), wp_v3 the v3 pusher-only '
+                   'plans (agent track alone). They need a plan per evaluated episode '
+                   '(--plan-dir).')
 @click.option('--plan-dir', default=None,
               help='directory of ep{idx}.json VLM plans for the wp_* verifier values '
                    '(from scripts/veritas_pusht_overlays.py). Default: the value\'s own '
