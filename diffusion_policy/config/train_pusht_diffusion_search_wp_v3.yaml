@@ -1,0 +1,42 @@
+# PushT diffusion search transformer trained WITH THE wp_v3 WAYPOINT VERIFIER: candidates
+# are ranked, and the search context filled, by the Veritas tracker score over the
+# v3_end_outside pusher-only VLM plans (media/veritas_pusht/v3_end_outside/). The context
+# is the raw 0..1 score (see PushTSearchMixin._score_candidates); per-sample tracker state
+# comes from a demo-replay snapshot store the workspace builds at startup
+# (TrackerSnapshotStore), which REFUSES to start unless every train/val/test episode of
+# the split has a plan -- generate them first:
+#   python scripts/veritas_pusht_overlays.py --prompt v3_end_outside --split train \
+#       --n-episodes 176 --skip-planned    # repeat until all have a `plan`
+#
+# THE SPLIT IS THE 176-DEMO EXPERT SPLIT, not the ladder's demos-30: it is the only split
+# whose plan set can be completed with 176+30 Gemini calls (the 30 test plans already
+# exist), and the arm this compares against first is the BC UNet expert scored under the
+# same wp values. The overrides below mirror train_pusht_unet_bc_expert.yaml -- see there
+# for why they must live in a file rather than on the command line.
+defaults:
+  - train_pusht_diffusion_search
+  - _self_
+
+name: train_pusht_diffusion_search_wp_v3
+
+# The tag IS the scoring rule and the context source, and rides into run_name/wandb as
+# ver-wp_v3 (check_verifier_value accepts it: pusht_verifier.TRAINABLE_WAYPOINT_VALUES).
+verifier_tag: wp_v3
+
+# Plan directory override; null resolves to the tag's own prompt dir
+# (veritas.tracker.WAYPOINT_PLAN_DIRS). The resolved dir is part of the run identity.
+plan_dir: null
+
+n_demos: 176
+
+task:
+  dataset:
+    # validated against splits/pusht_seed42_train176.json, not generative
+    n_test_episodes: 30
+    n_val_episodes: 0
+
+training:
+  # OFF, and the env runner is not even built: PushTSearchImageRunner has no tracker
+  # wrapper, so an in-training rollout would score against unset trackers. Success is
+  # measured offline by eval_search_pusht.py --watch, which has the full plumbing.
+  rollout_every_steps: null

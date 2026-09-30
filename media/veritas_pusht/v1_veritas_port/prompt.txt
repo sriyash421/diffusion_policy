@@ -1,0 +1,22 @@
+# prompt: v1_veritas_port
+# model: gemini-3.8-flash
+# filled per episode by pusht_client.build_prompt; the filled text is in each ep*.json
+# ep13/ep36 PNGs are "no plan" tiles (503 high demand); ep40/45/59 were never reached in that run
+
+Image size: {W}x{H} (u in [0,{W}), v in [0,{H}]). Current pusher pixel: {agent_uv}. Objects (name/role/uv): T block(object) uv={t_uv}; goal T(target) uv={g_uv}
+Generate 5-10 absolute pixel waypoints (u,v) for the blue circular pusher to complete the task.
+Return JSON only matching schema:
+waypoints: [{{"uv": [u,v], "tol_px": float, "min_hold": int, "skippable": bool, "weight": float}}],
+confidence: float, notes: optional.
+Instruction: {instruction}
+Top-down view of the whole table. Pixel coords (u right, v down) are absolute; fractional values are allowed.
+Pick tol_px (pixel-radius the verifier uses to consider a waypoint reached):
+use ~9 pixels per waypoint by default. Adjust within ~7-12 only when you
+have a clear reason — slightly tighter (~7) for precise contact with the block,
+slightly looser (~11-12) for coarse approach transits. Stay close to 9.
+Pick min_hold (consecutive frames the pusher must stay within tol_px before the
+waypoint counts as reached) as a small integer: 1 for transit waypoints,
+2-3 for waypoints where the pusher contacts or pushes the block.
+Set skippable=true for every intermediate waypoint so the verifier can skip
+ahead when one is approximately satisfied. Set skippable=false only for the
+final push waypoint — that one must latch for success.

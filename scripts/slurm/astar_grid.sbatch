@@ -25,7 +25,10 @@ source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
 # vae_pushT_l2s, NOT robodiff: this imports eval_search_pusht, which is what that env is for.
 conda activate "${DP_CONDA_ENV:-vae_pushT_l2s}"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+# The repo to run from: the sbatch submit dir (every submit path runs from the repo root;
+# $0 is useless under sbatch, it is the spooled copy in /var/spool), else this file's own
+# repo when run outside SLURM. DP_REPO overrides both.
+cd "${DP_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/../..}}"
 
 ROOT="${DP_OUTPUT_ROOT:-/gscratch/robotics/harine/diffusion_policy_outputs}"
 TASK="$ROOT/pusht_search/pusht_image_search_imgonly"

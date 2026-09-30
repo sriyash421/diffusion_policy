@@ -1,0 +1,14 @@
+# The wp_v5 sibling of train_pusht_diffusion_search_wp_v3 -- every decision is documented
+# THERE; this file changes only which waypoint value (and so which plan kind) the run
+# trains under: the v5_pusher_and_t DUAL plans, whose tracker averages the pusher track
+# and the T-pose track (media/veritas_pusht/v5_pusher_and_t/). Generate the train plans
+# first:
+#   python scripts/veritas_pusht_overlays.py --prompt v5_pusher_and_t --split train \
+#       --n-episodes 176 --skip-planned    # repeat until all have a `plan`
+defaults:
+  - train_pusht_diffusion_search_wp_v3
+  - _self_
+
+name: train_pusht_diffusion_search_wp_v5
+
+verifier_tag: wp_v5

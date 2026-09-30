@@ -72,10 +72,14 @@ import torch
 from diffusion_policy.env.pusht.feedback_util import (
     compute_feedback_from_pose, t_center_from_feedback, t_goal_distance)
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from eval_search_pusht import get_split_states, load_policy
+from diffusion_policy.env.pusht.pusht_verifier import is_waypoint_value
+from diffusion_policy.env.pusht.veritas.tracker import DualTracker
+from eval_search_pusht import (
+    _WAYPOINT_PLAN_DIRS, get_split_states, load_policy, load_split_plans)
 from scripts.dump_candidate_scores import resolved_verifier_value
 from scripts.verifier_ranks_expert import (
-    BLIND, CLASSES, INFORMATIVE, MOVE_EPS_PX, PARTIAL, T_GOAL, classify, _stats)
+    BLIND, CLASSES, INFORMATIVE, MOVE_EPS_PX, PARTIAL, T_GOAL, classify,
+    nontouch_stats, _stats)
 
 POLICY, UNIFORM, ASTAR, TIE = 'policy', 'uniform', 'astar', 'tie'
 SOURCES = (POLICY, UNIFORM, ASTAR)
@@ -153,6 +157,99 @@ def uniform_chunks(agent, block_c, n_samples, r_max, To, Ta, H, sectors, rng):
         out[b, :, To - 1 + Ta:] = end[:, None]
         meta[b], per[b] = wedges, len(idx)
     return out, meta, per
+
+
+def tracker_snapshots(rb, pts, plans_by_ep, To):
+    """{(episode, i): DualTracker} -- the live tracker state at each decision point,
+    from one demo replay per episode.
+
+    CONVENTION (must match VeritasTrackerWrapper, which is what eval's verifier branches
+    from): anchor at the episode's reset row ``s`` with ZERO updates, then one ``update``
+    per POST-STEP row ``s+1 .. i``. Every recorded row between decisions is replayed --
+    the tracker's hold/stall counters are per-frame, so a Ta-strided replay would be a
+    different tracker. (scripts/veritas_tracker_demo_check.py also updates on the anchor
+    row; that is a diagnostic-only deviation -- do not copy it here.)
+    """
+    ends = np.asarray(rb.episode_ends[:])
+    starts = np.concatenate([[0], ends[:-1]])
+    ap, bp = np.asarray(rb['agent_pos']), np.asarray(rb['block_pos'])
+    want = {}
+    for e, i, _ in pts:
+        want.setdefault(e, []).append(i)
+    snaps = {}
+    for e, idxs in want.items():
+        s = int(starts[e])
+        tracker = DualTracker(plans_by_ep[e], ap[s], bp[s])
+        idxs = sorted(set(idxs))
+        j = 0
+        if idxs[0] == s:                       # decision at the reset row itself
+            snaps[(e, s)] = tracker.copy()
+            j = 1
+        for f in range(s + 1, idxs[-1] + 1):
+            tracker.update(ap[f], bp[f])
+            if j < len(idxs) and f == idxs[j]:
+                snaps[(e, f)] = tracker.copy()
+                j += 1
+    return snaps
+
+
+def save_decision_viz(path, image, a_pol, a_uni, a_star, v_pol, v_uni, v_star,
+                      To, Ta, title):
+    """One decision: every scored chunk over the obs frame, coloured by verifier value.
+
+    Colourblind-safe by construction: the VALUE is the colour (viridis + colourbar), the
+    SOURCE is the line style (policy solid, uniform dotted), and the two highlighted
+    chunks -- a* and the argmax pick -- get distinct markers, heavier lines and their
+    values written in the legend, so nothing is told apart by hue alone. Only the
+    executed window [To-1, To-1+Ta) is drawn: it is the only part the verifier scored.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib import cm, colors
+
+    px = 96.0 / 512.0
+    sl = slice(To - 1, To - 1 + Ta)
+    vals = np.concatenate([v_pol, v_uni, [v_star]])
+    norm = colors.Normalize(vmin=float(vals.min()), vmax=float(vals.max()))
+    cmap = cm.viridis
+    fig, ax = plt.subplots(figsize=(6.4, 5.6))
+    ax.imshow(np.moveaxis(np.asarray(image), 0, -1), extent=[0, 96, 96, 0])
+    best_src, best_k = max(
+        [('policy', int(v_pol.argmax())), ('uniform', int(v_uni.argmax()))],
+        key=lambda sk: {'policy': v_pol, 'uniform': v_uni}[sk[0]][sk[1]])
+    for name, chunks, vv, style in (('policy', a_pol, v_pol, '-'),
+                                    ('uniform', a_uni, v_uni, ':')):
+        for k in range(len(chunks)):
+            w = chunks[k][sl] * px
+            hot = (name == best_src and k == best_k)
+            ax.plot(w[:, 0], w[:, 1], style, color=cmap(norm(vv[k])),
+                    lw=2.6 if hot else 1.0, alpha=1.0 if hot else 0.75, zorder=4 if hot else 2)
+            if hot:
+                ax.plot(w[-1, 0], w[-1, 1], 'o', ms=9, mfc='none', mew=2.2,
+                        color=cmap(norm(vv[k])), zorder=5)
+    w = a_star[sl] * px
+    ax.plot(w[:, 0], w[:, 1], '--', color=cmap(norm(v_star)), lw=2.6, zorder=6)
+    ax.plot(w[-1, 0], w[-1, 1], '*', ms=15, color=cmap(norm(v_star)),
+            mec='black', mew=0.8, zorder=7)
+    best_v = {'policy': v_pol, 'uniform': v_uni}[best_src][best_k]
+    handles = [
+        plt.Line2D([], [], color='0.3', ls='-', label='policy candidate'),
+        plt.Line2D([], [], color='0.3', ls=':', label='uniform sample'),
+        plt.Line2D([], [], color=cmap(norm(v_star)), ls='--', marker='*', ms=11,
+                   mec='black', label=f'a* (expert)  v={v_star:.4g}'),
+        plt.Line2D([], [], color=cmap(norm(best_v)), ls='-', marker='o', mfc='none',
+                   mew=2, label=f'argmax ({best_src})  v={best_v:.4g}'),
+    ]
+    ax.legend(handles=handles, loc='upper left', fontsize=7, framealpha=0.85)
+    fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, fraction=0.046,
+                 label='verifier value')
+    ax.set_xlim(0, 96); ax.set_ylim(96, 0)
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
 
 
 def build_batch(rb, pts, To, H, device):
@@ -358,15 +455,36 @@ def provenance(v_pol, v_uni, v_star):
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--seed', default=42, show_default=True)
 @click.option('--verifier-value', default=None, help='override the scoring rule')
+@click.option('--plan-dir', default=None,
+              help='ep{idx}.json VLM plans for the wp_* values; default: the value\'s own '
+                   'prompt dir (eval_search_pusht._WAYPOINT_PLAN_DIRS)')
 @click.option('--out', default=None, help='write the stats as JSON here')
+@click.option('--viz', default=10, show_default=True,
+              help='save this many decision visualizations: every scored chunk over the '
+                   'obs frame, coloured by verifier value, a* and the argmax pick '
+                   'highlighted. 0 disables.')
+@click.option('--viz-dir', default=None,
+              help='where the visualizations go; default: <out stem>_viz/ beside --out, '
+                   'or astar_walk_viz/ in the cwd without one')
 def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, seed,
-         verifier_value, out):
+         verifier_value, plan_dir, out, viz, viz_dir):
     policy, cfg = load_policy(checkpoint, device)
     if verifier_value is not None:
         policy.search_kwargs['verifier_value'] = verifier_value
         built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
         if built is not None:
-            built.value_fn = verifier_value
+            if is_waypoint_value(verifier_value) and not hasattr(built, 'set_trackers'):
+                # a wp value cannot be assigned onto a plain PushTVerifier (its setter
+                # refuses); rebuild through the policy's factory, exactly as
+                # eval_search_pusht.eval_checkpoint does.
+                built.close()
+                rebuilt = policy._build_verifier(**policy.search_kwargs)
+                if '_verifier' in policy.__dict__:
+                    policy._verifier = rebuilt
+                else:
+                    policy.verifier = rebuilt
+            else:
+                built.value_fn = verifier_value
     native = resolved_verifier_value(policy, cfg)
     vv = verifier_value or native
     To, Ta, H = policy.n_obs_steps, policy.n_action_steps, cfg.policy.horizon
@@ -380,6 +498,17 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
     pts = decision_points(rb, ep_idxs, To, H, Ta)
     r_max = measure_rmax(rb, ep_idxs, To, Ta, H)
     rng = np.random.default_rng(seed)
+    snaps = None
+    if is_waypoint_value(vv):
+        # per-episode VLM plans + the live tracker state at every decision, from a demo
+        # replay -- the same state eval's VeritasTrackerWrapper would hold there. The
+        # WALKED episodes (post-truncation), not the whole split: load_split_plans
+        # refuses any gap, and only these episodes are scored.
+        if plan_dir is None:
+            plan_dir = _WAYPOINT_PLAN_DIRS[vv]
+        plans = load_split_plans(plan_dir, ep_idxs, split, vv)
+        snaps = tracker_snapshots(rb, pts, dict(zip(ep_idxs, plans)), To)
+        print(f'waypoint plans: {plan_dir} ({len(plans)} episodes)')
     print(f'{arm} step {step}: {len(pts)} decisions over {len(ep_idxs)} {split} episodes, '
           f'n={n_actions} policy + {n_actions} uniform, verifier={vv}'
           + ('  (OVERRIDDEN)' if verifier_value and verifier_value != native else ''))
@@ -388,6 +517,12 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
 
     V_pol, V_uni, V_star, T_pol, T_uni, T_star = [], [], [], [], [], []
     A_pol, A_uni, A_star, refs, phases, eps_of, agents = [], [], [], [], [], [], []
+    progress = []      # (pusher, t) tracker progress at each decision, wp values only
+    # decisions to visualize: evenly spaced across the whole walk, so the panel spans
+    # approach and contact rather than sampling one episode's opening moves
+    viz_idx = (set(np.linspace(0, len(pts) - 1, min(viz, len(pts))).astype(int).tolist())
+               if viz else set())
+    viz_rows = []
     torch.manual_seed(seed)
     np.random.seed(seed)
     try:
@@ -403,6 +538,13 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
             seeder = getattr(policy, 'set_sample_seeds', None)
             if seeder is not None:
                 seeder([seed * 1_000_003 + b0 + k for k in range(len(chunk))])
+            if snaps is not None:
+                # one call covers everything scored in this batch (policy candidates,
+                # uniform chunks and a* share the same B rows, and the verifier copies
+                # per candidate). Hand in copies so the stored snapshots stay pristine.
+                policy.set_waypoint_trackers(
+                    [snaps[(e, i)].copy() for e, i, _ in chunk])
+                progress += [snaps[(e, i)].progress for e, i, _ in chunk]
             with torch.no_grad(), policy._crop_scope(), policy._corrupt_scope():
                 feats = policy._encode_obs_features(obs)
                 acts, _, sc, tm = policy.predict_n_actions(
@@ -429,6 +571,16 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
             agents.append(agent)
             phases.append(expert_moved(poses, Ta))
             eps_of += [e for e, _, _ in chunk]
+            for r, (e, i, _) in enumerate(chunk):
+                if b0 + r not in viz_idx:
+                    continue
+                viz_rows.append({
+                    'ep': e, 'frame': i,
+                    'image': obs['image'][r, To - 1].cpu().numpy(),
+                    'a_pol': A_pol[-1][r], 'a_uni': A_uni[-1][r], 'a_star': A_star[-1][r],
+                    'v_pol': V_pol[-1][r], 'v_uni': V_uni[-1][r],
+                    'v_star': float(V_star[-1][r]),
+                })
             print(f'  {min(b0 + batch, len(pts))}/{len(pts)}', end='\r', flush=True)
     finally:
         close = getattr(policy, 'close', None)
@@ -448,10 +600,22 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
     inf_uni, cls_u, _, _ = informativeness(t_uni[:, :, T_GOAL], ref, v_uni, n_actions, phase)
     prov, _ = provenance(v_pol, v_uni, v_star)
 
+    # NO-TOUCH DISCRIMINATION: how the verifier orders the chunks that never move the T.
+    # Under t_goal this is degenerate by construction (the ties classify keys on); under
+    # the wp values it is the question -- the pusher track varies on exactly these chunks.
+    _, _, mv_pol = classify(t_pol[:, :, T_GOAL], ref)
+    _, _, mv_uni = classify(t_uni[:, :, T_GOAL], ref)
+    star_mover = np.abs(t_star[:, T_GOAL] - ref) > MOVE_EPS_PX
+    nontouch = nontouch_stats(v_pol, v_uni, v_star, mv_pol, mv_uni, star_mover)
+
     res = {'arm': arm, 'step': step, 'checkpoint': str(checkpoint), 'split': split,
            'n': n_actions, 'sectors': sectors, 'r_max_px': r_max,
            'n_decisions': int(len(v_star)), 'n_episodes': int(len(set(eps_of))),
            'verifier_value': vv, 'verifier_value_native': native, 'seed': seed,
+           'plan_dir': (str(plan_dir) if snaps is not None else None),
+           'wp_progress': ([[float(p), float(t)] for p, t in progress]
+                           if snaps is not None else None),
+           'nontouch': nontouch,
            'informativeness': {'policy': inf_pol, 'uniform': inf_uni},
            'provenance': prov,
            'reach': reach_stats(a_pol, a_uni, a_star, agent_all, r_max),
@@ -471,6 +635,19 @@ def main(checkpoint, arm, n_actions, episodes, sectors, split, batch, device, se
         pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
         pathlib.Path(out).write_text(json.dumps(res, indent=2))
         print(f'\n-> {out}')
+    if viz_rows:
+        vdir = pathlib.Path(viz_dir) if viz_dir else (
+            pathlib.Path(out).parent / (pathlib.Path(out).stem + '_viz')
+            if out else pathlib.Path('astar_walk_viz'))
+        vdir.mkdir(parents=True, exist_ok=True)
+        for row in viz_rows:
+            name = f'ep{row["ep"]}_frame{row["frame"]}_{vv}.png'
+            save_decision_viz(
+                vdir / name, row['image'], row['a_pol'], row['a_uni'], row['a_star'],
+                row['v_pol'], row['v_uni'], row['v_star'], To, Ta,
+                f'{arm} step {step} | ep {row["ep"]} frame {row["frame"]} | '
+                f'verifier {vv}')
+        print(f'-> {len(viz_rows)} decision visualizations in {vdir}/')
 
 
 def report(res, n):
@@ -484,9 +661,14 @@ def report(res, n):
           f'{iu["mean_movers_frac"]:>18.1%}')
     print(f'  {"effective search width":<26s}{ip["mean_distinct"]:>12.2f}/{n}'
           f'{iu["mean_distinct"]:>15.2f}/{n}')
-    print(f'\n  BLIND means every score is identical -- the verifier ranks nothing there, and\n'
-          f'  best-of-n buys nothing. n is a real compute axis only on the other '
-          f'{1 - ip["p_blind"]:.0%}.')
+    if res.get('verifier_value', '').startswith('wp_'):
+        print(f'\n  BLIND here means no candidate MOVED THE T -- under this waypoint value the\n'
+              f'  scores there are NOT tied (the pusher track still varies); see the NO-TOUCH\n'
+              f'  section below for how much ordering survives on those decisions.')
+    else:
+        print(f'\n  BLIND means every score is identical -- the verifier ranks nothing there, '
+              f'and\n  best-of-n buys nothing. n is a real compute axis only on the other '
+              f'{1 - ip["p_blind"]:.0%}.')
     if ip['by_phase']:
         print(f'\n  split by whether the DEMO\'s own chunk moves the block (a property of the\n'
               f'  state, so the same decisions fall in each subset for every arm):')
@@ -506,6 +688,33 @@ def report(res, n):
           f'(null 50%)')
     print('  Budgets are matched at 16 v 16, so 50% is the coin flip. Well above it means\n'
           '  best-of-n is limited by what the policy GENERATES, not by the ranking.')
+
+    nt = res.get('nontouch')
+    if nt:
+        print(f'\n{"="*78}\nNO-TOUCH DISCRIMINATION: ranking among chunks that never move '
+              f'the T\n{"="*78}')
+        for k in ('policy', 'uniform'):
+            d = nt[k]
+            if d['mean_distinct'] is None:
+                print(f'  {k:<10s} no decision had 2+ non-mover chunks')
+                continue
+            print(f'  {k:<10s} {d["n_decisions_2plus_nonmovers"]:4d} decisions with 2+ '
+                  f'non-movers   distinct {d["mean_distinct"]:5.2f} of '
+                  f'{d["mean_nonmovers"]:.1f}   ranked {d["frac_ranked"]:6.1%}   '
+                  f'spread {d["mean_spread"]:.4f}')
+        a = nt['astar_nontouch']
+        if a['mean_rank_frac'] is not None:
+            print(f'  a* among non-mover policy chunks ({a["n_decisions"]} decisions where '
+                  f'a* is a non-mover):\n'
+                  f'    mean rank fraction {a["mean_rank_frac"]:.3f} (0 = best, null 0.500)'
+                  f'   p_best {a["p_best"]:.3f}')
+        pn = nt['provenance_nontouch']
+        if pn['n_decided']:
+            print(f'  top non-mover pick: policy {pn["p_policy"]:.1%}  uniform '
+                  f'{pn["p_uniform"]:.1%}  a* {pn["p_astar"]:.1%}  '
+                  f'({pn["n_decided"]} decided, {pn["n_tied_excluded"]} tied excluded)')
+        print('  Under t_goal non-movers tie by construction, so distinct~1 and "ranked" ~0%\n'
+              '  IS the t_goal result; a waypoint value earns its keep by ranking here.')
 
     rc = res['reach']
     print(f'\n{"="*78}\nFAIRNESS AUDIT: how far does each source move the arm?\n{"="*78}')
