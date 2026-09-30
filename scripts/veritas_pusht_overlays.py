@@ -294,7 +294,7 @@ def main():
             f'pusht_client.build_prompt; the filled text is in each ep*.json\n\n{template}')
         episodes = starts[:args.n_episodes]
 
-    tiles, planned = [], []
+    tiles, planned, called = [], [], []
     for episode_idx, state in episodes:
         image, agent_pos, feedback = start_obs(episode_idx, state)
         g = obs_to_gemini_inputs(image, agent_pos, feedback)
@@ -308,6 +308,7 @@ def main():
             plan = client.call_pusht_plan(
                 g['frame'], build_prompt(template, g), gemini_hints(g),
                 log_dir=str(out), log_name=f'ep{episode_idx}', kind=kind)
+            called.append(episode_idx)
             if plan is not None:
                 # the clipped plan beside the raw response the client logged
                 rec = json.loads(rec_path.read_text())
@@ -327,11 +328,40 @@ def main():
         if plan is not None:
             planned.append(tile)
 
-    cv2.imwrite(str(out / 'overlays.png'), cv2.cvtColor(grid(tiles), cv2.COLOR_RGB2BGR))
+    # one grid per split, so planning the train episodes does not overwrite the test grid
+    sfx = '' if args.split == 'test' else f'_{args.split}'
+    cv2.imwrite(str(out / f'overlays{sfx}.png'), cv2.cvtColor(grid(tiles), cv2.COLOR_RGB2BGR))
     if planned:
-        cv2.imwrite(str(out / 'overlays_success.png'),
+        cv2.imwrite(str(out / f'overlays_success{sfx}.png'),
                     cv2.cvtColor(grid(planned), cv2.COLOR_RGB2BGR))
     print(f'wrote {len(tiles)} overlays ({len(planned)} with a plan) to {out}/')
+    print(usage_summary(out, called, args.model))
+
+
+def usage_summary(out, called, model):
+    """Gemini usage + cost of THIS run's calls, and of every plan the folder holds."""
+    def tally(paths):
+        n, tok, usd = 0, {'in': 0, 'out': 0, 'thought': 0}, 0.0
+        for p in paths:
+            rec = json.loads(p.read_text())
+            u = rec.get('usage') or {}
+            if not u:
+                continue
+            n += 1
+            tok['in'] += u.get('prompt_token_count') or 0
+            tok['out'] += u.get('candidates_token_count') or 0
+            tok['thought'] += u.get('thoughts_token_count') or 0
+            usd += cost_usd(u, rec.get('model')) or 0.0
+        return n, tok, usd
+
+    def line(label, n, tok, usd):
+        return (f'{label}: {n} Gemini call(s), tokens in {tok["in"]} / out {tok["out"]} / '
+                f'thought {tok["thought"]}, ${usd:.3f}')
+
+    this = tally(out / f'ep{i}.json' for i in called if (out / f'ep{i}.json').exists())
+    every = tally(sorted(out.glob('ep*.json')))
+    return (f'GEMINI USAGE ({model})\n  ' + line('this run', *this) + '\n  '
+            + line(f'{out}/ total', *every))
 
 
 if __name__ == '__main__':
