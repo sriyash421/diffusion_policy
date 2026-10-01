@@ -1,0 +1,237 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      42.75,
+      42.0
+    ],
+    "block_uv": [
+      58.125,
+      48.9375
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": 81.89488951337518,
+    "goal_deg": 45.0,
+    "goal_dist_px": 17.78317165374756
+  },
+  "prompt": "You are planning the Push-T task. A blue circular pusher pushes the grey T block\nacross a flat table (it can only push, never grasp). The task succeeds when the grey T\ncovers the green goal T in BOTH position and rotation.\n\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u to the right, v down.\n\nT geometry: a horizontal bar 22.5x5.6 px with a stem 5.6x16.9 px\nhanging from its middle. The T is tracked by its 8 corner keypoints, in this order:\nbar_left_bottom, bar_right_bottom, bar_right_top, bar_left_top,\nstem_top_left, stem_bottom_left, stem_bottom_right, stem_top_right.\nPose = (centroid u, centroid v, angle); the centroid is the mean of the 8 keypoints.\nAngle 0 means the bar is on top and the stem points straight down (+v); positive\nangles rotate CLOCKWISE on screen.\n\nCurrent state (pixels, degrees):\n- Grey T pose: centroid [58.1, 48.9], angle 82\n- Grey T keypoints: {bar_left_bottom: [59.3, 37.4], bar_right_bottom: [62.5, 59.7], bar_right_top: [68.1, 58.9], bar_left_top: [64.9, 36.6], stem_top_left: [60.5, 45.8], stem_bottom_left: [43.8, 48.1], stem_bottom_right: [44.6, 53.7], stem_top_right: [61.3, 51.3]}\n- Green goal T pose: centroid [42.0, 54.0], angle 45\n- Green goal T keypoints: {bar_left_bottom: [36.1, 44.0], bar_right_bottom: [52.0, 59.9], bar_right_top: [56.0, 56.0], bar_left_top: [40.0, 40.0], stem_top_left: [42.0, 50.0], stem_bottom_left: [30.1, 61.9], stem_bottom_right: [34.1, 65.9], stem_top_right: [46.0, 54.0]}\n- Grey-to-goal distance (mean keypoint distance): 17.8 px\n- Pusher at [42.8, 42.0]\n\nReturn TWO plans in one response.\n\n1. t_poses: 3-8 intermediate poses of the grey T, ending exactly at the goal pose.\n- Each step moves the centroid at most ~19 px and turns at most ~30 degrees.\n- Take the shortest rotation direction to the goal angle (difference within +/-180 degrees).\n- Keep the entire T inside the image with a margin of ~5 px.\n- Rotate while the T has room around it; small rotations near the goal are hard to fix.\n- Every step must be producible by pushing: the pusher pushes from the side opposite\n  the direction of motion, and rotates the T by pushing near a bar end or the stem side.\n- tol_px is the MEAN KEYPOINT DISTANCE (pixels) at which a pose counts as reached:\n  ~6 for intermediate poses, ~2 for the final (goal) pose.\n- min_hold: 1 for intermediate poses, 2 for the final pose.\n- skippable: true for every intermediate pose, false for the final pose.\n\n2. pusher_waypoints: 5-10 waypoints (u,v) for the PUSHER, in order, that move the T\n   through those poses:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n- tol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\n  where the pusher must contact a specific part of the T, ~8 px for repositioning.\n- min_hold: 1 for repositioning, 2 for contact/push waypoints.\n- skippable: true for all but the final waypoint.\n\nReturn JSON only:\n{\"t_poses\": [{\"centroid_uv\": [u, v], \"angle_deg\": float,\n               \"tol_px\": float, \"min_hold\": int, \"skippable\": bool}],\n  \"pusher_waypoints\": [{\"uv\": [u, v], \"tol_px\": float, \"min_hold\": int,\n                        \"skippable\": bool, \"weight\": float}],\n  \"confidence\": float, \"notes\": \"optional\"}\n",
+  "response": {
+    "t_poses": [
+      {
+        "centroid_uv": [
+          52.0,
+          50.5
+        ],
+        "angle_deg": 65.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          46.5,
+          52.5
+        ],
+        "angle_deg": 52.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          42.0,
+          54.0
+        ],
+        "angle_deg": 45.0,
+        "tol_px": 2.0,
+        "min_hold": 2,
+        "skippable": false
+      }
+    ],
+    "pusher_waypoints": [
+      {
+        "uv": [
+          45.0,
+          26.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          68.0,
+          26.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          74.0,
+          38.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          65.0,
+          43.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          46.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          50.0,
+          48.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.93,
+    "notes": "Circumvent the grey T around the top to push on the upper bar edge, inducing counter-clockwise rotation and translating left-downward into the target pose."
+  },
+  "usage": {
+    "candidates_token_count": 649,
+    "prompt_token_count": 2273,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 1184
+      }
+    ],
+    "thoughts_token_count": 3013,
+    "total_token_count": 5935
+  },
+  "plan": {
+    "pusher_waypoints": [
+      {
+        "uv": [
+          45.0,
+          26.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          68.0,
+          26.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          74.0,
+          38.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          65.0,
+          43.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          46.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          50.0,
+          48.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "t_poses": [
+      {
+        "centroid_uv": [
+          52.0,
+          50.5
+        ],
+        "angle_deg": 65.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          46.5,
+          52.5
+        ],
+        "angle_deg": 52.0,
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true
+      },
+      {
+        "centroid_uv": [
+          42.0,
+          54.0
+        ],
+        "angle_deg": 45.0,
+        "tol_px": 2.0,
+        "min_hold": 2,
+        "skippable": false
+      }
+    ],
+    "confidence": 0.93,
+    "notes": "Circumvent the grey T around the top to push on the upper bar edge, inducing counter-clockwise rotation and translating left-downward into the target pose."
+  }
+}
