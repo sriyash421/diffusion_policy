@@ -1,0 +1,173 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      39.5625,
+      82.6875
+    ],
+    "block_uv": [
+      71.625,
+      35.0625
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": 127.07343769512454,
+    "goal_deg": 45.0,
+    "goal_dist_px": 36.51536178588867
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [39.6, 82.7]. Grey T: center [71.6, 35.1], angle 127 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          46.0,
+          42.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          62.0,
+          20.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          75.0,
+          22.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          66.0,
+          32.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          58.0,
+          40.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          50.0,
+          46.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.5
+      }
+    ],
+    "confidence": 0.88,
+    "notes": "Route around left of grey T to position above the top-right notch, then push down-left to induce counter-clockwise rotation and translate T onto the goal."
+  },
+  "usage": {
+    "candidates_token_count": 434,
+    "prompt_token_count": 1470,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 381
+      }
+    ],
+    "thoughts_token_count": 4248,
+    "total_token_count": 6152
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          46.0,
+          42.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          62.0,
+          20.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          75.0,
+          22.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          66.0,
+          32.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          58.0,
+          40.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          50.0,
+          46.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.5
+      }
+    ],
+    "confidence": 0.88,
+    "notes": "Route around left of grey T to position above the top-right notch, then push down-left to induce counter-clockwise rotation and translate T onto the goal."
+  }
+}

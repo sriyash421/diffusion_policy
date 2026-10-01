@@ -1,0 +1,193 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      75.9375,
+      60.1875
+    ],
+    "block_uv": [
+      60.5625,
+      68.06249237060547
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": -162.15952492086186,
+    "goal_deg": 45.0,
+    "goal_dist_px": 29.859752655029297
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [75.9, 60.2]. Grey T: center [60.6, 68.1], angle -162 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          72.0,
+          58.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          55.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          46.0,
+          60.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          54.0,
+          74.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 0.8
+      },
+      {
+        "uv": [
+          62.0,
+          64.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 0.8
+      },
+      {
+        "uv": [
+          52.0,
+          54.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          46.0,
+          48.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.88,
+    "notes": "Push upper stem leftward to rotate CCW into alignment, then reposition to push crossbar into goal."
+  },
+  "usage": {
+    "candidates_token_count": 393,
+    "prompt_token_count": 1470,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 381
+      }
+    ],
+    "thoughts_token_count": 2799,
+    "total_token_count": 4662
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          72.0,
+          58.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          55.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          46.0,
+          60.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          54.0,
+          74.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 0.8
+      },
+      {
+        "uv": [
+          62.0,
+          64.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 0.8
+      },
+      {
+        "uv": [
+          52.0,
+          54.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          46.0,
+          48.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.88,
+    "notes": "Push upper stem leftward to rotate CCW into alignment, then reposition to push crossbar into goal."
+  }
+}

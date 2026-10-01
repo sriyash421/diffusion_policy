@@ -1,0 +1,193 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      78.9375,
+      53.625
+    ],
+    "block_uv": [
+      25.125,
+      82.6875
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": 79.31805332169512,
+    "goal_deg": 45.0,
+    "goal_dist_px": 33.73337173461914
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [78.9, 53.6]. Grey T: center [25.1, 82.7], angle 79 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          65.0,
+          75.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          42.0,
+          95.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          18.0,
+          94.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          18.0,
+          86.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          26.0,
+          76.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          34.0,
+          65.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          38.0,
+          59.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Route around the bottom of the grey T to push the stem up-right, rotating clockwise and translating into the green goal."
+  },
+  "usage": {
+    "candidates_token_count": 396,
+    "prompt_token_count": 1469,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 380
+      }
+    ],
+    "thoughts_token_count": 2222,
+    "total_token_count": 4087
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          65.0,
+          75.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          42.0,
+          95.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          18.0,
+          94.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          18.0,
+          86.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          26.0,
+          76.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          34.0,
+          65.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          38.0,
+          59.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Route around the bottom of the grey T to push the stem up-right, rotating clockwise and translating into the green goal."
+  }
+}

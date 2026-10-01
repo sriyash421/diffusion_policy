@@ -1,0 +1,193 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      49.3125,
+      57.1875
+    ],
+    "block_uv": [
+      69.5625,
+      74.62500762939453
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": -27.556957817860763,
+    "goal_deg": 45.0,
+    "goal_dist_px": 35.826035499572754
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [49.3, 57.2]. Grey T: center [69.6, 74.6], angle -28 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          72.0,
+          50.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          88.0,
+          65.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          86.0,
+          84.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          74.0,
+          80.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.5
+      },
+      {
+        "uv": [
+          75.0,
+          90.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          56.0,
+          72.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 2.0
+      },
+      {
+        "uv": [
+          46.0,
+          58.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 2.5
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Circumnavigate grey T around the right, push the stem to rotate clockwise into alignment, then push along bottom-right up into the green goal."
+  },
+  "usage": {
+    "candidates_token_count": 402,
+    "prompt_token_count": 1469,
+    "prompt_tokens_details": [
+      {
+        "modality": "TEXT",
+        "token_count": 380
+      },
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      }
+    ],
+    "thoughts_token_count": 1738,
+    "total_token_count": 3609
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          72.0,
+          50.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          88.0,
+          65.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          86.0,
+          84.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          74.0,
+          80.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.5
+      },
+      {
+        "uv": [
+          75.0,
+          90.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          56.0,
+          72.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 2.0
+      },
+      {
+        "uv": [
+          46.0,
+          58.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 2.5
+      }
+    ],
+    "confidence": 0.9,
+    "notes": "Circumnavigate grey T around the right, push the stem to rotate clockwise into alignment, then push along bottom-right up into the green goal."
+  }
+}
