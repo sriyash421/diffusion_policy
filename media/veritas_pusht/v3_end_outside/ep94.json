@@ -1,0 +1,173 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      44.4375,
+      72.75
+    ],
+    "block_uv": [
+      54.74999237060547,
+      60.56249237060547
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": 31.756261857337137,
+    "goal_deg": 45.0,
+    "goal_dist_px": 14.4588303565979
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [44.4, 72.8]. Grey T: center [54.7, 60.6], angle 32 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          44.0,
+          82.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          82.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          64.0,
+          72.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          67.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          52.0,
+          63.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          47.0,
+          60.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.92,
+    "notes": "Route around the stem tip to the right flank, then push up-left to translate and rotate the T into the goal."
+  },
+  "usage": {
+    "candidates_token_count": 348,
+    "prompt_token_count": 1469,
+    "prompt_tokens_details": [
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      },
+      {
+        "modality": "TEXT",
+        "token_count": 380
+      }
+    ],
+    "thoughts_token_count": 3385,
+    "total_token_count": 5202
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          44.0,
+          82.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          82.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          64.0,
+          72.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          58.0,
+          67.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          52.0,
+          63.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          47.0,
+          60.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 1.0
+      }
+    ],
+    "confidence": 0.92,
+    "notes": "Route around the stem tip to the right flank, then push up-left to translate and rotate the T into the goal."
+  }
+}
