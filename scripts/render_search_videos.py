@@ -55,8 +55,13 @@ import tqdm
 
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.env.pusht.pusht_verifier import is_waypoint_value
+from diffusion_policy.env.pusht.veritas.draw import draw_waypoints_rgb
+from diffusion_policy.env.pusht.veritas.schemas import VeritasDualPlan
+from diffusion_policy.env.pusht.veritas.tracker import load_split_plans
 from eval_search_pusht import (
-    build_envs, get_test_states, load_policy, SUCCESS_REWARD, _episode_seed)
+    _WAYPOINT_PLAN_DIRS, build_envs, get_test_states, load_policy, override_verifier_value,
+    SUCCESS_REWARD, _episode_seed)
 
 
 def expert_trajectories(cfg, episode_idxs):
@@ -237,6 +242,34 @@ def highlight_spec(best, final, execute='argmax', extra_slots=(), n_actions=None
 
 ZOOM = SCENE    # zoom panel, px. Sized to the scene: it is a sibling panel, not a
                 # picture-in-picture overlay, so there is no reason to shrink it.
+
+COL_TGOAL = (255, 200, 0)       # displays AZURE -- the candidate t_goal would have picked
+
+
+def draw_plan(panel, plan, size=SCENE):
+    """The steering waypoint plan's numbered pusher pins (and T-pose centroids for a v5
+    plan) on the scene panel. Plan coords are 96px obs pixels."""
+    s = size / 96.0
+    rgb = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
+    if isinstance(plan, VeritasDualPlan):
+        rgb = draw_waypoints_rgb(rgb, [{'uv': [c * s for c in wp.centroid_uv], 'idx': f'T{k+1}'}
+                                       for k, wp in enumerate(plan.t_poses)])
+        pusher = plan.pusher_waypoints
+    else:
+        pusher = plan.waypoints
+    rgb = draw_waypoints_rgb(rgb, [{'uv': [c * s for c in wp.uv], 'idx': k + 1}
+                                   for k, wp in enumerate(pusher)], draw_curve=True)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def mark_square(panel, xy, colour, half=6):
+    """Hollow square at a candidate's endpoint: the t_goal pick's shape cue, so it is
+    told apart from the argmax (filled dot + ring) by shape and not by hue alone."""
+    p = _pt(xy, panel.shape[0])
+    cv2.rectangle(panel, (p[0] - half, p[1] - half), (p[0] + half, p[1] + half),
+                  (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.rectangle(panel, (p[0] - half, p[1] - half), (p[0] + half, p[1] + half),
+                  colour, 1, cv2.LINE_AA)
 
 
 def draw_expert(panel, traj):
@@ -475,25 +508,49 @@ def compose(panel, inset, strip, lines):
 def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, label,
                step, seed, device, max_steps, fps, hold, subgoals, max_fan, zoom_px,
                zoom_q, skip_blind, blind_eps, execute, verifier_value='t_goal',
-               value_strip_on=False, closeup=True, hl_slots=()):
-    """Roll all episodes once at one search width and write one video per episode."""
+               value_strip_on=False, closeup=True, hl_slots=(), plans=None,
+               shadow_plans=None, shadow_verifiers=None, shadow_values=(), only_eps=None,
+               temperature=1.0):
+    """Roll all episodes once at one search width and write one video per episode.
+
+    With ``only_eps`` every episode is still ROLLED (each keeps its eval noise stream and
+    batch position) but only those are rendered and logged. With ``shadow_values`` every
+    candidate is also scored under those values and each rendered decision is written to
+    ``steps_<label>_step<STEP>_n<N>.jsonl`` for scripts/wp_rollout_plots.py.
+    """
     To, Ta = policy.n_obs_steps, policy.n_action_steps
     sl = slice(To - 1, To - 1 + Ta)
     B = len(states)
+    shadow_plans = shadow_plans or {}
+    shadow_verifiers = shadow_verifiers or {}
+    render_ep = np.array([only_eps is None or int(e) in only_eps for e in episode_idxs])
+    want_terms = bool(shadow_values) and not subgoals
+    # The eval re-seeds the global streams before every (split, n); doing the same here is
+    # what makes these the eval's own trajectories rather than look-alikes.
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     # At n=1 there is one candidate, so the spread is identically zero and EVERY decision
     # would look blind -- skipping would emit empty videos. Blindness is a statement about
     # candidates disagreeing, which needs at least two of them.
     skipping = skip_blind and n_actions >= 2
 
-    def make_init_fn(state):
+    def make_init_fn(state, plan=None, shadow=None):
         state = np.asarray(state, dtype=np.float64)
         def _fn(e):
+            # set unconditionally (None clears), as eval does: envs are reused across n
+            e.set_veritas_plan(plan)
+            if shadow is not None:
+                e.set_shadow_plans(shadow)
             e.unwrapped.reset_to_state = state
         return _fn
 
+    plan_list = plans if plans is not None else [None] * B
+    shadow_list = [({k: v[i] for k, v in shadow_plans.items()} if shadow_plans else None)
+                   for i in range(B)]
     env.call_each('run_dill_function',
-                  args_list=[(dill.dumps(make_init_fn(s)),) for s in states])
+                  args_list=[(dill.dumps(make_init_fn(s, p, sh)),)
+                             for s, p, sh in zip(states, plan_list, shadow_list)])
     obs = env.reset()
     policy.reset()
     # Per-EPISODE noise streams keyed on the episode's position in the test split -- the
@@ -510,7 +567,10 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
     # the other's file out from under it.
     stem = f'.tmp_{label}_{step}_n{n_actions}_seed'
     writers = [imageio.get_writer(str(out / f'{stem}{i}.mp4'), fps=fps, codec='libx264',
-                                  quality=8, macro_block_size=1) for i in range(B)]
+                                  quality=8, macro_block_size=1) if render_ep[i] else None
+               for i in range(B)]
+    step_log = (open(out / f'steps_{label}_step{step}_n{n_actions}.jsonl', 'w')
+                if shadow_values else None)
     frames_written = np.zeros(B, dtype=int)
     blind_count = np.zeros(B, dtype=int)
     blind_decisions = [[] for _ in range(B)]
@@ -520,13 +580,47 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
     pbar = tqdm.tqdm(total=max_steps // Ta + 1, desc=f'{label} n={n_actions} step{step}')
     while not done:
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
+        if plans is not None:
+            # the live trackers, advanced by every executed step -- read fresh each
+            # decision, exactly as eval's rollout_max_rewards does
+            policy.set_waypoint_trackers(env.call('get_attr', 'tracker'))
         with torch.no_grad():
             res = policy.predict_n_actions(
                 obs_dict, verifier=policy.verifier, n_actions=n_actions,
-                return_scores=True, return_subgoals=subgoals)
-        actions, _, scores = res[0], res[1], res[2]
-        sub = res[3] if subgoals else None
-        best = scores.argmax(dim=1)
+                return_scores=True, return_subgoals=subgoals, return_terms=want_terms)
+            actions, _, scores = res[0], res[1], res[2]
+            sub = res[3] if subgoals else None
+            terms = res[-1] if want_terms else None
+            # Every candidate scored again under each shadow value, from that value's own
+            # live progress. t_goal needs no sim: it is -d(T, goal) at the reached state,
+            # already in `terms`.
+            shadow_sc = {}
+            if shadow_verifiers:
+                live = env.call('get_attr', 'shadow_trackers')
+                for name, ver in shadow_verifiers.items():
+                    ver.set_trackers([lv[name] for lv in live])
+                    shadow_sc[name] = torch.stack(
+                        [policy._score_candidates(ver, obs_dict, actions[:, k])[1]
+                         for k in range(n_actions)], dim=1).float().cpu().numpy()
+            if terms is not None and 't_goal' in shadow_values:
+                shadow_sc['t_goal'] = -terms[..., 0].float().cpu().numpy()
+        if execute == 'softmax':
+            # the policy's own rule and generator, so the pick is the one eval would draw
+            z = (scores - scores.mean(1, keepdim=True)) / (
+                scores.std(1, unbiased=False, keepdim=True) + 1e-6)
+            probs = torch.softmax(z / temperature, dim=1)
+            u = torch.rand(B, 1, generator=policy._selection_generator).to(
+                probs.device, probs.dtype)
+            best = (probs.cumsum(dim=1) < u).sum(dim=1).clamp_(max=n_actions - 1)
+        else:
+            best = scores.argmax(dim=1)
+        if shadow_sc or plans is not None:
+            ep_state = env.call('sim_state')                         # (agent_pos, block_pose)
+            cov_now = env.call('get_attr', 'max_coverage')
+            progress = [tr.progress if tr is not None else None
+                        for tr in env.call('get_attr', 'tracker')]
+            shadow_prog = (env.call('get_attr', 'shadow_trackers') if shadow_plans
+                           else [{}] * B)
 
         scenes = env.call('render', 'rgb_array')
         chunks = actions[:, :, sl].detach().cpu().numpy()          # (B, n, Ta, 2)
@@ -541,8 +635,23 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
         for i in range(B):
             # A finished episode is still stepped to keep the batch square; its frames are
             # states the policy was never really in.
-            if ep_done[i]:
+            if ep_done[i] or not render_ep[i]:
                 continue
+            if step_log is not None:
+                ap, bp = ep_state[i]
+                step_log.write(json.dumps({
+                    'episode_idx': int(episode_idxs[i]), 'decision': decision,
+                    'env_step': decision * Ta, 'agent_pos': np.round(ap, 2).tolist(),
+                    'block_pose': np.round(bp, 4).tolist(),
+                    'max_coverage': round(float(cov_now[i]), 4),
+                    'executed': int(bi[i]), 'execute': execute,
+                    'chunks': np.round(chunks[i], 1).tolist(),
+                    'scores': {verifier_value: np.round(sc[i], 5).tolist(),
+                               **{k: np.round(v[i], 5).tolist()
+                                  for k, v in shadow_sc.items()}},
+                    'progress': {verifier_value: progress[i],
+                                 **{k: tr.progress for k, tr in shadow_prog[i].items()}},
+                }) + '\n')
             spread = float(sc[i].max() - sc[i].min())
             blind = n_actions >= 2 and spread <= blind_eps
             if blind:
@@ -552,12 +661,22 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                     continue
 
             panel = draw_expert(_scene(scenes[i]), experts[i])
+            if plans is not None:
+                panel = draw_plan(panel, plans[i])
             hl, coincide, legend = highlight_spec(
-                int(bi[i]), final_i, execute, extra_slots=hl_slots,
-                n_actions=n_actions)
+                int(bi[i]), final_i, 'final' if execute == 'final' else 'argmax',
+                extra_slots=hl_slots, n_actions=n_actions)
+            tg_pick = None
+            if 't_goal' in shadow_sc:
+                tg = shadow_sc['t_goal'][i]
+                if tg.max() - tg.min() > blind_eps and int(tg.argmax()) != int(bi[i]):
+                    tg_pick = int(tg.argmax())
+                    hl = hl + [(tg_pick, COL_TGOAL, False)]
             panel, inset = draw_candidates(panel, chunks[i], hl, max_fan=max_fan,
                                            zoom_px=zoom_px, zoom_q=zoom_q,
                                            closeup=closeup)
+            if tg_pick is not None:
+                mark_square(panel, chunks[i][tg_pick][-1], COL_TGOAL)
             # any strip spans the whole composed width, scene + gutter + zoom
             strip_w = panel.shape[1] + (GUTTER + inset.shape[1] if inset is not None else 0)
             if sub_img is not None:
@@ -575,15 +694,19 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
             lo, hi = float(sc[i].min()), float(sc[i].max())
             shown = min(n_actions, max_fan) if max_fan else n_actions
             fan_note = f'  fan {shown}/{n_actions}' if shown < n_actions else ''
-            ma = getattr(policy, 'max_actions', 1)
+            ma = getattr(policy, 'max_actions', None) or 1    # None on the UNet BC arm
             iid = ma <= 1 or ma >= (1 << 20)
             cap = [
                 f'ep{episode_idxs[i]}  dec {decision}'
                 + (f' (+{blind_count[i]} blind)' if blind_count[i] else '')
                 + f'  n={n_actions}  step{step}  {label}',
                 f'executes {execute.upper()}'
-                + (' = eval rule' if execute == 'argmax' else ' NOT the eval rule')
-                + f'  |  verifier {verifier_value}',
+                + (f' T={temperature:g}' if execute == 'softmax' else '')
+                + (' = eval rule' if execute in ('argmax', 'softmax')
+                   else ' NOT the eval rule')
+                + f'  |  verifier {verifier_value}'
+                + (f'  cov {float(cov_now[i]):.2f}' if (shadow_sc or plans is not None)
+                   else ''),
                 (f'chosen #{int(bi[i])} == final' if coincide
                  else f'chosen #{int(bi[i])}  final #{final_i}')
                 + f'  val {sc[i][int(bi[i])]:.1f}  spread {hi - lo:.1f}'
@@ -604,14 +727,25 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                 # improve with context" off the caption and not only off the bar strip
                 cap.append('  '.join(
                     f'#{k}={sc[i][k]:.1f}' for k in hl_slots if 0 <= k < n_actions))
+            if shadow_sc:
+                k = int(bi[i])
+                cap.append(f'executed #{k}: ' + '  '.join(
+                    f'{nm} {v[i][k]:.3g}' for nm, v in shadow_sc.items())
+                    + (f'  |  AZURE square = t_goal pick #{tg_pick}' if tg_pick is not None
+                       else ''))
             if iid and n_actions > 1:
                 cap.append('slot n-1 = i.i.d. draw, no context')
             frame = compose(panel, inset, strip, cap)
             for _ in range(hold):
                 writers[i].append_data(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             frames_written[i] += 1
+            if step_log is not None:
+                # stills for the contact sheet; the mp4 is lossy and a pain to index
+                cv2.imwrite(str(out / f'ep{episode_idxs[i]}_{label}_n{n_actions}'
+                                      f'_dec{decision:03d}.png'), frame)
 
-        exec_idx = best if execute == 'argmax' else torch.full_like(best, final_i)
+        exec_idx = (best if execute in ('argmax', 'softmax')
+                    else torch.full_like(best, final_i))
         act = actions[torch.arange(B, device=actions.device), exec_idx][:, sl]
         obs, reward, step_done, info = env.step(act.detach().cpu().numpy())
         ep_done |= np.asarray(step_done, dtype=bool)
@@ -623,8 +757,11 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
     rewards = env.call('get_attr', 'reward')
     # An episode whose every decision was blind would otherwise produce a zero-frame mp4:
     # the writer errors and the job looks crashed. Emit one stamped frame instead.
+    if step_log is not None:
+        step_log.close()
+    coverage = env.call('get_attr', 'max_coverage')
     for i in range(B):
-        if frames_written[i] == 0:
+        if render_ep[i] and frames_written[i] == 0:
             blank = np.full((SCENE, SCENE, 3), 24, dtype=np.uint8)
             msg = compose(blank, None, None, [
                 f'ep{episode_idxs[i]}  n={n_actions}  step{step}  {label}',
@@ -632,10 +769,13 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
             for _ in range(max(hold, 4)):
                 writers[i].append_data(cv2.cvtColor(msg, cv2.COLOR_BGR2RGB))
     for w in writers:
-        w.close()
+        if w is not None:
+            w.close()
 
     records = []
     for i in range(B):
+        if not render_ep[i]:
+            continue
         r = np.asarray(rewards[i])
         succ = bool(r.max() >= SUCCESS_REWARD)
         length = int(len(r))
@@ -653,7 +793,8 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                         'execute': execute, 'seed_base': int(seed),
                         'verifier_value': verifier_value,
                         'closeup': bool(closeup), 'value_strip': bool(value_strip_on),
-                        'max_reward': float(r.max()), 'video': name})
+                        'max_reward': float(r.max()),
+                        'max_coverage': float(coverage[i]), 'video': name})
         print(f'  {name}  len={length} steps  frames={frames_written[i]} '
               f'blind={blind_count[i]}/{n_dec}  max_reward={r.max():.3f}')
 
@@ -709,21 +850,44 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                    'in the legend rather than overdrawn. Out-of-range slots are dropped '
                    'with a warning. Default empty == the previous two-highlight frames, '
                    'byte-identical.')
-@click.option('--execute', type=click.Choice(['argmax', 'final']), default='argmax',
-              help="which candidate drives the rollout; 'argmax' is the eval protocol")
+@click.option('--execute', type=click.Choice(['argmax', 'softmax', 'final']),
+              default='argmax',
+              help="which candidate drives the rollout; 'argmax' and 'softmax' are eval "
+                   "rules (softmax draws from the policy's selection generator, as eval does)")
+@click.option('--temperature', default=1.0, show_default=True,
+              help='--execute softmax temperature on the z-scored candidate values')
 @click.option('--verifier-value', default=None,
               help='override the scoring rule, so an arm trained before the 2026-08-19 '
                    'cutover can be rendered under the same value as the arms it is being '
                    'compared with (the UNet BC run carries no verifier_tag and otherwise '
                    'resolves to t_goal). CHANGES THE ROLLOUT: the executed candidate is '
-                   "the argmax under this value. Default: the checkpoint's own.")
+                   "the argmax under this value. Default: the checkpoint's own. The wp_* "
+                   'values need a plan per episode (--plan-dir) and draw its pins.')
+@click.option('--plan-dir', default=None,
+              help='ep{idx}.json VLM plans for a wp_* --verifier-value; default: the '
+                   "value's own prompt dir (eval_search_pusht._WAYPOINT_PLAN_DIRS)")
+@click.option('--episodes', default='',
+              help='comma-separated dataset episode indices to render, e.g. "204,149". '
+                   'The rollout still covers the first --n-seeds test episodes in eval '
+                   'order (so every episode keeps its eval noise stream); only the videos '
+                   'and per-step rows are restricted. Default: all rolled episodes.')
+@click.option('--shadow-values', default='',
+              help='comma-separated OTHER verifier values to score every candidate under, '
+                   'e.g. "wp_v5,t_goal" while wp_v3 steers. Diagnostic only: the rollout '
+                   'executes the --verifier-value argmax; the shadow scores go to the '
+                   'per-step jsonl and the caption. A shadow wp_* value tracks its own '
+                   "plan on the real trajectory (ShadowTrackerWrapper); t_goal comes free "
+                   'from the reached state.')
 def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, hold, seed,
          subgoals, max_fan, zoom_px, zoom_q, skip_blind, blind_eps, execute,
-         closeup, value_strip, highlight_slots, verifier_value):
+         temperature, closeup, value_strip, highlight_slots, verifier_value, plan_dir,
+         episodes, shadow_values):
     out = pathlib.Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     step = int(''.join(ch for ch in pathlib.Path(checkpoint).stem if ch.isdigit()) or 0)
     max_fan = None if not max_fan else int(max_fan)
+    only_eps = {int(t) for t in episodes.split(',') if t.strip()} or None
+    shadow_values = [t.strip() for t in shadow_values.split(',') if t.strip()]
     # Parsed once here rather than per frame. Duplicates are dropped but ORDER is kept:
     # the palette is assigned in request order, so `--highlight-slots 0,7,15` gives slot 0
     # the first colour in every video and the legend stays stable across arms.
@@ -740,20 +904,11 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
             hl_slots.append(k)
 
     policy, cfg = load_policy(checkpoint, device)
-    # SCORING RULE OVERRIDE. Same mechanism as dump_candidate_scores.collect() and
-    # eval_search_pusht --verifier-value, deliberately: one implementation of a rule that
-    # decides which candidate is executed, not three that drift. The transformer arms build
-    # their verifier in __init__ so theirs is swapped in place; the UNet arm builds lazily
-    # (to keep training from forking a 32-process sim pool) and will read the kwarg when it
-    # does, so its `verifier` property is NOT touched here -- doing so would force the fork.
+    # SCORING RULE OVERRIDE. The one implementation eval_search_pusht uses, deliberately: a
+    # rule that decides which candidate is executed must not drift between the eval and
+    # the render of it. A wp_* value rebuilds the verifier as the path-walking subclass.
     if verifier_value is not None:
-        policy.search_kwargs['verifier_value'] = verifier_value
-        # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
-        # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
-        # would fork its 32-process sim pool just to check whether it exists.
-        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
-        if built is not None:
-            built.value_fn = verifier_value
+        override_verifier_value(policy, verifier_value)
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
     states, episode_idxs = get_test_states(cfg)
@@ -772,7 +927,33 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
           + ('   (pre-2026-08-19 rule: flat across candidates until the arm touches the T)'
              if vv == 't_goal' else ''))
 
-    env = build_envs(len(states), To, Ta, max_steps)
+    # Per-episode plans: the steering value's (handed to the env's live tracker and the
+    # policy's verifier, exactly as eval does) and one set per shadow wp value, tracked
+    # alongside on the same real trajectory. Each resolves to its own prompt dir unless
+    # --plan-dir overrides the STEERING one.
+    plans = None
+    if is_waypoint_value(vv):
+        pd = plan_dir or _WAYPOINT_PLAN_DIRS[vv]
+        plans = load_split_plans(pd, episode_idxs, 'test', vv)
+        print(f'waypoint plans: {pd} ({len(plans)} episodes)')
+    shadow_plans = {}
+    shadow_verifiers = {}
+    for sv in shadow_values:
+        if sv == vv:
+            raise SystemExit(f'--shadow-values {sv} is the steering value itself')
+        if is_waypoint_value(sv):
+            pd = _WAYPOINT_PLAN_DIRS[sv]
+            shadow_plans[sv] = load_split_plans(pd, episode_idxs, 'test', sv)
+            # a second path-walking verifier on its own sim pool; the steering one keeps
+            # the policy's trackers and must not be re-pointed between candidates
+            shadow_verifiers[sv] = policy._build_verifier(
+                **{**policy.search_kwargs, 'verifier_value': sv})
+            print(f'shadow {sv}: plans {pd} ({len(shadow_plans[sv])} episodes)')
+        elif sv != 't_goal':
+            raise SystemExit(f'--shadow-values: only wp_* values and t_goal are supported, '
+                             f'got {sv!r}')
+
+    env = build_envs(len(states), To, Ta, max_steps, shadow=bool(shadow_plans))
     try:
         for n_actions in n_list:
             # Warn ONCE per width, not per frame: a dropped slot is a silent relabel
@@ -784,9 +965,17 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
             render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out,
                        label, step, seed, device, max_steps, fps, hold, subgoals,
                        max_fan, zoom_px, zoom_q, skip_blind, blind_eps, execute, vv,
-                       value_strip_on=value_strip, closeup=closeup, hl_slots=hl_slots)
+                       value_strip_on=value_strip, closeup=closeup, hl_slots=hl_slots,
+                       plans=plans, shadow_plans=shadow_plans,
+                       shadow_verifiers=shadow_verifiers, shadow_values=shadow_values,
+                       only_eps=only_eps, temperature=temperature)
     finally:
         env.close()
+        for ver in shadow_verifiers.values():
+            try:
+                ver.close()
+            except Exception as e:
+                print(f'warning: shadow verifier close failed: {e}')
         close = getattr(policy, 'close', None)
         if close is not None:
             try:

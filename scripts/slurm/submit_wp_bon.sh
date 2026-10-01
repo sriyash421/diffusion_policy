@@ -16,6 +16,8 @@
 #   CKPT=/path/to/step_0060000.ckpt bash scripts/slurm/submit_wp_bon.sh            # dry run
 #   CKPT=... SUBMIT=1 bash scripts/slurm/submit_wp_bon.sh                          # sbatch
 #   CKPT=... VALUES="wp_v5" NS="64 128" SUBMIT=1 bash scripts/slurm/submit_wp_bon.sh
+#   CKPT=... VALUES="wp_v3 wp_v5" SELECTION=softmax TEMP=1.0 SUBMIT=1 bash ...   # softmax
+#     (rows land in bon_search_sel-softmax_ver-<value>/, never merging with argmax ones)
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -25,6 +27,14 @@ SUBMIT="${SUBMIT:-}"
 VALUES="${VALUES:-t_goal wp_v3 wp_v5}"
 NS="${NS:-1 2 4 8 16 32 64 128}"
 N_ENVS="${N_ENVS:-30}"
+SELECTION="${SELECTION:-}"          # empty = the checkpoint's own rule (argmax for BC)
+TEMP="${TEMP:-1.0}"
+SEL_ARGS=(); SEL_TAG=""
+if [[ -n "$SELECTION" ]]; then
+  SEL_ARGS=(--selection "$SELECTION")
+  [[ "$SELECTION" == softmax ]] && SEL_ARGS+=(--selection-temperature "$TEMP")
+  SEL_TAG="_${SELECTION}"
+fi
 
 for d in media/veritas_pusht/v5_pusher_and_t media/veritas_pusht/v3_end_outside; do
   echo "plans in $d: $(ls "$d"/ep*.json 2>/dev/null | wc -l)"
@@ -44,13 +54,13 @@ LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 count=0
 for v in $VALUES; do
   for n in $NS; do
-    name="wpbon_${v}_${STEP}_n${n}"
+    name="wpbon_${v}${SEL_TAG}_${STEP}_n${n}"
     if grep -qx "$name" <<< "$LIVE"; then
       echo "skip $name (already queued/running)"; continue
     fi
     cmd=(sbatch --job-name="$name" --time="$(time_for_n "$n")"
          scripts/slurm/eval_ckpt_pusht_search.sbatch "$CKPT"
-         --skip-val --n-envs "$N_ENVS" --n-list "$n" --verifier-value "$v" --store-scores)
+         --skip-val --n-envs "$N_ENVS" --n-list "$n" --verifier-value "$v" --store-scores "${SEL_ARGS[@]}")
     echo "${cmd[*]}"
     if [[ -n "$SUBMIT" ]]; then "${cmd[@]}"; fi
     count=$((count + 1))

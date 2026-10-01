@@ -73,7 +73,9 @@ source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
 DP_CONDA_ENV="${DP_CONDA_ENV:-vae_pushT_l2s}"
 conda activate "$DP_CONDA_ENV"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+# The repo to run from: the sbatch submit dir (submit from the repo root; $0 is the
+# spooled copy under sbatch), else this file's own repo. DP_REPO overrides both.
+cd "${DP_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/../..}}"
 
 # ---------------------------------------------------------------------------
 # STORAGE. Home is a 10G hard quota; a single run's checkpoints exceed it on their own.
@@ -115,7 +117,16 @@ fi
 echo "output root : $DP_OUTPUT_ROOT (${avail_g:-?}G free)"
 echo "wandb dir   : $WANDB_DIR"
 
+# SELF-REQUEUE on the checkpoint partition, whose jobs are cut at ~9h regardless of --time
+# (a timeout is not a preemption, so --requeue alone never restarts one). Submit with
+#   --partition=ckpt-all --requeue --open-mode=append --time=9:00:00 --signal=B:USR1@600
+# and the USR1 ten minutes before the cut kills training and requeues the job, which
+# resumes from latest.ckpt (training.resume: True). Inert without --signal.
 python train.py \
   --config-name="$CONFIG_NAME" \
   training.device=cuda:0 \
-  "$@"
+  "$@" &
+PID=$!
+trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID; wait $PID;
+      scontrol requeue "$SLURM_JOB_ID"; exit 0' USR1
+wait $PID

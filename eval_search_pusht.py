@@ -69,7 +69,8 @@ from diffusion_policy.env.pusht.pusht_verifier import (DEFAULT_VALUE_FN, is_q_va
 from diffusion_policy.env.pusht.pusht_image_env import PushTImageEnv
 from diffusion_policy.env.pusht.pusht_feedback import PushTFeedbackWrapper
 from diffusion_policy.env.pusht.veritas.tracker import (
-    WAYPOINT_PLAN_DIRS, VeritasTrackerWrapper, load_plan, load_split_plans)
+    WAYPOINT_PLAN_DIRS, ShadowTrackerWrapper, VeritasTrackerWrapper, load_plan,
+    load_split_plans)
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 
@@ -94,18 +95,19 @@ N_LIST = [int(2 ** k) for k in range(7)]  # 1, 2, 4, 8, 16, 32, 64
 CKPT_RE = re.compile(r'step_(\d+)\.ckpt$')
 
 
-def build_envs(n_envs, n_obs_steps, n_action_steps, max_steps, render_size=96):
+def build_envs(n_envs, n_obs_steps, n_action_steps, max_steps, render_size=96,
+               shadow=False):
     def env_fn():
         # VeritasTrackerWrapper sits INSIDE MultiStepWrapper so it sees every single env
         # step of an action chunk (the outer info deques only keep the last n_obs_steps).
         # It is inert until an episode init fn hands it a plan, so the non-waypoint evals
-        # run through it unchanged.
+        # run through it unchanged. `shadow` adds ShadowTrackerWrapper for analysis that
+        # scores candidates under a second plan; it never touches the rollout.
+        base = PushTFeedbackWrapper(PushTImageEnv(legacy=False, render_size=render_size))
+        if shadow:
+            base = ShadowTrackerWrapper(base)
         return MultiStepWrapper(
-            VeritasTrackerWrapper(
-                PushTFeedbackWrapper(
-                    PushTImageEnv(legacy=False, render_size=render_size)
-                )
-            ),
+            VeritasTrackerWrapper(base),
             n_obs_steps=n_obs_steps,
             n_action_steps=n_action_steps,
             max_episode_steps=max_steps
@@ -476,6 +478,39 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
     return float(sr), ci, out
 
 
+def override_verifier_value(policy, verifier_value):
+    """Swap the value that RANKS candidates on trained weights, in place.
+
+    Shared with scripts/render_search_videos.py so the rule that decides which candidate is
+    executed has one implementation. Both halves move together: `value_fn` is what the sim
+    scores with, and the kwargs entry is what `_normalize_value` mirrors for the context.
+    """
+    policy.search_kwargs['verifier_value'] = verifier_value
+    # The transformer arms build the verifier in __init__, so theirs must be swapped in
+    # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
+    # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
+    # property here, which would force that fork now.
+    # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
+    # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
+    # would fork its 32-process sim pool just to check whether it exists.
+    built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
+    if built is None:
+        return
+    if is_waypoint_value(verifier_value) and not hasattr(built, 'set_trackers'):
+        # A waypoint value cannot be assigned onto a plain PushTVerifier (its setter
+        # refuses -- the score walks the PATH, which the base never keeps). Rebuild
+        # through the policy's own factory, which now reads the kwarg above and returns
+        # the path-walking subclass, and put it back in the slot the host built it into.
+        built.close()
+        rebuilt = policy._build_verifier(**policy.search_kwargs)
+        if '_verifier' in policy.__dict__:
+            policy._verifier = rebuilt
+        else:
+            policy.verifier = rebuilt
+    else:
+        built.value_fn = verifier_value
+
+
 def _verifier_value_of(policy):
     """Which value this policy's verifier ranks with, WITHOUT forcing a lazy build.
 
@@ -528,30 +563,7 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # applies. Left alone, the checkpoint's own cfg decides -- and a cfg from before the
     # 2026-08-19 cutover has no key at all, so it correctly reproduces `t_goal`.
     if verifier_value is not None:
-        policy.search_kwargs['verifier_value'] = verifier_value
-        # The transformer arms build the verifier in __init__, so theirs must be swapped in
-        # place. The UNet arm builds lazily (to keep training from forking a 32-process sim
-        # pool) and will read the kwarg above when it does -- so do not touch its `verifier`
-        # property here, which would force that fork now.
-        # Read the ALREADY-BUILT verifier out of __dict__ rather than through the
-        # attribute: the UNet arm's `verifier` is a lazy property, and touching it here
-        # would fork its 32-process sim pool just to check whether it exists.
-        built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
-        if built is not None:
-            if is_waypoint_value(verifier_value) and not hasattr(built, 'set_trackers'):
-                # A waypoint value cannot be assigned onto a plain PushTVerifier (its
-                # setter refuses -- the score walks the PATH, which the base never
-                # keeps). Rebuild through the policy's own factory, which now reads the
-                # kwarg above and returns the path-walking subclass, and put it back in
-                # the slot the host actually built it into.
-                built.close()
-                rebuilt = policy._build_verifier(**policy.search_kwargs)
-                if '_verifier' in policy.__dict__:
-                    policy._verifier = rebuilt
-                else:
-                    policy.verifier = rebuilt
-            else:
-                built.value_fn = verifier_value
+        override_verifier_value(policy, verifier_value)
     print(f'  verifier value: {_verifier_value_of(policy)}'
           + (' (overridden)' if verifier_value is not None else ' (from checkpoint cfg)'))
     # Whether rollouts see the corruption the run TRAINED under is likewise a readout-time
@@ -1316,10 +1328,12 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
             # Deterministic id derived from the run dir so a requeue RESUMES the same
             # wandb run. resume='allow' without an id minted a fresh run per preemption,
             # scattering one curve across many runs.
+            # Keyed on the result subdir too: two watchers on one run under different
+            # readout rules (softmax and final_pass) must not resume each other's run.
             wandb_id = 'eval-' + hashlib.md5(
-                str(pathlib.Path(run_dir).resolve()).encode()).hexdigest()[:12]
+                f'{pathlib.Path(run_dir).resolve()}/{sub}'.encode()).hexdigest()[:12]
             run = wandb.init(entity=wandb_entity, project=wandb_project,
-                             name=f'eval_{pathlib.Path(run_dir).name}',
+                             name=f'eval_{pathlib.Path(run_dir).name}_{sub}',
                              id=wandb_id, job_type='eval', resume='allow')
         except Exception as e:
             # never let a logging failure kill the watcher: it was unguarded, so a wandb
@@ -1388,6 +1402,9 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                     import wandb
                     for nn, sr in zip(curve['n'], curve['success_rate']):
                         run.log({f'test/success_rate_n{nn}': sr}, step=step)
+                    for nn, cv in zip(curve['n'], curve.get('mean_coverage') or []):
+                        if cv is not None:
+                            run.log({f'test/mean_coverage_n{nn}': cv}, step=step)
                     for nn, sr in zip(curve['n'], curve.get('val_success_rate') or []):
                         run.log({f'val/success_rate_n{nn}': sr}, step=step)
                     table = wandb.Table(data=list(zip(curve['n'], curve['success_rate'])),

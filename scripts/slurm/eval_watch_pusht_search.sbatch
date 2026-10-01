@@ -36,7 +36,9 @@ source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
 DP_CONDA_ENV="${DP_CONDA_ENV:-vae_pushT_l2s}"
 conda activate "$DP_CONDA_ENV"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+# The repo to run from: the sbatch submit dir (submit from the repo root; $0 is the
+# spooled copy under sbatch), else this file's own repo. DP_REPO overrides both.
+cd "${DP_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/../..}}"
 
 # wandb writes its RUN files to the CWD unless told otherwise, and the CWD is the repo --
 # which lives under a 10GB HOME quota. train_pusht_search.sbatch already redirects these;
@@ -49,8 +51,16 @@ export WANDB_CONFIG_DIR="${WANDB_CONFIG_DIR:-$GSCRATCH_ROOT/wandb/config}"
 mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_ARTIFACT_DIR" "$WANDB_CONFIG_DIR"
 
 
+# SELF-REQUEUE past the ckpt partition's ~9h cut (a timeout is not a preemption, so
+# --requeue alone never restarts one): submit with --time=9:00:00 --signal=B:USR1@600
+# --open-mode=append and the trap requeues ten minutes before the cut. --watch resumes from
+# the rows already on disk. Inert without --signal.
 python eval_search_pusht.py \
   --watch \
   --run-dir "$RUN_DIR" \
   --device cuda:0 \
-  "$@"
+  "$@" &
+PID=$!
+trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID; wait $PID;
+      scontrol requeue "$SLURM_JOB_ID"; exit 0' USR1
+wait $PID

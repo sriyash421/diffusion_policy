@@ -450,6 +450,12 @@ class VeritasTrackerWrapper(gym.Wrapper):
         return (np.array(u.agent.position, dtype=np.float64),
                 np.array(list(u.block.position) + [u.block.angle], dtype=np.float64))
 
+    def sim_state(self):
+        """(agent_pos (2,), block_pose (3,)) in workspace units. Public because gym's
+        Wrapper.__getattr__ refuses underscored names, so `env.call('_state')` through
+        a vector env kills the worker."""
+        return self._state()
+
     def reset(self, **kwargs):
         obs = super().reset(**kwargs)
         if self.veritas_plan is not None:
@@ -464,4 +470,41 @@ class VeritasTrackerWrapper(gym.Wrapper):
         if self.tracker is not None:
             agent_pos, block_pose = self._state()
             self.tracker.update(agent_pos, block_pose)
+        return out
+
+
+class ShadowTrackerWrapper(gym.Wrapper):
+    """Extra DualTrackers on OTHER plans, advanced on every real step; analysis only.
+
+    The rollout ranks with VeritasTrackerWrapper's tracker. This one lets the same
+    candidates also be scored as another waypoint value would score them (e.g. wp_v5
+    while wp_v3 steers), from that value's own live episode progress. Nothing reads it
+    during a rollout, so adding it changes no trajectory. Attribute names differ from
+    VeritasTrackerWrapper's so gym's __getattr__ forwarding cannot confuse the two.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.shadow_plans = {}
+        self.shadow_trackers = {}
+
+    def set_shadow_plans(self, plans: dict):
+        """{value name: plan}; set before reset, like set_veritas_plan."""
+        self.shadow_plans = dict(plans or {})
+
+    _state = VeritasTrackerWrapper._state
+
+    def reset(self, **kwargs):
+        obs = super().reset(**kwargs)
+        agent_pos, block_pose = self._state()
+        self.shadow_trackers = {k: DualTracker(p, agent_pos, block_pose)
+                                for k, p in self.shadow_plans.items()}
+        return obs
+
+    def step(self, action):
+        out = super().step(action)
+        if self.shadow_trackers:
+            agent_pos, block_pose = self._state()
+            for tr in self.shadow_trackers.values():
+                tr.update(agent_pos, block_pose)
         return out
