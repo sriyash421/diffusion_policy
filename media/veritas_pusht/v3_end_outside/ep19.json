@@ -1,0 +1,173 @@
+{
+  "model": "gemini-3.8-flash",
+  "image_size": [
+    96,
+    96
+  ],
+  "hints": {
+    "pusher_uv": [
+      26.8125,
+      30.0
+    ],
+    "block_uv": [
+      64.68749237060547,
+      30.75
+    ],
+    "goal_uv": [
+      42.03378868103027,
+      53.96621131896973
+    ],
+    "block_deg": 35.74902933223069,
+    "goal_deg": 45.0,
+    "goal_dist_px": 32.465752601623535
+  },
+  "prompt": "You are planning a path for the blue circular pusher in the Push-T task.\nImage: 96x96 pixels, fixed top-down camera, origin top-left, u right, v down.\nState (pixels): pusher at [26.8, 30.0]. Grey T: center [64.7, 30.8], angle 36 deg.\nGreen goal T: center [42.0, 54.0], angle 45 deg.\nThe pusher can only push (no grasping). The task succeeds when the grey T covers\nthe green goal T in both position and rotation.\n\nReturn 5-10 waypoints (u,v) for the PUSHER, in order:\n- To move the T, first go to the side of the T opposite the direction it must\n  move, then push through it toward the goal.\n- To rotate the T, push near the end of one of its bars, not through its center.\n- When repositioning between pushes, route AROUND the T, not through it.\n- The last waypoint is where the pusher is when the T reaches the goal. not insde the goal\n\ntol_px: about 6 px (~6% of image width). Use ~5 px for waypoints\nwhere the pusher must contact a specific part of the T, ~8 px for repositioning.\nmin_hold: 1 for repositioning, 2 for contact/push waypoints.\nskippable: true for all but the final waypoint.\nReturn JSON only:\n{\"waypoints\":[{\"uv\":[u,v],\"tol_px\":float,\"min_hold\":int,\"skippable\":bool,\"weight\":float}],\n  \"confidence\":float,\"notes\":\"optional\"}\n",
+  "response": {
+    "waypoints": [
+      {
+        "uv": [
+          42.0,
+          15.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          65.0,
+          12.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          78.0,
+          18.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          72.0,
+          24.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          60.0,
+          36.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.5
+      },
+      {
+        "uv": [
+          50.0,
+          46.5
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 2.0
+      }
+    ],
+    "confidence": 0.93,
+    "notes": "Route around top of T to push against the back of the horizontal bar, driving it southwest directly into the goal."
+  },
+  "usage": {
+    "candidates_token_count": 346,
+    "prompt_token_count": 1469,
+    "prompt_tokens_details": [
+      {
+        "modality": "TEXT",
+        "token_count": 380
+      },
+      {
+        "modality": "IMAGE",
+        "token_count": 1089
+      }
+    ],
+    "thoughts_token_count": 2402,
+    "total_token_count": 4217
+  },
+  "plan": {
+    "waypoints": [
+      {
+        "uv": [
+          42.0,
+          15.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          65.0,
+          12.0
+        ],
+        "tol_px": 8.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          78.0,
+          18.0
+        ],
+        "tol_px": 6.0,
+        "min_hold": 1,
+        "skippable": true,
+        "weight": 1.0
+      },
+      {
+        "uv": [
+          72.0,
+          24.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.2
+      },
+      {
+        "uv": [
+          60.0,
+          36.0
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": true,
+        "weight": 1.5
+      },
+      {
+        "uv": [
+          50.0,
+          46.5
+        ],
+        "tol_px": 5.0,
+        "min_hold": 2,
+        "skippable": false,
+        "weight": 2.0
+      }
+    ],
+    "confidence": 0.93,
+    "notes": "Route around top of T to push against the back of the horizontal bar, driving it southwest directly into the goal."
+  }
+}
