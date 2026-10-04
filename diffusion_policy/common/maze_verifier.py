@@ -41,6 +41,87 @@ def get_shortest_path_table(maze, device):
     return dists, grid_to_idx, unreachable
 
 
+# harine/openloop: batched torch versions of MazeEnv's dynamics, shared by the search policies'
+# training-time candidate generation and the open-loop eval harness so the two cannot drift.
+
+def rollout_step_torch(free, pos, delta):
+    """One `MazeEnv.rollout_delta` for a batch: walk the rounded line, stop at the first wall."""
+    bsz, h, w = free.shape
+    batch_idx = torch.arange(bsz, device=free.device)
+    pos = pos.float()
+    delta = delta.float()
+    a = torch.round(pos).long()
+    b = torch.round(pos + delta).long()
+    d = b - a
+    n = d.abs().amax(dim=-1)
+    cur = a.clone()
+    moving = n > 0
+    max_n = int(n.max().item())
+
+    for step in range(1, max_n + 1):
+        active = moving & (n >= step)
+
+        denom = n.clamp_min(1).float().unsqueeze(-1)
+        nxt = torch.round(a.float() + d.float() * (step / denom)).long()
+        changed = (nxt != cur).any(dim=-1)
+        active_changed = active & changed
+
+        x = nxt[:, 0]
+        y = nxt[:, 1]
+        in_bounds = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+        x_safe = x.clamp(0, w - 1)
+        y_safe = y.clamp(0, h - 1)
+        passable = free[batch_idx, y_safe, x_safe]
+        valid = in_bounds & passable
+
+        should_move = active_changed & valid
+        cur = torch.where(should_move[:, None], nxt, cur)
+        moving = moving & ~(active_changed & ~valid)
+
+    return cur.float()
+
+
+def rollout_trajectory_torch(free, start, actions, goal, stop_radius=1.0):
+    """Open-loop rollout of (B, T, 2) deltas that freezes a row once it reaches the goal.
+
+    Mirrors `eval_bc.eval_episode_batch`: success is checked after each step with
+    ||pos - goal|| <= stop_radius, and a finished row stops moving. Returns the positions
+    (B, T+1, 2) and `done_step` (B,), the number of steps taken to succeed, or -1.
+    """
+    pos = start.float()
+    goal = goal.float()
+    bsz, T, _ = actions.shape
+    done = torch.zeros(bsz, dtype=torch.bool, device=free.device)
+    done_step = torch.full((bsz,), -1, dtype=torch.long, device=free.device)
+    traj = [pos]
+    for t in range(T):
+        nxt = rollout_step_torch(free, pos, actions[:, t])
+        pos = torch.where(done[:, None], pos, nxt)
+        traj.append(pos)
+        reached = ~done & ((pos - goal).norm(dim=-1) <= stop_radius)
+        done_step = torch.where(reached, torch.full_like(done_step, t + 1), done_step)
+        done = done | reached
+    return torch.stack(traj, dim=1), done_step
+
+
+def realized_actions(traj):
+    """Per-step displacements actually taken, (B, T, 2); zero once a row has stopped."""
+    return traj[:, 1:] - traj[:, :-1]
+
+
+def build_images_torch(free, pos, goal):
+    """`maze.build_image(...) / 255` for a batch: (B, 3, H, W) with wall, goal, agent planes."""
+    bsz, h, w = free.shape
+    batch_idx = torch.arange(bsz, device=free.device)
+    img = torch.zeros((bsz, 3, h, w), dtype=torch.float32, device=free.device)
+    img[:, 0] = (~free).float()
+    g = torch.round(goal).long()
+    p = torch.round(pos).long()
+    img[batch_idx, 1, g[:, 1].clamp(0, h - 1), g[:, 0].clamp(0, w - 1)] = 1.0
+    img[batch_idx, 2, p[:, 1].clamp(0, h - 1), p[:, 0].clamp(0, w - 1)] = 1.0
+    return img
+
+
 class MazeVerifier:
     def __init__(self, env=None, maze_path=None, device="cpu", success_radius=0.5, noise=0.0):
         self.env = env
@@ -146,43 +227,42 @@ class MazeVerifier:
         return wall < 0.5
 
     def _rollout_actions_torch(self, free, start, action):
-        bsz, h, w = free.shape
-        batch_idx = torch.arange(bsz, device=self.device)
         pos = start.to(self.device, non_blocking=True).float()
         action = action.to(self.device, non_blocking=True).float()
-
         for delta in action.unbind(dim=1):
-            a = torch.round(pos).long()
-            b = torch.round(pos + delta).long()
-            d = b - a
-            n = d.abs().amax(dim=-1)
-            cur = a.clone()
-            moving = n > 0
-            max_n = int(n.max().item())
-
-            for step in range(1, max_n + 1):
-                active = moving & (n >= step)
-
-                denom = n.clamp_min(1).float().unsqueeze(-1)
-                nxt = torch.round(a.float() + d.float() * (step / denom)).long()
-                changed = (nxt != cur).any(dim=-1)
-                active_changed = active & changed
-
-                x = nxt[:, 0]
-                y = nxt[:, 1]
-                in_bounds = (x >= 0) & (x < w) & (y >= 0) & (y < h)
-                x_safe = x.clamp(0, w - 1)
-                y_safe = y.clamp(0, h - 1)
-                passable = free[batch_idx, y_safe, x_safe]
-                valid = in_bounds & passable
-
-                should_move = active_changed & valid
-                cur = torch.where(should_move[:, None], nxt, cur)
-                moving = moving & ~(active_changed & ~valid)
-
-            pos = cur.float()
-
+            pos = rollout_step_torch(free, pos, delta)
         return pos
+
+    def get_value_and_realized(self, obs_dict, action, stop_radius=1.0):
+        """harine/openloop: value of a full open-loop chunk plus the trajectory it realizes.
+
+        Like `get_value` on the image path, but the rollout stops once the agent is within
+        `stop_radius` of the goal (the eval success rule), so the returned context describes
+        what the env would actually execute. Returns (value, realized, traj, done_step).
+        """
+        pos = obs_dict["agent_pos"][:, -1]
+        goal = obs_dict["goal_pos"][:, -1]
+        if action.ndim == 4:
+            action = action[:, 0]
+        image = obs_dict["image"]
+        free = self._free_from_obs_torch(obs_dict)
+        traj, done_step = rollout_trajectory_torch(free, pos, action, goal, stop_radius)
+        dist, unreachable = self._get_goal_distance_field_torch(image, free, goal)
+        value = -self._sample_goal_distance_torch(free, dist, traj[:, -1], unreachable)
+        if self.noise > 0:
+            value = value * (1 + self.noise * torch.randn_like(value))
+        return value, realized_actions(traj), traj, done_step
+
+    def trajectory_distances(self, obs_dict, traj):
+        """harine/openloop: BFS distance to goal at every point of `traj` (B, T+1)."""
+        goal = obs_dict["goal_pos"][:, -1]
+        free = self._free_from_obs_torch(obs_dict)
+        dist, unreachable = self._get_goal_distance_field_torch(obs_dict["image"], free, goal)
+        b, t, _ = traj.shape
+        flat = traj.reshape(-1, 2)
+        free_rep = free.repeat_interleave(t, dim=0)
+        dist_rep = dist.repeat_interleave(t, dim=0)
+        return self._sample_goal_distance_torch(free_rep, dist_rep, flat, unreachable).reshape(b, t)
 
     def _tensor_cache_key(self, tensor):
         try:

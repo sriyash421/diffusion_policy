@@ -435,8 +435,19 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         if corrupt_obs:
             print("Corrupting obs with a separate noise scheduler")
 
+        # harine/openloop: with realized_context the context tokens hold the displacements the
+        # env would actually execute for each sampled chunk (walls, stop at the goal within
+        # stop_radius) instead of the raw sample, which is also what the open-loop eval harness
+        # feeds back. The raw samples are kept on `last_sampled_actions` for logging.
+        self.realized_context = bool(kwargs.get('realized_context', False))
+        self.stop_radius = float(kwargs.get('stop_radius', 1.0))
+        self.last_sampled_actions = None
+
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
+
+    def reset(self):
+        self.last_sampled_actions = None
 
     def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         nobs = self.normalizer.normalize(obs_dict)
@@ -540,19 +551,26 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         ):
         actions = None
         values = None
+        sampled = []
         for _ in range(n_actions):
             new_action = self._predict_action(
                 obs_dict,
                 actions=actions,
                 values=values,
             )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
+            sampled.append(new_action)
+            if self.realized_context:
+                new_value, new_action, _, _ = verifier.get_value_and_realized(
+                    obs_dict, new_action, self.stop_radius)
+            else:
+                new_value = verifier.get_value(obs_dict, new_action)
             if actions is None:
                 actions = new_action.unsqueeze(1)
                 values = new_value.unsqueeze(1)
             else:
                 actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
                 values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
+        self.last_sampled_actions = torch.stack(sampled, dim=1) if sampled else None
         return actions, values
 
     @torch.inference_mode()

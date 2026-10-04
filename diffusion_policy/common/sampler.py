@@ -124,11 +124,14 @@ class SequenceSampler:
         keys=None,
         key_first_k=dict(),
         episode_mask: Optional[np.ndarray]=None,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        zero_pad_after_keys=()
         ):
         """
         key_first_k: dict str: int
             Only take first k data from these keys (to improve perf)
+        zero_pad_after_keys: keys whose after-episode padding is zeros instead of
+            a repeat of the last frame (harine/openloop: zero actions = "stay on goal")
         """
 
         super().__init__()
@@ -161,7 +164,8 @@ class SequenceSampler:
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k
         self.return_sequences = return_sequences
-    
+        self.zero_pad_after_keys = set(zero_pad_after_keys)
+
     def __len__(self):
         return len(self.indices)
         
@@ -200,7 +204,7 @@ class SequenceSampler:
                     dtype=input_arr.dtype)
                 if sample_start_idx > 0:
                     data[:sample_start_idx] = sample[0]
-                if sample_end_idx < self.sequence_length:
+                if sample_end_idx < self.sequence_length and key not in self.zero_pad_after_keys:
                     data[sample_end_idx:] = sample[-1]
                 data[sample_start_idx:sample_end_idx] = sample
             result[key] = data

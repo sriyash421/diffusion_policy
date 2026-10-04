@@ -1,0 +1,38 @@
+# harine/openloop: diffusion ST with a 64-step chunk executed open-loop as one candidate.
+# Differences from procgen_maze_diffusion_transformer_search.yaml:
+#   horizon 64, n_obs_steps 1 (so action[0] is the current step's action and the whole chunk is
+#   executed), n_action_steps 1, max_actions 8, realized_context (context tokens = displacements
+#   the env executes, stop at the goal), unpadded demos with zero-action after-padding
+#   (pad_after = horizon-1 so every <=32-step episode still yields windows).
+defaults:
+  - procgen_maze_diffusion_transformer_search
+  - _self_
+
+name: procgen_maze_dst64_openloop
+
+horizon: 64
+n_obs_steps: 1
+n_action_steps: 1
+
+policy:
+  max_actions: 8
+  realized_context: True
+  stop_radius: 1.0
+
+task:
+  dataset:
+    dataset_dir: data/procgen_maze_expert_quadrant_unpadded
+    pad_before: 0
+    pad_after: 63
+    zero_pad_action_after: true
+
+training:
+  # ~10.8k windows / 256 = ~42 batches per epoch; 490 epochs ~= 20k steps for the cosine schedule
+  num_epochs: 490
+  max_gradient_steps: 20000
+  checkpoint_every: 1000
+  val_every: 10
+  sample_every: 10
+
+logging:
+  project: maze_openloop11_results

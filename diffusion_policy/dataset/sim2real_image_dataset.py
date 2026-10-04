@@ -58,7 +58,8 @@ class Sim2RealImageDataset(BaseImageDataset):
         val_ratio=0.0,
         use_cache: bool = False,
         use_disk: bool = True,
-        return_sequences: bool = False
+        return_sequences: bool = False,
+        zero_pad_action_after: bool = False
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
@@ -106,10 +107,12 @@ class Sim2RealImageDataset(BaseImageDataset):
             pad_after=pad_after,
             episode_mask=train_mask,
             key_first_k=key_first_k,
-            return_sequences=return_sequences
+            return_sequences=return_sequences,
+            zero_pad_after_keys=('action',) if zero_pad_action_after else ()
         )
 
         # Store parameters
+        self.zero_pad_action_after = zero_pad_action_after
         self.horizon = horizon
         self.n_obs_steps = n_obs_steps
         self.n_latency_steps = n_latency_steps
@@ -228,7 +231,8 @@ class Sim2RealImageDataset(BaseImageDataset):
             pad_before=self.pad_before,
             pad_after=self.pad_after,
             episode_mask=self.val_mask,
-            return_sequences=self.return_sequences
+            return_sequences=self.return_sequences,
+            zero_pad_after_keys=('action',) if self.zero_pad_action_after else ()
             )
         val_set.val_mask = ~self.val_mask
         return val_set
@@ -785,6 +789,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         use_streaming: bool = False,
         samples_per_file_multiplier: float = 1.0,
         return_sequences: bool = False,
+        zero_pad_action_after: bool = False,
         dataset_class=Sim2RealImageDataset
     ):
         super().__init__()
@@ -874,7 +879,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'val_ratio': val_ratio,
             'use_cache': use_cache,
             'use_disk': use_disk,
-            'return_sequences': return_sequences
+            'return_sequences': return_sequences,
+            'zero_pad_action_after': zero_pad_action_after
         }
 
         for config in self.dataset_config:

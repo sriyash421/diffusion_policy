@@ -1,0 +1,10 @@
+# harine/openloop: LSTM best-of-N arm = the LSTM search config with no context (max_actions=1).
+# Eval draws N i.i.d. autoregressive rollouts and picks by the verifier.
+defaults:
+  - procgen_maze_lstm_search
+  - _self_
+
+name: procgen_maze_lstm_bc
+
+policy:
+  max_actions: 1

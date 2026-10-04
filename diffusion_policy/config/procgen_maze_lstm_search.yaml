@@ -1,0 +1,134 @@
+# harine/openloop: LSTM sequential-search (ST) policy on the maze, one action per env step.
+# Candidates are full autoregressive rollouts (<= `horizon` steps); candidate k conditions on
+# the realized trajectories + verifier values of 0..k-1. max_actions=1 makes it the BoN arm
+# (see procgen_maze_lstm_bc.yaml).
+# task first, _self_ last: this file's task.dataset.* overrides must win over task/procgen_maze.yaml
+defaults:
+  - task: procgen_maze
+  - _self_
+
+name: procgen_maze_lstm_search
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+output_dir: null
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+# candidate trajectory length (2x the longest shortest path on layout 0), NOT a window length:
+# the dataset serves whole episodes (return_sequences) and the LSTM ticks once per step.
+horizon: 64
+n_obs_steps: 1
+n_action_steps: 1
+n_latency_steps: 0
+dataset_obs_steps: null
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+policy:
+  _target_: diffusion_policy.policy.lstm_search_policy.LSTMSearchPolicy
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+    shape_meta: ${shape_meta}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  max_actions: 8
+  stop_radius: 1.0
+  lstm_hidden_size: 256
+  n_lstm_layers: 1
+  net_arch: [256, 256]
+  obs_proj_dim: 256
+  context_dim: 128
+  log_std_init: -1.0
+  log_std_min: -2.0
+  obs_noise: none          # none | gaussian | ddpm100  (diversity fallback, train and rollout)
+  obs_noise_sigma: 0.1
+  maze_path: null
+  device: ${training.device}
+  verifier_noise: 0.0
+
+task:
+  dataset:
+    dataset_dir: data/procgen_maze_expert_quadrant_unpadded
+    return_sequences: true
+    horizon: 100           # a floor for the dataset's assert in sequence mode, not a window
+    pad_before: 0
+    pad_after: 0
+
+dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  # 760 train episodes / 64 = 12 batches per epoch; the cosine schedule is sized from
+  # len(loader) * num_epochs, so 840 epochs ~= 10k steps and the lr actually decays.
+  num_epochs: 840
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  use_ema: False
+  freeze_encoder: False
+  rollout_every: 1000000
+  checkpoint_every: 1000
+  val_every: 50
+  sample_every: 1000000    # the workspace's sample block calls predict_action; not applicable
+  max_train_steps: null
+  max_val_steps: null
+  max_gradient_steps: 10000
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: maze_openloop11_results
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: val_loss
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
