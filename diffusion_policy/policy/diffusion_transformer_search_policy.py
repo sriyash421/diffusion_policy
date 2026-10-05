@@ -588,6 +588,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         actions, values = self.predict_action(obs_dict, verifier, self.max_actions)
         all_actions = actions.clone()
         all_values = values.clone()
+        sampled = [self.last_sampled_actions] if self.last_sampled_actions is not None else []
 
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
@@ -597,13 +598,21 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
                 actions=action_history,
                 values=value_history,
             )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
+            sampled.append(new_action.unsqueeze(1))
+            # same context rule as predict_action (harine/openloop): realized, snapped, stop at goal
+            if self.realized_context:
+                new_value, new_action, _, _ = verifier.get_value_and_realized(
+                    obs_dict, new_action, self.stop_radius, snap=self.snap_cardinal)
+            else:
+                new_value = verifier.get_value(obs_dict, new_action)
 
             all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
             all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
             action_history = torch.cat([action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
             value_history = torch.cat([value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
 
+        if sampled:
+            self.last_sampled_actions = torch.cat(sampled, dim=1)
         return all_actions, all_values
 
     def compute_loss(self, batch):
