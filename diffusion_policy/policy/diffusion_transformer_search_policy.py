@@ -441,6 +441,8 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         # feeds back. The raw samples are kept on `last_sampled_actions` for logging.
         self.realized_context = bool(kwargs.get('realized_context', False))
         self.stop_radius = float(kwargs.get('stop_radius', 1.0))
+        # snap sampled actions to unit cardinal moves before rolling them out (train and eval alike)
+        self.snap_cardinal = bool(kwargs.get('snap_cardinal', False))
         self.last_sampled_actions = None
 
     def set_normalizer(self, normalizer: LinearNormalizer):
@@ -561,7 +563,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             sampled.append(new_action)
             if self.realized_context:
                 new_value, new_action, _, _ = verifier.get_value_and_realized(
-                    obs_dict, new_action, self.stop_radius)
+                    obs_dict, new_action, self.stop_radius, snap=self.snap_cardinal)
             else:
                 new_value = verifier.get_value(obs_dict, new_action)
             if actions is None:

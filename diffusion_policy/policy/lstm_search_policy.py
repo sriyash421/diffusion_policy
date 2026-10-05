@@ -30,6 +30,7 @@ from diffusion_policy.common.maze_verifier import (
     MazeVerifier,
     build_images_torch,
     rollout_step_torch,
+    snap_cardinal_torch,
 )
 
 
@@ -51,6 +52,7 @@ class LSTMSearchPolicy(BaseImagePolicy):
             log_std_min: float = -2.0,
             obs_noise: str = 'none',
             obs_noise_sigma: float = 0.1,
+            snap_cardinal: bool = False,
             **kwargs):
         super().__init__()
         action_shape = shape_meta['action']['shape']
@@ -66,6 +68,9 @@ class LSTMSearchPolicy(BaseImagePolicy):
         self.action_dim = action_dim
         self.max_actions = max_actions
         self.stop_radius = stop_radius
+        # snap every executed action to a unit cardinal move (one decision = one BFS step); the
+        # eval harness reads this flag so rollout semantics are identical at train and eval
+        self.snap_cardinal = bool(snap_cardinal)
         self.context_dim = context_dim
         self.obs_feature_dim = obs_encoder.output_shape()[0]
         self.normalizer = LinearNormalizer()
@@ -180,6 +185,8 @@ class LSTMSearchPolicy(BaseImagePolicy):
             latent, state = self.lstm(inp, state)
             naction = self._dist(latent[:, 0]).sample()
             action = self.normalizer['action'].unnormalize(naction)
+            if self.snap_cardinal:
+                action = snap_cardinal_torch(action)
             sampled[:, t] = torch.where(done[:, None], torch.zeros_like(action), action)
             nxt = rollout_step_torch(free, pos, action)
             new_pos = torch.where(done[:, None], pos, nxt)
@@ -227,14 +234,15 @@ class LSTMSearchPolicy(BaseImagePolicy):
             }
 
         out = {k: [] for k in ('sampled', 'realized', 'traj', 'done_step', 'values')}
+        window = max(self.max_actions - 1, 1)  # beyond max_actions the context slides (eval does too)
         for k in range(n_candidates):
             if k == 0:
                 ctx = torch.zeros((B, self.context_dim), device=device)
             else:
-                realized = torch.stack(out['realized'], dim=1)
-                values = torch.stack(out['values'], dim=1)
+                realized = torch.stack(out['realized'][-window:], dim=1)
+                values = torch.stack(out['values'][-window:], dim=1)
                 nreal = self.normalizer['action'].normalize(realized)
-                mask = torch.ones((B, 1, k), dtype=torch.bool, device=device)
+                mask = torch.ones((B, 1, realized.shape[1]), dtype=torch.bool, device=device)
                 ctx = self._context_vector(nreal, values, mask)[:, 0]
             sampled, traj, done_step = self._rollout_one(free, start, goal, ctx, T)
             out['sampled'].append(sampled)
@@ -315,7 +323,8 @@ class LSTMSearchPolicy(BaseImagePolicy):
         inp = torch.cat([feat, prev_naction, ctx], dim=-1)[:, None]
         latent, self._state = self.lstm(inp, self._state)
         naction = self._dist(latent[:, 0]).sample()
-        return self.normalizer['action'].unnormalize(naction)
+        action = self.normalizer['action'].unnormalize(naction)
+        return snap_cardinal_torch(action) if self.snap_cardinal else action
 
     @torch.inference_mode()
     def predict_action(self, obs_dict, verifier=None, n_actions=None):

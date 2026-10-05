@@ -81,7 +81,23 @@ def rollout_step_torch(free, pos, delta):
     return cur.float()
 
 
-def rollout_trajectory_torch(free, start, actions, goal, stop_radius=1.0):
+def snap_cardinal_torch(action):
+    """Nearest unit cardinal move: (sign(major axis), 0) / (0, sign) or (0, 0) if |a|_inf < 0.5.
+
+    Makes one policy decision equal one BFS step, like the expert's actions; applied identically
+    in the policies' training-time context rollouts and in the eval harness.
+    """
+    ax = action[..., 0]
+    ay = action[..., 1]
+    use_x = ax.abs() >= ay.abs()
+    mag = torch.maximum(ax.abs(), ay.abs())
+    move = (mag >= 0.5).float()
+    sx = torch.sign(ax) * use_x.float() * move
+    sy = torch.sign(ay) * (~use_x).float() * move
+    return torch.stack([sx, sy], dim=-1)
+
+
+def rollout_trajectory_torch(free, start, actions, goal, stop_radius=1.0, snap=False):
     """Open-loop rollout of (B, T, 2) deltas that freezes a row once it reaches the goal.
 
     Mirrors `eval_bc.eval_episode_batch`: success is checked after each step with
@@ -90,6 +106,8 @@ def rollout_trajectory_torch(free, start, actions, goal, stop_radius=1.0):
     """
     pos = start.float()
     goal = goal.float()
+    if snap:
+        actions = snap_cardinal_torch(actions)
     bsz, T, _ = actions.shape
     done = torch.zeros(bsz, dtype=torch.bool, device=free.device)
     done_step = torch.full((bsz,), -1, dtype=torch.long, device=free.device)
@@ -233,7 +251,7 @@ class MazeVerifier:
             pos = rollout_step_torch(free, pos, delta)
         return pos
 
-    def get_value_and_realized(self, obs_dict, action, stop_radius=1.0):
+    def get_value_and_realized(self, obs_dict, action, stop_radius=1.0, snap=False):
         """harine/openloop: value of a full open-loop chunk plus the trajectory it realizes.
 
         Like `get_value` on the image path, but the rollout stops once the agent is within
@@ -246,7 +264,7 @@ class MazeVerifier:
             action = action[:, 0]
         image = obs_dict["image"]
         free = self._free_from_obs_torch(obs_dict)
-        traj, done_step = rollout_trajectory_torch(free, pos, action, goal, stop_radius)
+        traj, done_step = rollout_trajectory_torch(free, pos, action, goal, stop_radius, snap=snap)
         dist, unreachable = self._get_goal_distance_field_torch(image, free, goal)
         value = -self._sample_goal_distance_torch(free, dist, traj[:, -1], unreachable)
         if self.noise > 0:

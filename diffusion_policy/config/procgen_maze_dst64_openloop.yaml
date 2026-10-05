@@ -18,6 +18,7 @@ policy:
   max_actions: 8
   realized_context: True
   stop_radius: 1.0
+  snap_cardinal: True     # sampled chunk actions are snapped to unit cardinal moves (train and eval)
 
 task:
   dataset:

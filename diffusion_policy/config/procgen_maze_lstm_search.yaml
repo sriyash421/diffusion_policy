@@ -37,6 +37,7 @@ policy:
   n_obs_steps: ${n_obs_steps}
   max_actions: 8
   stop_radius: 1.0
+  snap_cardinal: true     # executed actions are unit cardinal moves, like the expert's (train and eval)
   lstm_hidden_size: 256
   n_lstm_layers: 1
   net_arch: [256, 256]
