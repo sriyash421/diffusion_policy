@@ -277,11 +277,11 @@ class Sim2RealImageDataset(BaseImageDataset):
         frames = episode_frame_mask(self.replay_buffer.episode_ends[:], self.train_mask)
         # action
         normalizer['action'] = SingleFieldLinearNormalizer.create_fit(
-            self.replay_buffer['action'][frames], mode="limits")
+            np.asarray(self.replay_buffer['action'])[frames], mode="limits")
         # obs
         for key in self.lowdim_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
-                self.replay_buffer[key][frames], mode="gaussian")
+                np.asarray(self.replay_buffer[key])[frames], mode="gaussian")
         # don't normalize rgb, obs_encoder has image_net norm
         for key in self.rgb_keys + self.depth_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_identity()
