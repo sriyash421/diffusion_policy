@@ -1,0 +1,10 @@
+# harine/maze round 3: best-of-N arm = the DT search config with no context (max_actions=1).
+# Every attempt starts an empty stream; eval draws N i.i.d. attempts.
+defaults:
+  - procgen_maze_dt_search
+  - _self_
+
+name: procgen_maze_dt_bc
+
+policy:
+  max_actions: 1

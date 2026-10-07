@@ -44,6 +44,34 @@ class CustomWeightedRandomSampler(torch.utils.data.WeightedRandomSampler):
         return iter(rand_tensor.tolist())
 
 
+def episode_frame_mask(episode_ends, episode_mask):
+    """Per-episode bool mask -> per-frame bool mask."""
+    starts = np.concatenate([[0], episode_ends[:-1]])
+    frames = np.zeros(int(episode_ends[-1]), dtype=bool)
+    for keep, s, e in zip(episode_mask, starts, episode_ends):
+        if keep:
+            frames[s:e] = True
+    return frames
+
+
+def get_pair_val_mask(replay_buffer, val_ratio, seed=0):
+    """Hold out val_ratio of the unique (agent_pos, goal_pos)-at-reset pairs; returns an episode mask."""
+    ends = np.asarray(replay_buffer.episode_ends[:])
+    starts = np.concatenate([[0], ends[:-1]])
+    pairs = np.concatenate([np.asarray(replay_buffer['agent_pos'])[starts],
+                            np.asarray(replay_buffer['goal_pos'])[starts]], axis=-1)
+    pairs = np.rint(pairs).astype(np.int64)
+    uniq, inverse = np.unique(pairs, axis=0, return_inverse=True)
+    val_mask = np.zeros(len(ends), dtype=bool)
+    if val_ratio <= 0:
+        return val_mask
+    n_val = min(max(1, round(len(uniq) * val_ratio)), len(uniq) - 1)
+    rng = np.random.default_rng(seed=seed)
+    val_pairs = rng.choice(len(uniq), size=n_val, replace=False)
+    val_mask[np.isin(inverse.reshape(-1), val_pairs)] = True
+    return val_mask
+
+
 class Sim2RealImageDataset(BaseImageDataset):
     def __init__(
         self,
@@ -59,10 +87,12 @@ class Sim2RealImageDataset(BaseImageDataset):
         use_cache: bool = False,
         use_disk: bool = True,
         return_sequences: bool = False,
-        zero_pad_action_after: bool = False
+        zero_pad_action_after: bool = False,
+        val_split: str = 'episode'
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
+        assert val_split in ('episode', 'pair'), val_split
         if return_sequences:
             assert pad_before == 0 and pad_after == 0 and horizon >= 100
 
@@ -92,11 +122,15 @@ class Sim2RealImageDataset(BaseImageDataset):
             for key in self.rgb_keys + self.lowdim_keys + self.depth_keys:
                 key_first_k[key] = n_obs_steps
 
-        # Split train/val
-        val_mask = get_val_mask(
-            n_episodes=self.replay_buffer.n_episodes,
-            val_ratio=val_ratio,
-            seed=seed)
+        # Split train/val: by episode, or (harine/maze) by unique (start, goal) pair so that no
+        # pair is in both halves (the maze expert set repeats pairs across episodes)
+        if val_split == 'pair':
+            val_mask = get_pair_val_mask(self.replay_buffer, val_ratio, seed)
+        else:
+            val_mask = get_val_mask(
+                n_episodes=self.replay_buffer.n_episodes,
+                val_ratio=val_ratio,
+                seed=seed)
         train_mask = ~val_mask
 
         # Create sampler
@@ -239,13 +273,15 @@ class Sim2RealImageDataset(BaseImageDataset):
 
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
         normalizer = LinearNormalizer()
+        # fit on the training episodes' frames only (harine/maze)
+        frames = episode_frame_mask(self.replay_buffer.episode_ends[:], self.train_mask)
         # action
         normalizer['action'] = SingleFieldLinearNormalizer.create_fit(
-            self.replay_buffer['action'], mode="limits")
+            self.replay_buffer['action'][frames], mode="limits")
         # obs
         for key in self.lowdim_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
-                self.replay_buffer[key], mode="gaussian")
+                self.replay_buffer[key][frames], mode="gaussian")
         # don't normalize rgb, obs_encoder has image_net norm
         for key in self.rgb_keys + self.depth_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_identity()
@@ -790,6 +826,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         samples_per_file_multiplier: float = 1.0,
         return_sequences: bool = False,
         zero_pad_action_after: bool = False,
+        val_split: str = 'episode',
         dataset_class=Sim2RealImageDataset
     ):
         super().__init__()
@@ -880,7 +917,8 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'use_cache': use_cache,
             'use_disk': use_disk,
             'return_sequences': return_sequences,
-            'zero_pad_action_after': zero_pad_action_after
+            'zero_pad_action_after': zero_pad_action_after,
+            'val_split': val_split
         }
 
         for config in self.dataset_config:
