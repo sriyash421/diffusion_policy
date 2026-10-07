@@ -177,6 +177,9 @@ class DTSearchPolicy(BaseImagePolicy):
             S[k][:, 0] = 0
         S['len'] = S['len'] - shift
         S['att_starts'] = [a - shift for a in S['att_starts'][drop:]]
+        keep = int(S['len'].max())   # drop the now-stale padding columns, or the stream grows for ever
+        for k in TOKEN_KEYS:
+            S[k] = S[k][:, :keep]
 
     def reset(self):
         self._st = None
