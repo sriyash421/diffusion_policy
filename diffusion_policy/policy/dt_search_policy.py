@@ -268,7 +268,7 @@ class DTSearchPolicy(BaseImagePolicy):
             rep = lambda x: x.repeat_interleave(N, dim=0)
             out = self.rollout_candidates_torch(rep(free), rep(start), rep(goal), 1)
             return {k: v.reshape(start.shape[0], N, *v.shape[2:]) for k, v in out.items()
-                    if k not in ('snaps', 'stream')}
+                    if k not in ('snaps', 'stream', 'n_in_stream')}
         B = start.shape[0]
         device = start.device
         saved = self._st
