@@ -838,6 +838,26 @@ class SearchProcedureMixin:
         """
         self._sample_seeds = None if seeds is None else [int(x) for x in seeds]
         self._sample_draw = 0
+        self._obs_noise_draw = 0
+        self._obs_level_draw = 0
+
+    def _obs_random(self, shape, dtype, device, *, levels=None):
+        """Independent per-episode observation streams; training uses global RNG."""
+        if getattr(self, '_sample_seeds', None) is None:
+            if levels is None:
+                return torch.randn(shape, dtype=dtype, device=device)
+            return torch.randint(levels[0], levels[1], shape, device=device)
+        counter = '_obs_noise_draw' if levels is None else '_obs_level_draw'
+        draw = getattr(self, counter, 0)
+        setattr(self, counter, draw + 1)
+        assert len(self._sample_seeds) == shape[0]
+        salt = 17293481 if levels is None else 98376451
+        rows = []
+        for seed in self._sample_seeds:
+            g = torch.Generator().manual_seed((seed * 1_000_003 + salt + draw) % (2**63-1))
+            rows.append(torch.randn(tuple(shape[1:]), dtype=dtype, generator=g) if levels is None
+                        else torch.randint(levels[0], levels[1], tuple(shape[1:]), generator=g))
+        return torch.stack(rows).to(device)
 
     def _init_noise(self, shape, dtype, device, generator=None):
         """Initial denoising noise: per-row streams when seeded, else the global RNG.
@@ -1218,7 +1238,9 @@ class SearchProcedureMixin:
             compared to anything, so the verifier scalar never touches selection; it
             reaches the model only as search context. ``scores`` describes the n-1 context
             candidates (so the caller can log the spread), not the returned action, and is
-            absent entirely at n=1.
+            absent entirely at n=1. With ``self.log_final_score`` set, the returned action
+            is additionally simulated once and its value returned as ``score_final`` (B,);
+            logging only, selection is unchanged.
 
         That split matches training exactly: ``generate_search_context`` runs at
         ``max_actions - 1`` and the loss covers slot ``max_actions - 1``, i.e. K
@@ -1247,7 +1269,7 @@ class SearchProcedureMixin:
         with self._crop_scope(), self._corrupt_scope():
             # encoded once and shared by the search AND (in 'final_pass') the final sample
             obs_features = self._encode_obs_features(obs_dict)
-            actions = values = scores = None
+            actions = values = scores = score_final = None
             if n_search > 0:
                 actions, values, scores = self.predict_n_actions(
                     obs_dict, verifier=self.verifier, n_actions=n_search,
@@ -1274,9 +1296,15 @@ class SearchProcedureMixin:
                     values=values[:, -keep:] if keep else None,
                     obs_features=obs_features,
                     # conditioned on `keep` context entries, so it is slot `keep` -- the
-                    # ladder's cleanest reachable slot at this width.
+                    # configured ladder slot at this context width (not necessarily clean).
                     **self._slot_kwargs(keep),
                 )['action_pred']                                        # (B, H, Da)
+                if getattr(self, 'log_final_score', False):
+                    # LOGGING ONLY: one extra verifier sim so the executed sample can be
+                    # placed inside the distribution it was conditioned on. Never touches
+                    # selection or context; off by default so deployment cost is unchanged.
+                    score_final = self._score_candidates(
+                        self.verifier, obs_dict, action_pred)[1]        # (B,)
 
         start = self.n_obs_steps - 1
         end = start + self.n_action_steps
@@ -1288,5 +1316,6 @@ class SearchProcedureMixin:
         # straight through dict_apply, which would call .detach() on a None.
         if scores is not None:
             out['scores'] = scores
+        if score_final is not None:
+            out['score_final'] = score_final
         return out
-

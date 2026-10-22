@@ -170,6 +170,17 @@ def load_policy(checkpoint, device, num_inference_steps=None, noise_scheduler=No
     policy = workspace.model
     if cfg.training.get('use_ema', False) and getattr(workspace, 'ema_model', None) is not None:
         policy = workspace.ema_model
+        # Old EMA checkpoints omitted these running-statistic buffers. Repair only
+        # uninitialized calibration from the online model saved in the SAME payload.
+        initialized = getattr(policy, 'obs_feature_std_inited', None)
+        source_initialized = getattr(workspace.model, 'obs_feature_std_inited', None)
+        if initialized is not None and not bool(initialized):
+            if source_initialized is None or not bool(source_initialized):
+                raise RuntimeError('Checkpoint has no initialized observation-noise calibration')
+            policy.obs_feature_std.copy_(workspace.model.obs_feature_std)
+            policy.obs_feature_std_inited.copy_(source_initialized)
+            print('Repaired legacy EMA observation-noise buffers from saved online model')
+            policy.ema_noise_buffers_repaired = True
     policy.to(torch.device(device))
     policy.eval()
     return policy, cfg
@@ -300,8 +311,9 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
     because `max` remains the primary series -- success is defined on it.
 
     ``score_sink``: optional list. When given, every policy call appends
-    ``(env_index, step_index, [score per candidate])`` -- the verifier value for each of the
-    n candidates drawn, which is what argmax ranks on. Which value that is depends on the
+    ``(env_index, step_index, [score per candidate], score_final)`` -- the verifier value for
+    each of the n candidates drawn (n-1 context candidates under 'final_pass'), which is what
+    argmax ranks on, and under 'final_pass' the executed sample's own value (else None). Which value that is depends on the
     policy's `verifier_value` (see pusht_verifier). Units follow it: PIXELS and <= 0 for the
     per-candidate values, but under a CROSS-CANDIDATE value (armTd) the number is
     standardized across the n candidates of that step, so it is neither in pixels nor <= 0,
@@ -341,7 +353,18 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
     policy.reset()
     done = False
     step_i = 0
+    # AsyncVectorEnv keeps stepping finished envs to keep the batch square; scores from a
+    # state the policy never really visited are dropped from the sink (captured BEFORE the
+    # env step, so the terminal decision of a successful episode is kept).
+    ep_done = np.zeros(len(states), dtype=bool)
+    episode_sample_seeds = getattr(policy, '_sample_seeds', None)
     while not done:
+        if episode_sample_seeds is not None:
+            # Restart a decision-specific stream: wider searches cannot shift the
+            # initial candidate noise used at later decisions.
+            policy.set_sample_seeds([
+                (s + step_i * 1_000_000_007) % (2 ** 63 - 1)
+                for s in episode_sample_seeds])
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         if plans is not None:
             # The live trackers, advanced by every step that actually executed. Read
@@ -364,11 +387,15 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
                 out = policy.predict_action_best(obs_dict, n_actions=n)
                 action = out['action']
                 if score_sink is not None and out.get('scores') is not None:
-                    sc = out['scores'].detach().cpu().numpy()   # (n_envs, n)
-                    for env_i in range(sc.shape[0]):
-                        score_sink.append((env_i, step_i, sc[env_i].tolist()))
+                    sc = out['scores'].detach().cpu().numpy()   # (n_envs, n | n-1)
+                    sf = out.get('score_final')                 # (n_envs,) under final_pass
+                    sf = None if sf is None else sf.detach().cpu().numpy()
+                    for env_i in map(int, np.flatnonzero(~ep_done)):
+                        score_sink.append((env_i, step_i, sc[env_i].tolist(),
+                                           None if sf is None else float(sf[env_i])))
         action = action.detach().cpu().numpy()
         obs, reward, done, info = env.step(action)
+        ep_done |= np.asarray(done, dtype=bool)
         done = np.all(done)
         step_i += 1
     rewards = env.call('get_attr', 'reward')
@@ -388,14 +415,8 @@ def rollout_max_rewards(env, policy, states, device, n, score_sink=None, seeds=N
 
 
 def _episode_seed(seed, n, episode_idx):
-    """Stable per-episode sampling seed.
-
-    A pure function of (base seed, search width, episode index) -- deliberately NOT of the
-    checkpoint, the split or the batching, so the same episode is scored on the same noise
-    at every checkpoint and under every policy. `n` is included because the n=1 and n=16
-    columns should be independent draws rather than n=1 being a prefix of n=16.
-    """
-    return (int(seed) * 1_000_003 + int(n) * 10_007 + int(episode_idx)) % (2 ** 31 - 1)
+    """Paired episode seed, independent of N; keep n for caller compatibility."""
+    return (int(seed) * 1_000_003 + int(episode_idx)) % (2 ** 31 - 1)
 
 
 def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
@@ -457,10 +478,13 @@ def _eval_split_at_n(env, policy, states, device, n, n_envs, seed, label,
         if sink is not None:
             # env_i is the slot within this chunk; map it back to the episode index, and
             # drop the padding slots so no duplicate episode is recorded.
-            for env_i, st, scores in sink:
+            for env_i, st, scores, sf in sink:
                 if env_i < n_envs - pad:
-                    score_sink.append({'episode': start + env_i, 'step': st,
-                                       'scores': [round(v, 6) for v in scores]})
+                    row = {'episode': start + env_i, 'step': st,
+                           'scores': [round(v, 6) for v in scores]}
+                    if sf is not None:
+                        row['score_final'] = round(sf, 6)
+                    score_sink.append(row)
         for kind, arr in zip(kinds, chunk):
             out[kind][start:start + n_envs - pad] = arr[:n_envs - pad]
         tqdm.tqdm.write(f'  {label} n={n} chunk {start}: {dt:.1f}s')
@@ -511,6 +535,14 @@ def override_verifier_value(policy, verifier_value):
         built.value_fn = verifier_value
 
 
+def override_terminal_scoring(policy, enabled):
+    """Select legacy/full-chunk or success-aware simulation, including lazy verifiers."""
+    policy.search_kwargs['verifier_terminal_scoring'] = bool(enabled)
+    built = policy.__dict__.get('_verifier') or policy.__dict__.get('verifier')
+    if built is not None and hasattr(built, 'set_terminal_scoring'):
+        built.set_terminal_scoring(enabled)
+
+
 def _verifier_value_of(policy):
     """Which value this policy's verifier ranks with, WITHOUT forcing a lazy build.
 
@@ -528,7 +560,7 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                     selection=None, selection_temperature=1.0, skip_val=False,
                     noise_scheduler=None, score_writer=None, verifier_value=None,
                     selection_index=None, corrupt_obs_eval=None, test_start_seed=None,
-                    n_test_seeds=50, plan_dir=None):
+                    n_test_seeds=50, plan_dir=None, terminal_scoring=False):
     """Sweep n_list, evaluating val and test at each n.
 
     ``test_start_seed``: switch the TEST split from held-out dataset episodes to fresh
@@ -555,6 +587,9 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         # 'index' executes a fixed candidate by generation order and never consults
         # the scores, so the verifier takes no part in it -- see select_candidate.
         policy.selection_index = selection_index
+    # Score the executed final_pass sample (one extra sim per decision) only when the
+    # scores are being stored; it is logging only and never changes what is executed.
+    policy.log_final_score = score_writer is not None
     # The verifier value is also swappable on trained weights -- it is what RANKS the
     # candidates, not anything the weights encode -- so 'same weights, t_goal vs armT' is a
     # controlled comparison. Both halves must move together: `value_fn` is what the sim
@@ -564,6 +599,8 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
     # 2026-08-19 cutover has no key at all, so it correctly reproduces `t_goal`.
     if verifier_value is not None:
         override_verifier_value(policy, verifier_value)
+    override_terminal_scoring(policy, terminal_scoring)
+    print(f'  terminal scoring: {"success-aware" if terminal_scoring else "legacy full-chunk"}')
     print(f'  verifier value: {_verifier_value_of(policy)}'
           + (' (overridden)' if verifier_value is not None else ' (from checkpoint cfg)'))
     # Whether rollouts see the corruption the run TRAINED under is likewise a readout-time
@@ -680,11 +717,16 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
             'selection_index': (getattr(policy, 'selection_index', None)
                                 if selection == 'index' else None),
             'verifier_value': verifier_value_used,
+            'terminal_scoring': bool(terminal_scoring),
             # None for a simulated verifier, which has no training set to be held out from
             'held_out': held_out_used,
             # None == the checkpoint's own setting was used, which is what a curve written
             # before this key existed means too.
             'corrupt_obs_eval': corrupt_obs_eval,
+            'candidate_rng': 'paired_decision_v3',
+            'obs_noise_rng': ('per_episode_v2' if getattr(policy, 'corrupt_obs_eval', False)
+                              and getattr(policy, 'slot_ladder_on', False) else None),
+            'ema_noise_buffers_repaired': bool(getattr(policy, 'ema_noise_buffers_repaired', False)),
             'n_generations': [int(n) + n_extra for n in done],
             # test split: REPORTED
             'success_rate': [test_sr[n] for n in done],
@@ -854,7 +896,7 @@ _IDENTITY = ('seed', 'n_episodes', 'episode_idxs', 'val_n_episodes',
              # likewise for the verifier value: t_goal and armT rank candidates
              # differently, so their curves are different experiments. Curves written
              # before 2026-08-19 carry no key here and are all t_goal.
-             'verifier_value',
+             'verifier_value', 'terminal_scoring',
              # two waypoint runs under the same value but different plan directories are
              # scored against different VLM plans -- different experiments. None (every
              # non-waypoint curve) never clashes: only both-sides-set values are compared.
@@ -877,6 +919,14 @@ def merge_curves(old, new):
     # discard the n already on disk.
     clash = [k for k in _IDENTITY
              if old.get(k) is not None and new.get(k) is not None and old[k] != new[k]]
+    # Older curves predate this switch and always used full-chunk scoring.
+    if old.get('terminal_scoring', False) != new.get('terminal_scoring', False):
+        if 'terminal_scoring' not in clash:
+            clash.append('terminal_scoring')
+    if old.get('obs_noise_rng') != new.get('obs_noise_rng'):
+        clash.append('obs_noise_rng')
+    if old.get('candidate_rng') != new.get('candidate_rng'):
+        clash.append('candidate_rng')
     if clash:
         print(f'warning: existing curve differs on {clash}; replacing it rather than '
               f'splicing points measured under different conditions')
@@ -968,8 +1018,28 @@ def step_from_ckpt(path):
 
 # ---------------------------------------------------------------------------
 # Run-level result index: every evaluated checkpoint is merged into
+def _conditional_obs_eval(run_or_ckpt):
+    """Default for --corrupt-obs-eval: True when the run trained under obs noise, so
+    rollouts see the conditional it trained on; None (the checkpoint's own setting)
+    otherwise. Read from the run's hydra config, which sits beside checkpoints/."""
+    if run_or_ckpt is None:
+        return None
+    p = pathlib.Path(run_or_ckpt).resolve()
+    run = p if p.is_dir() else p.parent.parent
+    cfg_path = run / '.hydra' / 'config.yaml'
+    if not cfg_path.is_file():
+        return None
+    cfg = omegaconf.OmegaConf.load(cfg_path)
+    son = (cfg.get('slot_obs_noise') or {}).get('mode', 'uniform')
+    if son != 'uniform' or bool(cfg.get('corrupt_obs')):
+        print(f'corrupt_obs_eval: unset -> True (run trained under obs noise: '
+              f'slot_obs_noise.mode={son}, corrupt_obs={bool(cfg.get("corrupt_obs"))})')
+        return True
+    return None
+
+
 def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
-                corrupt_obs_eval=None, test_start_seed=None):
+                corrupt_obs_eval=None, test_start_seed=None, terminal_scoring=False):
     """Output subdirectory: bon_search[_sel-<mode>][_ver-<value>][_obs-<clean|corrupt>].
 
     An override of ANY readout rule is a different experiment on the same weights, so it
@@ -997,6 +1067,8 @@ def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
         sub += f'_ver-{verifier_value}'
     if corrupt_obs_eval is not None:
         sub += '_obs-corrupt' if corrupt_obs_eval else '_obs-clean'
+    if terminal_scoring:
+        sub += '_terminal-success'
     return sub
 
 
@@ -1007,7 +1079,9 @@ def _make_score_writer(step_dir, checkpoint, selection):
     curve's `verifier_value` field records which. Rows written before 2026-08-19 predate the
     field and are all `t_goal`.
 
-    One row per (split, n, episode, step) holding the n raw scores for that policy call.
+    One row per (split, n, episode, step) holding the n raw scores for that policy call,
+    in generation order; only decisions of a still-running episode are written. Under 'final_pass' `scores` has n-1 entries (the context) and
+    `score_final` is the executed n-th sample's value, simulated for logging only.
     Raw, not the rescaled context copy: this is exactly what argmax compares, so the
     selection can be replayed offline (e.g. what would softmax at another temperature, or
     a different rule entirely, have executed?) without re-running the sim.
@@ -1050,6 +1124,12 @@ def _row_from_curve(step, checkpoint, curve):
         'checkpoint': str(checkpoint),
         'n': curve['n'],
         'seed': curve.get('seed'),
+        'n_envs': curve.get('n_envs'),
+        'corrupt_obs_eval': curve.get('corrupt_obs_eval'),
+        'obs_noise_rng': curve.get('obs_noise_rng'),
+        'candidate_rng': curve.get('candidate_rng'),
+        'ema_noise_buffers_repaired': curve.get('ema_noise_buffers_repaired', False),
+        'selection_index': curve.get('selection_index'),
         # how the executed action was picked, and the sample count n really cost -- absent
         # in rows written before selection modes existed, which all mean 'argmax'/n
         'selection': curve.get('selection', 'argmax'),
@@ -1059,6 +1139,7 @@ def _row_from_curve(step, checkpoint, curve):
         # key added to the curve but not listed here never reaches the jsonl and the guard
         # silently passes everything. Absent in rows written before 2026-08-19 == 't_goal'.
         'verifier_value': curve.get('verifier_value'),
+        'terminal_scoring': curve.get('terminal_scoring', False),
         # which VLM plans a waypoint run was scored against (None otherwise); listed here
         # for the same whitelist reason as verifier_value -- _IDENTITY's plan_dir guard
         # only sees what this row carries.
@@ -1190,7 +1271,8 @@ def read_curve_rows(out_root):
 @click.option('--selection-temperature', default=1.0, type=float,
               help='softmax temperature on the STANDARDIZED score (T->0 == argmax)')
 @click.option('--verifier-value', default=None,
-              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd', 'wp_v5', 'wp_v3']),
+              type=click.Choice(['t_goal', 'd_t_goal', 'armTn', 'armTd', 'wp_v5', 'wp_v3',
+                                 'wp_v3_la', 'wp_v5_la', 'wp_v3_la_tgd', 'wp_v3_la_tgn']),
               help='override which value the verifier ranks candidates with. t_goal is '
                    'the pre-2026-08-19 value (-T-to-goal distance); d_t_goal is that '
                    'same term over its 13.6px spread, which RANKS IDENTICALLY but records '
@@ -1215,15 +1297,25 @@ def read_curve_rows(out_root):
                    'simulated and a copy of the episode\'s live Veritas tracker walks '
                    'its path; wp_v5 tracks BOTH the pusher waypoints and the T poses '
                    'of the v5 dual plans (scores averaged), wp_v3 the v3 pusher-only '
-                   'plans (agent track alone). They need a plan per evaluated episode '
+                   'plans (agent track alone); wp_v3_la ranks the v3 plans by upstream '
+                   'Veritas\'s lookahead endpoint cost instead (pusht_verifier.lookahead_cost), '
+                   'and wp_v5_la the v5 plans by that cost per track, averaged; wp_v3_la_tgd sums '
+                   't_goal and the wp_v3_la cost, each z-scored across the n candidates (UNet BC only). '
+                   'wp_v3_la_tgn is the same sum at fixed offline scales (trainable). '
+                   'They need a plan per evaluated episode '
                    '(--plan-dir).')
+@click.option('--terminal-scoring/--legacy-terminal-scoring', default=False,
+              help='stop simulated chunks at success and prioritize successful candidates. '
+                   'Default: legacy full-chunk scoring, preserving existing comparisons.')
 @click.option('--plan-dir', default=None,
               help='directory of ep{idx}.json VLM plans for the wp_* verifier values '
                    '(from scripts/veritas_pusht_overlays.py). Default: the value\'s own '
                    'prompt dir under media/veritas_pusht/. Ignored otherwise.')
 @click.option('--corrupt-obs-eval/--no-corrupt-obs-eval', 'corrupt_obs_eval', default=None,
-              help='override whether rollouts see the obs corruption the run trained under. '
-                   'Unset keeps the checkpoint\'s own setting.')
+              help='whether rollouts see the obs corruption the run trained under. Unset = '
+                   'CONDITIONAL: on when the run trained under obs noise (a slot_obs_noise '
+                   'ladder or corrupt_obs), else the checkpoint\'s own setting. '
+                   '--no-corrupt-obs-eval evaluates a noised run clean.')
 @click.option('--test-start-seed', 'test_start_seed', type=int, default=None,
               help='evaluate on FRESH ENVIRONMENT SEEDS instead of held-out dataset '
                    'episodes -- the original Diffusion Policy protocol, which uses 100000. '
@@ -1238,14 +1330,18 @@ def read_curve_rows(out_root):
                    '(in pixels, EXCEPT under armTd where it is standardized across the n '
                    'candidates; see --verifier-value for which) to '
                    'candidate_scores.jsonl (one row per split/n/episode/step). This is the '
-                   'signal argmax ranks on; it is otherwise discarded after selection.')
+                   'signal argmax ranks on; it is otherwise discarded after selection. Under '
+                   '--selection final_pass the executed sample is also simulated once per '
+                   'decision (logging only) and stored as score_final.')
 @click.option('--skip-val', is_flag=True,
               help='evaluate the 50 test episodes only, skipping the val split')
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
          store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg,
-         test_start_seed, n_test_seeds, plan_dir):
+         test_start_seed, n_test_seeds, plan_dir, terminal_scoring):
+    if corrupt_obs_eval is None:
+        corrupt_obs_eval = _conditional_obs_eval(run_dir if watch else checkpoint)
     grid = {int(2 ** k) for k in range(31)}
     if n_list_arg:
         n_list = sorted({int(x) for x in n_list_arg.split(',') if x.strip()})
@@ -1276,7 +1372,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
         # resolved through the link and landed beside the target instead of in the run dir.
         run_root = pathlib.Path(checkpoint).resolve().parent.parent
         sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
-                          test_start_seed)
+                          test_start_seed, terminal_scoring)
         out = pathlib.Path(output_dir) if output_dir else run_root.joinpath(sub)
         step = step_from_ckpt(checkpoint)
         # SAME per-step subdir convention as watch mode. Previously this wrote a flat
@@ -1296,6 +1392,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 selection=selection,
                                 selection_temperature=selection_temperature,
                                 verifier_value=verifier_value,
+                                terminal_scoring=terminal_scoring,
                                 selection_index=selection_index,
                                 corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
@@ -1312,7 +1409,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
     assert run_dir is not None, '--watch requires --run-dir'
     ckpt_dir = pathlib.Path(run_dir).joinpath('checkpoints')
     sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
-                      test_start_seed)
+                      test_start_seed, terminal_scoring)
     out_root = pathlib.Path(output_dir or os.path.join(run_dir, sub))
     if not ckpt_dir.is_dir():
         # Fail loudly on a wrong --run-dir. Previously a bad path was indistinguishable
@@ -1377,12 +1474,15 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         selection=selection,
                                         selection_temperature=selection_temperature,
                                         verifier_value=verifier_value,
+                                        terminal_scoring=terminal_scoring,
                                         selection_index=selection_index,
                                         corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
                                         plan_dir=plan_dir,
                                         skip_val=skip_val,
-                                        noise_scheduler=noise_scheduler)
+                                        noise_scheduler=noise_scheduler,
+                                        score_writer=_make_score_writer(
+                                            step_dir, str(ckpt), selection) if store_scores else None)
             except Exception as e:
                 # NOT marked seen: the checkpoint may simply have been half-written (the
                 # trainer saves on a background thread), or this may be a transient CUDA
