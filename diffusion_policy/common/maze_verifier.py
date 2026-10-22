@@ -141,17 +141,36 @@ def build_images_torch(free, pos, goal):
 
 
 class MazeVerifier:
-    def __init__(self, env=None, maze_path=None, device="cpu", success_radius=0.5, noise=0.0):
+    def __init__(self, env=None, maze_path=None, device="cpu", success_radius=0.5, noise=0.0,
+                 noise_mode="multiplicative", noise_generator=None):
         self.env = env
         self.device = torch.device(device)
         self.success_radius = success_radius
         self.noise = noise
+        # verifier-noise study (2026-10-21): "additive" adds N(0, noise^2) in BFS steps to every value;
+        # the default keeps the original multiplicative value * (1 + noise * eps).
+        if noise_mode not in ("multiplicative", "additive"):
+            raise ValueError(f"unknown noise_mode: {noise_mode}")
+        self.noise_mode = noise_mode
+        # optional torch.Generator for the noise only, so the caller's sampling stream is untouched
+        # (noisy and clean evals then draw identical candidates and differ only in what the verifier reports)
+        self.noise_generator = noise_generator
         self._cache = {}
         self._torch_distance_cache = None
         if env is not None and env.maze is not None:
             self._ensure_table(env.maze)
         elif maze_path is not None:
             self._ensure_table(np.load(maze_path))
+
+    def _add_noise(self, value):
+        if self.noise <= 0:
+            return value
+        g = self.noise_generator
+        eps = (torch.randn(value.shape, generator=g, device=g.device, dtype=value.dtype).to(value.device)
+               if g is not None else torch.randn_like(value))
+        if self.noise_mode == "additive":
+            return value + self.noise * eps
+        return value * (1 + self.noise * eps)
 
     def _active_maze(self):
         if self.env is None or self.env.maze is None:
@@ -224,8 +243,7 @@ class MazeVerifier:
 
         goal_dists = self.trajectory_goal_distance(x, g, maze=maze)
         score = -goal_dists[:, -1]
-        if self.noise > 0:
-            score = score * (1 + self.noise * torch.randn_like(score))
+        score = self._add_noise(score)
         return score
 
     def _maze_from_obs(self, obs_dict):
@@ -267,8 +285,7 @@ class MazeVerifier:
         traj, done_step = rollout_trajectory_torch(free, pos, action, goal, stop_radius, snap=snap)
         dist, unreachable = self._get_goal_distance_field_torch(image, free, goal)
         value = -self._sample_goal_distance_torch(free, dist, traj[:, -1], unreachable)
-        if self.noise > 0:
-            value = value * (1 + self.noise * torch.randn_like(value))
+        value = self._add_noise(value)
         return value, realized_actions(traj), traj, done_step
 
     def trajectory_distances(self, obs_dict, traj):
@@ -375,8 +392,7 @@ class MazeVerifier:
         final_pos = self._rollout_actions_torch(free, pos, action)
         dist, unreachable = self._get_goal_distance_field_torch(image, free, goal)
         value = -self._sample_goal_distance_torch(free, dist, final_pos, unreachable)
-        if self.noise > 0:
-            value = value * (1 + self.noise * torch.randn_like(value))
+        value = self._add_noise(value)
         return value
 
     def _rollout_delta_np(self, maze, pos, delta):

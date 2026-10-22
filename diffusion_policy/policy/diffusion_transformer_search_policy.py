@@ -396,6 +396,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             maze_path=kwargs.get('maze_path', None),
             device=kwargs.get('device', 'cpu'),
             noise=kwargs.get('verifier_noise', 0.0),
+            noise_mode=kwargs.get('verifier_noise_mode', 'multiplicative'),
         )
         self.horizon = horizon
         self.n_action_steps = n_action_steps
