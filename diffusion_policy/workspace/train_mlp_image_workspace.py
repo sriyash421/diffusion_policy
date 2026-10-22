@@ -176,7 +176,28 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
-            for local_epoch_idx in range(cfg.training.num_epochs):
+            # Resume: a checkpoint saved mid-epoch holds global_step = epoch * steps_per_epoch + batches done in that
+            # epoch. Finish that epoch with only its remaining batches, then run only the epochs left. Before this, every
+            # resume ran num_epochs more epochs and replayed the partial epoch, so preempted runs trained far past the
+            # step count the LR schedule is sized for (the cosine LR then climbs again).
+            # global_step advances on every batch except an uncapped epoch's last one, plus once after each epoch, so an
+            # epoch is len(train_dataloader) steps, or max_train_steps + 1 when max_train_steps caps it.
+            cap = cfg.training.max_train_steps
+            batches_per_epoch = len(train_dataloader) if cap is None else min(len(train_dataloader), cap)
+            capped = batches_per_epoch < len(train_dataloader)
+            steps_per_epoch = batches_per_epoch + (1 if capped else 0)
+            resume_batches_done = self.global_step - self.epoch * steps_per_epoch
+            if not 0 <= resume_batches_done <= batches_per_epoch:
+                print(f"[resume] global_step {self.global_step} does not fall inside epoch {self.epoch} "
+                      f"({steps_per_epoch} steps/epoch); starting the epoch from its first batch")
+                resume_batches_done = 0
+            if self.epoch > 0 or resume_batches_done > 0:
+                later = cfg.training.num_epochs - 1 - self.epoch
+                print(f"[resume] epoch {self.epoch}, step {self.global_step}: {batches_per_epoch - resume_batches_done} "
+                      f"batches left in this epoch, then {max(later, 0)} more epoch(s) of {cfg.training.num_epochs}")
+            for local_epoch_idx in range(self.epoch, cfg.training.num_epochs):
+                epoch_batches = batches_per_epoch - resume_batches_done
+                resume_batches_done = 0
                 if cfg.training.get('max_gradient_steps', None) is not None:
                     if self.global_step >= cfg.training.max_gradient_steps:
                         break
@@ -190,6 +211,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
+                        if batch_idx >= epoch_batches:   # resumed with this epoch's batches already done
+                            break
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
@@ -215,7 +238,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
+                        is_last_batch = (not capped) and (batch_idx == (epoch_batches-1))
                         if not is_last_batch:
                             if self.accelerator.is_main_process:
                                 wandb_run.log(step_log, step=self.global_step)
@@ -226,6 +249,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             next_checkpoint_step = self.last_checkpoint_step + cfg.training.checkpoint_every
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
+                                # set before saving, so latest.ckpt resumes on the same checkpoint grid
+                                # (it used to carry the previous value and resumed runs saved at k*1000 + 1)
+                                self.last_checkpoint_step = self.global_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:
@@ -239,11 +265,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                                 self.save_checkpoint(path=step_ckpt_path)
                                 self.model = model_ddp
 
-                                # Update last checkpoint step
-                                self.last_checkpoint_step = self.global_step
-
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
+                            break
+                        if batch_idx == epoch_batches - 1:   # a resumed epoch stops after its remaining batches
                             break
 
                 # at the end of each epoch
