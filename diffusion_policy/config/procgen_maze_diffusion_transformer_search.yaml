@@ -55,6 +55,7 @@ policy:
   corrupt_obs: False
 
   max_actions: 16
+  value_norm: null  # 'diameter': divide verifier values by the layout's BFS diameter at the model input
   maze_path: null
   device: ${training.device}
 

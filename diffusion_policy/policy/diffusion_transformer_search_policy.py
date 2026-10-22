@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,7 +12,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from diffusion_policy.common.maze_verifier import MazeVerifier
+from diffusion_policy.common.maze_verifier import MazeVerifier, get_shortest_path_table
 
 
 class SearchTransformerForDiffusion(nn.Module):
@@ -444,6 +445,13 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         self.stop_radius = float(kwargs.get('stop_radius', 1.0))
         # snap sampled actions to unit cardinal moves before rolling them out (train and eval alike)
         self.snap_cardinal = bool(kwargs.get('snap_cardinal', False))
+        # value_norm='diameter': the verifier values (-BFS steps, plus any verifier noise, which is
+        # added in BFS steps) are divided by the layout's BFS diameter where they enter the model,
+        # as the dt_st feedback is. The values returned for ranking/logging stay in BFS steps.
+        self.value_norm = kwargs.get('value_norm', None)
+        if self.value_norm not in (None, 'diameter'):
+            raise ValueError(f"unknown value_norm: {self.value_norm}")
+        self._diameter_cache = {}
         self.last_sampled_actions = None
 
     def set_normalizer(self, normalizer: LinearNormalizer):
@@ -451,6 +459,25 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
     def reset(self):
         self.last_sampled_actions = None
+
+    def _diameter(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """(B,) BFS diameter (longest shortest path) of each row's layout, cached per layout."""
+        # image is B,T,C,H,W and channel 0 is wall/free: wall=1, free=0 after dataset scaling.
+        free = (obs_dict['image'][:, -1, 0] < 0.5).detach().cpu().numpy()
+        out = []
+        for maze in free:
+            key = (maze.shape, maze.tobytes())
+            if key not in self._diameter_cache:
+                dists, _, unreachable = get_shortest_path_table(maze.astype(np.uint8), 'cpu')
+                self._diameter_cache[key] = float(dists[dists < unreachable].max())
+            out.append(self._diameter_cache[key])
+        return torch.tensor(out, dtype=torch.float32, device=obs_dict['image'].device)
+
+    def _model_values(self, obs_dict, values):
+        """Verifier values as the model sees them (see value_norm)."""
+        if values is None or self.value_norm is None:
+            return values
+        return values / self._diameter(obs_dict).to(values.device)[:, None]
 
     def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         nobs = self.normalizer.normalize(obs_dict)
@@ -533,7 +560,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         nsample = self.conditional_sample(
             obs_cond=obs_cond,
             actions=actions,
-            values=values,
+            values=self._model_values(obs_dict, values),
             **self.step_kwargs,
         )
         action_pred = self.normalizer['action'].unnormalize(nsample)
@@ -668,7 +695,7 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             timesteps,
             obs_cond=obs_cond,
             actions=actions,
-            values=values,
+            values=self._model_values(batch['obs'], values),
         )
 
         pred_type = self.noise_scheduler.config.prediction_type
