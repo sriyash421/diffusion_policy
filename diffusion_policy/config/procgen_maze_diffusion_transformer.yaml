@@ -10,9 +10,12 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
+# score 16, execute 16 (2026-10-22): with n_obs_steps 1, action[0] is the current step's action, so the
+# executed chunk is the whole horizon, the same 16 actions the verifier scores (was 2/8: scored 16 incl.
+# the past step's action, executed action[1:9]).
 horizon: 16
-n_obs_steps: 2
-n_action_steps: 8
+n_obs_steps: 1
+n_action_steps: 16
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
