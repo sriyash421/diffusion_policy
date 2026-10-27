@@ -188,6 +188,17 @@ def _check_obs_noise_labels(cfg):
                 f'corrupt_obs is True, and leave it empty when it is False.')
 
 
+def _stamp_dataset_provenance(cfg):
+    """Record the training data's manifest chain + demo seeds in cfg, hence in every ckpt."""
+    from omegaconf import OmegaConf
+    from diffusion_policy.common.dataset_provenance import dataset_provenance
+    dataset_dir = OmegaConf.select(cfg, 'task.dataset.dataset_dir')
+    if dataset_dir is None:
+        return
+    split_file = OmegaConf.select(cfg, 'task.dataset.split_file')
+    OmegaConf.set_struct(cfg, False)
+    cfg.dataset_provenance = dataset_provenance(dataset_dir, split_file=split_file)
+
 def _is_search_policy(policy) -> bool:
     """Whether this policy exposes the best-of-n search interface.
 
@@ -228,6 +239,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
+        _stamp_dataset_provenance(cfg)
         _check_arm_label(cfg)
         _check_obs_noise_labels(cfg)
         check_pusht_config(cfg)

@@ -19,7 +19,7 @@ from diffusion_policy.model.common.normalizer import (
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 # The manifest format and its validation already exist for pusht; reuse rather than
 # fork, so one file cannot drift into meaning two things.
-from diffusion_policy.dataset.pusht_image_dataset import (
+from diffusion_policy.common.split_manifest import (
     load_split_manifest, masks_from_manifest)
 
 import threading
@@ -66,6 +66,7 @@ class Sim2RealImageDataset(BaseImageDataset):
         success_only: bool = False,
         success_reward_key: str = 'rewards',
         split_file: str = None,
+        extra_obs_arrays: dict = None,
     ):
         super().__init__()
         assert os.path.isdir(dataset_path)
@@ -76,6 +77,16 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.replay_buffer = self._create_replay_buffer_from_zarr(
             dataset_path, shape_meta=shape_meta, use_cache=use_cache,
             use_disk=use_disk)
+
+        # Per-frame obs computed OUTSIDE the zarr (e.g. Veritas waypoint targets built by
+        # scriptsv2/veritas/build_veritas_targets.py). Each is a .npy of shape
+        # (n_steps, D) aligned row-for-row with the zarr, attached as data/obs/<key>, and
+        # declared in shape_meta.auxiliary_obs so the sampler emits it without making it
+        # a policy input. Validated against the zarr's episode boundaries so a stale
+        # array cannot silently pair frames with the wrong targets.
+        self.extra_obs_arrays = dict(extra_obs_arrays or {})
+        for key, path in self.extra_obs_arrays.items():
+            self._attach_extra_obs(key, path)
 
         # Parse keys
         self.rgb_keys = [
@@ -162,6 +173,28 @@ class Sim2RealImageDataset(BaseImageDataset):
         self.train_mask = train_mask
         self.return_sequences = return_sequences
         self.split_file = split_file
+
+    def _attach_extra_obs(self, key: str, path: str):
+        import hydra.utils
+        path = hydra.utils.to_absolute_path(str(path))
+        arr = np.load(path, mmap_mode='r')
+        n_steps = self.replay_buffer.n_steps
+        if arr.ndim != 2 or arr.shape[0] != n_steps:
+            raise ValueError(
+                f'extra obs array {key!r} at {path} has shape {arr.shape}; expected '
+                f'({n_steps}, D) to align with the zarr frames')
+        meta_path = os.path.splitext(path)[0] + '.json'
+        if os.path.exists(meta_path):
+            from diffusion_policy.common.split_manifest import episode_ends_checksum
+            meta = json.loads(open(meta_path).read())
+            want = meta.get('episode_ends_checksum')
+            have = episode_ends_checksum(self.replay_buffer.episode_ends[:])
+            if want is not None and want != have:
+                raise ValueError(
+                    f'extra obs array {key!r}: episode_ends_checksum {want} (when built) '
+                    f'!= {have} (this zarr). Rebuild it for this dataset.')
+        self.replay_buffer.root['data'][key] = np.asarray(arr)
+        print(f'[Sim2RealImageDataset] attached extra obs {key!r} {arr.shape} from {path}')
 
     def _create_replay_buffer_from_zarr(
             self, dataset_path, shape_meta, use_cache=False, use_disk=True):
@@ -866,6 +899,7 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
         success_only: bool = False,
         success_reward_key: str = 'rewards',
         split_file: str = None,
+        extra_obs_arrays: dict = None,
     ):
         super().__init__()
         if isinstance(dataset_class, str):
@@ -932,6 +966,9 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
                 "Either dataset_dir, dataset_config, or file_paths must be "
                 "provided")
 
+        if use_streaming and extra_obs_arrays:
+            raise ValueError('extra_obs_arrays is not supported with use_streaming')
+
         # Use streaming implementation if requested
         if use_streaming:
             # Get dataset class to use (can be overridden by subclasses)
@@ -985,7 +1022,11 @@ class Sim2RealImageMultiDataset(BaseImageDataset):
             'success_only': success_only,
             'success_reward_key': success_reward_key,
             'split_file': split_file,
+            'extra_obs_arrays': extra_obs_arrays,
         }
+        if extra_obs_arrays and len(self.dataset_config) != 1:
+            raise ValueError(
+                f'extra_obs_arrays are aligned to ONE zarr, got {len(self.dataset_config)}')
         if split_file is not None and len(self.dataset_config) != 1:
             # Episode indices are relative to ONE zarr; spreading them over several
             # would silently select different episodes in each.

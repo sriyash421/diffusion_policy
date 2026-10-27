@@ -62,3 +62,6 @@ dataset:
   # Train on successful trajectories only (terminal reward > 0).
   success_only: true
   success_reward_key: rewards
+  # Optional split manifest (diffusion_policy/config/splits/simpler/...): its train/val
+  # lists replace the val_ratio split and its test episodes are held out of both.
+  split_file: null

@@ -44,6 +44,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
+        # Record the training data's manifest chain + demo seeds (incl. the split
+        # manifest's train seeds) in cfg, hence in every checkpoint, so eval can refuse
+        # test seeds the policy trained on. Same stamp as TrainMLPImageWorkspace.
+        from diffusion_policy.workspace.train_mlp_image_workspace import \
+            _stamp_dataset_provenance
+        _stamp_dataset_provenance(cfg)
         # The UNet BC arm (train_pusht_unet_bc.yaml) trains through THIS workspace, not
         # TrainMLPImageWorkspace, so without this call a `verifier_value` typo or omission
         # would train against the default t_goal while the run dir said ver-armTn. No-op

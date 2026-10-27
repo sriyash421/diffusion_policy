@@ -1,0 +1,6461 @@
+{
+ "task": "stack",
+ "env_task": "widowx_stack_cube",
+ "dataset_dir": "/gscratch/robotics/harine/data/stack_cube_strict_split",
+ "zarr_path": "/gscratch/robotics/harine/data/stack_cube_strict_split/stack_cube_strict_split.zarr",
+ "n_episodes": 272,
+ "episode_ends_checksum": "d8b68b339aceac0ed96e0802ba1f85b0",
+ "train": [
+  0,
+  3,
+  4,
+  16,
+  25,
+  46,
+  51,
+  53,
+  55,
+  58,
+  67,
+  69,
+  72,
+  75,
+  76,
+  82,
+  86,
+  100,
+  102,
+  107,
+  109,
+  110,
+  114,
+  117,
+  118,
+  121,
+  125,
+  128,
+  133,
+  148,
+  149,
+  156,
+  170,
+  186,
+  187,
+  188,
+  195,
+  196,
+  197,
+  206,
+  207,
+  218,
+  225,
+  226,
+  230,
+  233,
+  239,
+  241,
+  256,
+  259
+ ],
+ "val": [
+  11,
+  27,
+  33,
+  60,
+  64,
+  70,
+  87,
+  111,
+  129,
+  157,
+  161,
+  166,
+  172,
+  193,
+  210,
+  212,
+  222,
+  257,
+  265,
+  268,
+  1,
+  6,
+  10,
+  21,
+  24,
+  28,
+  29,
+  37,
+  45,
+  57,
+  59,
+  65,
+  79,
+  81,
+  89,
+  91,
+  92,
+  98,
+  99,
+  112,
+  115,
+  122,
+  123,
+  130,
+  138,
+  139,
+  140,
+  141,
+  144,
+  147,
+  154,
+  158,
+  159,
+  162,
+  169,
+  173,
+  181,
+  183,
+  190,
+  208,
+  209,
+  221,
+  229,
+  237,
+  244,
+  246,
+  251,
+  254,
+  258,
+  262
+ ],
+ "test": [
+  7,
+  8,
+  13,
+  17,
+  18,
+  19,
+  22,
+  26,
+  31,
+  34,
+  43,
+  48,
+  52,
+  63,
+  74,
+  80,
+  84,
+  85,
+  93,
+  97,
+  108,
+  120,
+  124,
+  131,
+  136,
+  142,
+  145,
+  155,
+  164,
+  165,
+  175,
+  176,
+  177,
+  179,
+  194,
+  198,
+  199,
+  200,
+  203,
+  204,
+  213,
+  216,
+  223,
+  235,
+  242,
+  252,
+  253,
+  255,
+  261,
+  266
+ ],
+ "checksum": "0f57463a7e98644a2b7cbe5b09ed2895",
+ "derivation": {
+  "rule": "random",
+  "seed": 0,
+  "n_test": 50,
+  "n_val": 70,
+  "n_train": 50,
+  "train_sizes": [
+   200,
+   100,
+   50
+  ],
+  "nested": "train sizes are prefixes of one stratified ordering",
+  "region": null,
+  "test_pool_size": 280,
+  "n_gate_failed": 0,
+  "remapped_from": "/gscratch/robotics/harine/data/stack_cube_strict",
+  "note": "random_train50 with val = its 20 val episodes + the 50 random_train100-only train episodes (all Veritas-planned); test unchanged"
+ },
+ "episodes": {
+  "0": {
+   "src_shard": "state0.zarr",
+   "src_episode": 0,
+   "seed": 100000,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 0
+  },
+  "1": {
+   "src_shard": "state0.zarr",
+   "src_episode": 5,
+   "seed": 100005,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 1
+  },
+  "2": {
+   "src_shard": "state0.zarr",
+   "src_episode": 13,
+   "seed": 100013,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 3
+  },
+  "3": {
+   "src_shard": "state0.zarr",
+   "src_episode": 28,
+   "seed": 100028,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 4
+  },
+  "4": {
+   "src_shard": "state0.zarr",
+   "src_episode": 36,
+   "seed": 100036,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 5
+  },
+  "5": {
+   "src_shard": "state0.zarr",
+   "src_episode": 45,
+   "seed": 100045,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 6
+  },
+  "6": {
+   "src_shard": "state0.zarr",
+   "src_episode": 53,
+   "seed": 100053,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 7
+  },
+  "7": {
+   "src_shard": "state0.zarr",
+   "src_episode": 67,
+   "seed": 100067,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 8
+  },
+  "8": {
+   "src_shard": "state0.zarr",
+   "src_episode": 69,
+   "seed": 100069,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 9
+  },
+  "9": {
+   "src_shard": "state0.zarr",
+   "src_episode": 74,
+   "seed": 100074,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 10
+  },
+  "10": {
+   "src_shard": "state0.zarr",
+   "src_episode": 81,
+   "seed": 100081,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 11
+  },
+  "11": {
+   "src_shard": "state0.zarr",
+   "src_episode": 84,
+   "seed": 100084,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 12
+  },
+  "12": {
+   "src_shard": "state0.zarr",
+   "src_episode": 89,
+   "seed": 100089,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 13
+  },
+  "13": {
+   "src_shard": "state0.zarr",
+   "src_episode": 97,
+   "seed": 100097,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 14
+  },
+  "14": {
+   "src_shard": "state0.zarr",
+   "src_episode": 104,
+   "seed": 100104,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 15
+  },
+  "15": {
+   "src_shard": "state0.zarr",
+   "src_episode": 133,
+   "seed": 100133,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 16
+  },
+  "16": {
+   "src_shard": "state0.zarr",
+   "src_episode": 160,
+   "seed": 100160,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 17
+  },
+  "17": {
+   "src_shard": "state0.zarr",
+   "src_episode": 162,
+   "seed": 100162,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 18
+  },
+  "18": {
+   "src_shard": "state0.zarr",
+   "src_episode": 167,
+   "seed": 100167,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 19
+  },
+  "19": {
+   "src_shard": "state0.zarr",
+   "src_episode": 180,
+   "seed": 100180,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 20
+  },
+  "20": {
+   "src_shard": "state0.zarr",
+   "src_episode": 182,
+   "seed": 100182,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 21
+  },
+  "21": {
+   "src_shard": "state0.zarr",
+   "src_episode": 188,
+   "seed": 100188,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 22
+  },
+  "22": {
+   "src_shard": "state0.zarr",
+   "src_episode": 220,
+   "seed": 100220,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 23
+  },
+  "23": {
+   "src_shard": "state0.zarr",
+   "src_episode": 221,
+   "seed": 100221,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 24
+  },
+  "24": {
+   "src_shard": "state0.zarr",
+   "src_episode": 230,
+   "seed": 100230,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 25
+  },
+  "25": {
+   "src_shard": "state0.zarr",
+   "src_episode": 243,
+   "seed": 100243,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 26
+  },
+  "26": {
+   "src_shard": "state0.zarr",
+   "src_episode": 252,
+   "seed": 100252,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 27
+  },
+  "27": {
+   "src_shard": "state0.zarr",
+   "src_episode": 263,
+   "seed": 100263,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 29
+  },
+  "28": {
+   "src_shard": "state0.zarr",
+   "src_episode": 266,
+   "seed": 100266,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 30
+  },
+  "29": {
+   "src_shard": "state0.zarr",
+   "src_episode": 268,
+   "seed": 100268,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 31
+  },
+  "30": {
+   "src_shard": "state0.zarr",
+   "src_episode": 269,
+   "seed": 100269,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 32
+  },
+  "31": {
+   "src_shard": "state0.zarr",
+   "src_episode": 271,
+   "seed": 100271,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 33
+  },
+  "32": {
+   "src_shard": "state0.zarr",
+   "src_episode": 303,
+   "seed": 100303,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 34
+  },
+  "33": {
+   "src_shard": "state0.zarr",
+   "src_episode": 327,
+   "seed": 100327,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 35
+  },
+  "34": {
+   "src_shard": "state0.zarr",
+   "src_episode": 335,
+   "seed": 100335,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 36
+  },
+  "35": {
+   "src_shard": "state0.zarr",
+   "src_episode": 341,
+   "seed": 100341,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 37
+  },
+  "36": {
+   "src_shard": "state0.zarr",
+   "src_episode": 361,
+   "seed": 100361,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 38
+  },
+  "37": {
+   "src_shard": "state0.zarr",
+   "src_episode": 365,
+   "seed": 100365,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 39
+  },
+  "38": {
+   "src_shard": "state0.zarr",
+   "src_episode": 376,
+   "seed": 100376,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 40
+  },
+  "39": {
+   "src_shard": "state0.zarr",
+   "src_episode": 379,
+   "seed": 100379,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 41
+  },
+  "40": {
+   "src_shard": "state0.zarr",
+   "src_episode": 394,
+   "seed": 100394,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 42
+  },
+  "41": {
+   "src_shard": "state0.zarr",
+   "src_episode": 396,
+   "seed": 100396,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 43
+  },
+  "42": {
+   "src_shard": "state0.zarr",
+   "src_episode": 397,
+   "seed": 100397,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 44
+  },
+  "43": {
+   "src_shard": "state0.zarr",
+   "src_episode": 403,
+   "seed": 100403,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 45
+  },
+  "44": {
+   "src_shard": "state0.zarr",
+   "src_episode": 416,
+   "seed": 100416,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 46
+  },
+  "45": {
+   "src_shard": "state0.zarr",
+   "src_episode": 428,
+   "seed": 100428,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 47
+  },
+  "46": {
+   "src_shard": "state0.zarr",
+   "src_episode": 433,
+   "seed": 100433,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 48
+  },
+  "47": {
+   "src_shard": "state0.zarr",
+   "src_episode": 449,
+   "seed": 100449,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 49
+  },
+  "48": {
+   "src_shard": "state0.zarr",
+   "src_episode": 450,
+   "seed": 100450,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 50
+  },
+  "49": {
+   "src_shard": "state0.zarr",
+   "src_episode": 466,
+   "seed": 100466,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 51
+  },
+  "50": {
+   "src_shard": "state0.zarr",
+   "src_episode": 477,
+   "seed": 100477,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 52
+  },
+  "51": {
+   "src_shard": "state0.zarr",
+   "src_episode": 482,
+   "seed": 100482,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 53
+  },
+  "52": {
+   "src_shard": "state0.zarr",
+   "src_episode": 487,
+   "seed": 100487,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 54
+  },
+  "53": {
+   "src_shard": "state0.zarr",
+   "src_episode": 492,
+   "seed": 100492,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 55
+  },
+  "54": {
+   "src_shard": "state0.zarr",
+   "src_episode": 498,
+   "seed": 100498,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 56
+  },
+  "55": {
+   "src_shard": "state0.zarr",
+   "src_episode": 499,
+   "seed": 100499,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 57
+  },
+  "56": {
+   "src_shard": "state0.zarr",
+   "src_episode": 503,
+   "seed": 100503,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 58
+  },
+  "57": {
+   "src_shard": "state0.zarr",
+   "src_episode": 511,
+   "seed": 100511,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 59
+  },
+  "58": {
+   "src_shard": "state0.zarr",
+   "src_episode": 520,
+   "seed": 100520,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 60
+  },
+  "59": {
+   "src_shard": "state0.zarr",
+   "src_episode": 527,
+   "seed": 100527,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 61
+  },
+  "60": {
+   "src_shard": "state0.zarr",
+   "src_episode": 538,
+   "seed": 100538,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 62
+  },
+  "61": {
+   "src_shard": "state0.zarr",
+   "src_episode": 549,
+   "seed": 100549,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 63
+  },
+  "62": {
+   "src_shard": "state0.zarr",
+   "src_episode": 563,
+   "seed": 100563,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 64
+  },
+  "63": {
+   "src_shard": "state0.zarr",
+   "src_episode": 567,
+   "seed": 100567,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 65
+  },
+  "64": {
+   "src_shard": "state0.zarr",
+   "src_episode": 572,
+   "seed": 100572,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 66
+  },
+  "65": {
+   "src_shard": "state0.zarr",
+   "src_episode": 586,
+   "seed": 100586,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 67
+  },
+  "66": {
+   "src_shard": "state0.zarr",
+   "src_episode": 587,
+   "seed": 100587,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 68
+  },
+  "67": {
+   "src_shard": "state0.zarr",
+   "src_episode": 591,
+   "seed": 100591,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 69
+  },
+  "68": {
+   "src_shard": "state0.zarr",
+   "src_episode": 593,
+   "seed": 100593,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 70
+  },
+  "69": {
+   "src_shard": "state0.zarr",
+   "src_episode": 594,
+   "seed": 100594,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 71
+  },
+  "70": {
+   "src_shard": "state0.zarr",
+   "src_episode": 604,
+   "seed": 100604,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 72
+  },
+  "71": {
+   "src_shard": "state0.zarr",
+   "src_episode": 610,
+   "seed": 100610,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 73
+  },
+  "72": {
+   "src_shard": "state0.zarr",
+   "src_episode": 624,
+   "seed": 100624,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 75
+  },
+  "73": {
+   "src_shard": "state0.zarr",
+   "src_episode": 627,
+   "seed": 100627,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 76
+  },
+  "74": {
+   "src_shard": "state0.zarr",
+   "src_episode": 638,
+   "seed": 100638,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 77
+  },
+  "75": {
+   "src_shard": "state0.zarr",
+   "src_episode": 650,
+   "seed": 100650,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 78
+  },
+  "76": {
+   "src_shard": "state0.zarr",
+   "src_episode": 651,
+   "seed": 100651,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 79
+  },
+  "77": {
+   "src_shard": "state0.zarr",
+   "src_episode": 653,
+   "seed": 100653,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 80
+  },
+  "78": {
+   "src_shard": "state0.zarr",
+   "src_episode": 671,
+   "seed": 100671,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 81
+  },
+  "79": {
+   "src_shard": "state0.zarr",
+   "src_episode": 674,
+   "seed": 100674,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 82
+  },
+  "80": {
+   "src_shard": "state0.zarr",
+   "src_episode": 680,
+   "seed": 100680,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 83
+  },
+  "81": {
+   "src_shard": "state0.zarr",
+   "src_episode": 681,
+   "seed": 100681,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 84
+  },
+  "82": {
+   "src_shard": "state0.zarr",
+   "src_episode": 682,
+   "seed": 100682,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 85
+  },
+  "83": {
+   "src_shard": "state0.zarr",
+   "src_episode": 684,
+   "seed": 100684,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 86
+  },
+  "84": {
+   "src_shard": "state0.zarr",
+   "src_episode": 685,
+   "seed": 100685,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 87
+  },
+  "85": {
+   "src_shard": "state0.zarr",
+   "src_episode": 688,
+   "seed": 100688,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 88
+  },
+  "86": {
+   "src_shard": "state0.zarr",
+   "src_episode": 692,
+   "seed": 100692,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 89
+  },
+  "87": {
+   "src_shard": "state0.zarr",
+   "src_episode": 699,
+   "seed": 100699,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 90
+  },
+  "88": {
+   "src_shard": "state0.zarr",
+   "src_episode": 705,
+   "seed": 100705,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 91
+  },
+  "89": {
+   "src_shard": "state0.zarr",
+   "src_episode": 710,
+   "seed": 100710,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 92
+  },
+  "90": {
+   "src_shard": "state0.zarr",
+   "src_episode": 711,
+   "seed": 100711,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 93
+  },
+  "91": {
+   "src_shard": "state0.zarr",
+   "src_episode": 712,
+   "seed": 100712,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 94
+  },
+  "92": {
+   "src_shard": "state0.zarr",
+   "src_episode": 737,
+   "seed": 100737,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 95
+  },
+  "93": {
+   "src_shard": "state0.zarr",
+   "src_episode": 748,
+   "seed": 100748,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 96
+  },
+  "94": {
+   "src_shard": "state0.zarr",
+   "src_episode": 750,
+   "seed": 100750,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 97
+  },
+  "95": {
+   "src_shard": "state0.zarr",
+   "src_episode": 764,
+   "seed": 100764,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 98
+  },
+  "96": {
+   "src_shard": "state0.zarr",
+   "src_episode": 765,
+   "seed": 100765,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 99
+  },
+  "97": {
+   "src_shard": "state0.zarr",
+   "src_episode": 783,
+   "seed": 100783,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 100
+  },
+  "98": {
+   "src_shard": "state0.zarr",
+   "src_episode": 784,
+   "seed": 100784,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 101
+  },
+  "99": {
+   "src_shard": "state0.zarr",
+   "src_episode": 786,
+   "seed": 100786,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 102
+  },
+  "100": {
+   "src_shard": "state0.zarr",
+   "src_episode": 795,
+   "seed": 100795,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 103
+  },
+  "101": {
+   "src_shard": "state0.zarr",
+   "src_episode": 797,
+   "seed": 100797,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 104
+  },
+  "102": {
+   "src_shard": "state0.zarr",
+   "src_episode": 798,
+   "seed": 100798,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 105
+  },
+  "103": {
+   "src_shard": "state0.zarr",
+   "src_episode": 810,
+   "seed": 100810,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 106
+  },
+  "104": {
+   "src_shard": "state0.zarr",
+   "src_episode": 827,
+   "seed": 100827,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 107
+  },
+  "105": {
+   "src_shard": "state0.zarr",
+   "src_episode": 833,
+   "seed": 100833,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 108
+  },
+  "106": {
+   "src_shard": "state0.zarr",
+   "src_episode": 842,
+   "seed": 100842,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 109
+  },
+  "107": {
+   "src_shard": "state0.zarr",
+   "src_episode": 852,
+   "seed": 100852,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 111
+  },
+  "108": {
+   "src_shard": "state0.zarr",
+   "src_episode": 855,
+   "seed": 100855,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 112
+  },
+  "109": {
+   "src_shard": "state0.zarr",
+   "src_episode": 859,
+   "seed": 100859,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 113
+  },
+  "110": {
+   "src_shard": "state0.zarr",
+   "src_episode": 870,
+   "seed": 100870,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 114
+  },
+  "111": {
+   "src_shard": "state0.zarr",
+   "src_episode": 874,
+   "seed": 100874,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 115
+  },
+  "112": {
+   "src_shard": "state0.zarr",
+   "src_episode": 876,
+   "seed": 100876,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 116
+  },
+  "113": {
+   "src_shard": "state0.zarr",
+   "src_episode": 881,
+   "seed": 100881,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 117
+  },
+  "114": {
+   "src_shard": "state0.zarr",
+   "src_episode": 886,
+   "seed": 100886,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 118
+  },
+  "115": {
+   "src_shard": "state0.zarr",
+   "src_episode": 901,
+   "seed": 100901,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 119
+  },
+  "116": {
+   "src_shard": "state0.zarr",
+   "src_episode": 906,
+   "seed": 100906,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 120
+  },
+  "117": {
+   "src_shard": "state0.zarr",
+   "src_episode": 907,
+   "seed": 100907,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 121
+  },
+  "118": {
+   "src_shard": "state0.zarr",
+   "src_episode": 919,
+   "seed": 100919,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 122
+  },
+  "119": {
+   "src_shard": "state0.zarr",
+   "src_episode": 921,
+   "seed": 100921,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 123
+  },
+  "120": {
+   "src_shard": "state0.zarr",
+   "src_episode": 930,
+   "seed": 100930,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 125
+  },
+  "121": {
+   "src_shard": "state0.zarr",
+   "src_episode": 940,
+   "seed": 100940,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 126
+  },
+  "122": {
+   "src_shard": "state0.zarr",
+   "src_episode": 941,
+   "seed": 100941,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 127
+  },
+  "123": {
+   "src_shard": "state0.zarr",
+   "src_episode": 945,
+   "seed": 100945,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 128
+  },
+  "124": {
+   "src_shard": "state0.zarr",
+   "src_episode": 951,
+   "seed": 100951,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 129
+  },
+  "125": {
+   "src_shard": "state0.zarr",
+   "src_episode": 955,
+   "seed": 100955,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 130
+  },
+  "126": {
+   "src_shard": "state0.zarr",
+   "src_episode": 970,
+   "seed": 100970,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 131
+  },
+  "127": {
+   "src_shard": "state0.zarr",
+   "src_episode": 983,
+   "seed": 100983,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 132
+  },
+  "128": {
+   "src_shard": "state0.zarr",
+   "src_episode": 986,
+   "seed": 100986,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 133
+  },
+  "129": {
+   "src_shard": "state0.zarr",
+   "src_episode": 988,
+   "seed": 100988,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 134
+  },
+  "130": {
+   "src_shard": "state1.zarr",
+   "src_episode": 3,
+   "seed": 101003,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 135
+  },
+  "131": {
+   "src_shard": "state1.zarr",
+   "src_episode": 7,
+   "seed": 101007,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 136
+  },
+  "132": {
+   "src_shard": "state1.zarr",
+   "src_episode": 15,
+   "seed": 101015,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 137
+  },
+  "133": {
+   "src_shard": "state1.zarr",
+   "src_episode": 20,
+   "seed": 101020,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 138
+  },
+  "134": {
+   "src_shard": "state1.zarr",
+   "src_episode": 23,
+   "seed": 101023,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 139
+  },
+  "135": {
+   "src_shard": "state1.zarr",
+   "src_episode": 27,
+   "seed": 101027,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 140
+  },
+  "136": {
+   "src_shard": "state1.zarr",
+   "src_episode": 67,
+   "seed": 101067,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 141
+  },
+  "137": {
+   "src_shard": "state1.zarr",
+   "src_episode": 76,
+   "seed": 101076,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 142
+  },
+  "138": {
+   "src_shard": "state1.zarr",
+   "src_episode": 83,
+   "seed": 101083,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 143
+  },
+  "139": {
+   "src_shard": "state1.zarr",
+   "src_episode": 95,
+   "seed": 101095,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 144
+  },
+  "140": {
+   "src_shard": "state1.zarr",
+   "src_episode": 101,
+   "seed": 101101,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 145
+  },
+  "141": {
+   "src_shard": "state1.zarr",
+   "src_episode": 111,
+   "seed": 101111,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 146
+  },
+  "142": {
+   "src_shard": "state1.zarr",
+   "src_episode": 115,
+   "seed": 101115,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 147
+  },
+  "143": {
+   "src_shard": "state1.zarr",
+   "src_episode": 116,
+   "seed": 101116,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 148
+  },
+  "144": {
+   "src_shard": "state1.zarr",
+   "src_episode": 127,
+   "seed": 101127,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 149
+  },
+  "145": {
+   "src_shard": "state1.zarr",
+   "src_episode": 137,
+   "seed": 101137,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 150
+  },
+  "146": {
+   "src_shard": "state1.zarr",
+   "src_episode": 140,
+   "seed": 101140,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 151
+  },
+  "147": {
+   "src_shard": "state1.zarr",
+   "src_episode": 162,
+   "seed": 101162,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 152
+  },
+  "148": {
+   "src_shard": "state1.zarr",
+   "src_episode": 167,
+   "seed": 101167,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 153
+  },
+  "149": {
+   "src_shard": "state1.zarr",
+   "src_episode": 174,
+   "seed": 101174,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 154
+  },
+  "150": {
+   "src_shard": "state1.zarr",
+   "src_episode": 176,
+   "seed": 101176,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 155
+  },
+  "151": {
+   "src_shard": "state1.zarr",
+   "src_episode": 181,
+   "seed": 101181,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 156
+  },
+  "152": {
+   "src_shard": "state1.zarr",
+   "src_episode": 186,
+   "seed": 101186,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 157
+  },
+  "153": {
+   "src_shard": "state1.zarr",
+   "src_episode": 198,
+   "seed": 101198,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 158
+  },
+  "154": {
+   "src_shard": "state1.zarr",
+   "src_episode": 199,
+   "seed": 101199,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 159
+  },
+  "155": {
+   "src_shard": "state1.zarr",
+   "src_episode": 203,
+   "seed": 101203,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 160
+  },
+  "156": {
+   "src_shard": "state1.zarr",
+   "src_episode": 216,
+   "seed": 101216,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 161
+  },
+  "157": {
+   "src_shard": "state1.zarr",
+   "src_episode": 220,
+   "seed": 101220,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 162
+  },
+  "158": {
+   "src_shard": "state1.zarr",
+   "src_episode": 227,
+   "seed": 101227,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 163
+  },
+  "159": {
+   "src_shard": "state1.zarr",
+   "src_episode": 233,
+   "seed": 101233,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 164
+  },
+  "160": {
+   "src_shard": "state1.zarr",
+   "src_episode": 239,
+   "seed": 101239,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 165
+  },
+  "161": {
+   "src_shard": "state1.zarr",
+   "src_episode": 242,
+   "seed": 101242,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 166
+  },
+  "162": {
+   "src_shard": "state1.zarr",
+   "src_episode": 247,
+   "seed": 101247,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 167
+  },
+  "163": {
+   "src_shard": "state1.zarr",
+   "src_episode": 249,
+   "seed": 101249,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 168
+  },
+  "164": {
+   "src_shard": "state1.zarr",
+   "src_episode": 255,
+   "seed": 101255,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 169
+  },
+  "165": {
+   "src_shard": "state1.zarr",
+   "src_episode": 257,
+   "seed": 101257,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 170
+  },
+  "166": {
+   "src_shard": "state1.zarr",
+   "src_episode": 259,
+   "seed": 101259,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 171
+  },
+  "167": {
+   "src_shard": "state1.zarr",
+   "src_episode": 267,
+   "seed": 101267,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 172
+  },
+  "168": {
+   "src_shard": "state1.zarr",
+   "src_episode": 272,
+   "seed": 101272,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 173
+  },
+  "169": {
+   "src_shard": "state1.zarr",
+   "src_episode": 275,
+   "seed": 101275,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 174
+  },
+  "170": {
+   "src_shard": "state1.zarr",
+   "src_episode": 277,
+   "seed": 101277,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 175
+  },
+  "171": {
+   "src_shard": "state1.zarr",
+   "src_episode": 278,
+   "seed": 101278,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 176
+  },
+  "172": {
+   "src_shard": "state1.zarr",
+   "src_episode": 285,
+   "seed": 101285,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 177
+  },
+  "173": {
+   "src_shard": "state1.zarr",
+   "src_episode": 286,
+   "seed": 101286,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 178
+  },
+  "174": {
+   "src_shard": "state1.zarr",
+   "src_episode": 288,
+   "seed": 101288,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 179
+  },
+  "175": {
+   "src_shard": "state1.zarr",
+   "src_episode": 292,
+   "seed": 101292,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 180
+  },
+  "176": {
+   "src_shard": "state1.zarr",
+   "src_episode": 316,
+   "seed": 101316,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 181
+  },
+  "177": {
+   "src_shard": "state1.zarr",
+   "src_episode": 330,
+   "seed": 101330,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 182
+  },
+  "178": {
+   "src_shard": "state1.zarr",
+   "src_episode": 331,
+   "seed": 101331,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 183
+  },
+  "179": {
+   "src_shard": "state1.zarr",
+   "src_episode": 345,
+   "seed": 101345,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 184
+  },
+  "180": {
+   "src_shard": "state1.zarr",
+   "src_episode": 357,
+   "seed": 101357,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 185
+  },
+  "181": {
+   "src_shard": "state1.zarr",
+   "src_episode": 360,
+   "seed": 101360,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 186
+  },
+  "182": {
+   "src_shard": "state1.zarr",
+   "src_episode": 362,
+   "seed": 101362,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 187
+  },
+  "183": {
+   "src_shard": "state1.zarr",
+   "src_episode": 372,
+   "seed": 101372,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 189
+  },
+  "184": {
+   "src_shard": "state1.zarr",
+   "src_episode": 375,
+   "seed": 101375,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 190
+  },
+  "185": {
+   "src_shard": "state1.zarr",
+   "src_episode": 378,
+   "seed": 101378,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 191
+  },
+  "186": {
+   "src_shard": "state1.zarr",
+   "src_episode": 379,
+   "seed": 101379,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 192
+  },
+  "187": {
+   "src_shard": "state1.zarr",
+   "src_episode": 390,
+   "seed": 101390,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 193
+  },
+  "188": {
+   "src_shard": "state1.zarr",
+   "src_episode": 392,
+   "seed": 101392,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 194
+  },
+  "189": {
+   "src_shard": "state1.zarr",
+   "src_episode": 402,
+   "seed": 101402,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 195
+  },
+  "190": {
+   "src_shard": "state1.zarr",
+   "src_episode": 416,
+   "seed": 101416,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 196
+  },
+  "191": {
+   "src_shard": "state1.zarr",
+   "src_episode": 429,
+   "seed": 101429,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 197
+  },
+  "192": {
+   "src_shard": "state1.zarr",
+   "src_episode": 441,
+   "seed": 101441,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 198
+  },
+  "193": {
+   "src_shard": "state1.zarr",
+   "src_episode": 457,
+   "seed": 101457,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 199
+  },
+  "194": {
+   "src_shard": "state1.zarr",
+   "src_episode": 484,
+   "seed": 101484,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 200
+  },
+  "195": {
+   "src_shard": "state1.zarr",
+   "src_episode": 485,
+   "seed": 101485,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 201
+  },
+  "196": {
+   "src_shard": "state1.zarr",
+   "src_episode": 486,
+   "seed": 101486,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 202
+  },
+  "197": {
+   "src_shard": "state1.zarr",
+   "src_episode": 487,
+   "seed": 101487,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 203
+  },
+  "198": {
+   "src_shard": "state1.zarr",
+   "src_episode": 491,
+   "seed": 101491,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 204
+  },
+  "199": {
+   "src_shard": "state1.zarr",
+   "src_episode": 498,
+   "seed": 101498,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 205
+  },
+  "200": {
+   "src_shard": "state1.zarr",
+   "src_episode": 504,
+   "seed": 101504,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 206
+  },
+  "201": {
+   "src_shard": "state1.zarr",
+   "src_episode": 505,
+   "seed": 101505,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 207
+  },
+  "202": {
+   "src_shard": "state1.zarr",
+   "src_episode": 516,
+   "seed": 101516,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 208
+  },
+  "203": {
+   "src_shard": "state1.zarr",
+   "src_episode": 523,
+   "seed": 101523,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 209
+  },
+  "204": {
+   "src_shard": "state1.zarr",
+   "src_episode": 531,
+   "seed": 101531,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 211
+  },
+  "205": {
+   "src_shard": "state1.zarr",
+   "src_episode": 533,
+   "seed": 101533,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 212
+  },
+  "206": {
+   "src_shard": "state1.zarr",
+   "src_episode": 538,
+   "seed": 101538,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 213
+  },
+  "207": {
+   "src_shard": "state1.zarr",
+   "src_episode": 539,
+   "seed": 101539,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 214
+  },
+  "208": {
+   "src_shard": "state1.zarr",
+   "src_episode": 542,
+   "seed": 101542,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 215
+  },
+  "209": {
+   "src_shard": "state1.zarr",
+   "src_episode": 551,
+   "seed": 101551,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 216
+  },
+  "210": {
+   "src_shard": "state1.zarr",
+   "src_episode": 561,
+   "seed": 101561,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 218
+  },
+  "211": {
+   "src_shard": "state1.zarr",
+   "src_episode": 565,
+   "seed": 101565,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 219
+  },
+  "212": {
+   "src_shard": "state1.zarr",
+   "src_episode": 570,
+   "seed": 101570,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 220
+  },
+  "213": {
+   "src_shard": "state1.zarr",
+   "src_episode": 599,
+   "seed": 101599,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 221
+  },
+  "214": {
+   "src_shard": "state1.zarr",
+   "src_episode": 612,
+   "seed": 101612,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 222
+  },
+  "215": {
+   "src_shard": "state1.zarr",
+   "src_episode": 613,
+   "seed": 101613,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 223
+  },
+  "216": {
+   "src_shard": "state1.zarr",
+   "src_episode": 615,
+   "seed": 101615,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 224
+  },
+  "217": {
+   "src_shard": "state1.zarr",
+   "src_episode": 616,
+   "seed": 101616,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 225
+  },
+  "218": {
+   "src_shard": "state1.zarr",
+   "src_episode": 619,
+   "seed": 101619,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 226
+  },
+  "219": {
+   "src_shard": "state1.zarr",
+   "src_episode": 644,
+   "seed": 101644,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 227
+  },
+  "220": {
+   "src_shard": "state1.zarr",
+   "src_episode": 645,
+   "seed": 101645,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 228
+  },
+  "221": {
+   "src_shard": "state1.zarr",
+   "src_episode": 650,
+   "seed": 101650,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 229
+  },
+  "222": {
+   "src_shard": "state1.zarr",
+   "src_episode": 656,
+   "seed": 101656,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 230
+  },
+  "223": {
+   "src_shard": "state1.zarr",
+   "src_episode": 660,
+   "seed": 101660,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 231
+  },
+  "224": {
+   "src_shard": "state1.zarr",
+   "src_episode": 672,
+   "seed": 101672,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 232
+  },
+  "225": {
+   "src_shard": "state1.zarr",
+   "src_episode": 677,
+   "seed": 101677,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    0.05
+   ],
+   "in_episode": 233
+  },
+  "226": {
+   "src_shard": "state1.zarr",
+   "src_episode": 696,
+   "seed": 101696,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 234
+  },
+  "227": {
+   "src_shard": "state1.zarr",
+   "src_episode": 702,
+   "seed": 101702,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 235
+  },
+  "228": {
+   "src_shard": "state1.zarr",
+   "src_episode": 707,
+   "seed": 101707,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 236
+  },
+  "229": {
+   "src_shard": "state1.zarr",
+   "src_episode": 719,
+   "seed": 101719,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 237
+  },
+  "230": {
+   "src_shard": "state1.zarr",
+   "src_episode": 730,
+   "seed": 101730,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 238
+  },
+  "231": {
+   "src_shard": "state1.zarr",
+   "src_episode": 732,
+   "seed": 101732,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 239
+  },
+  "232": {
+   "src_shard": "state1.zarr",
+   "src_episode": 746,
+   "seed": 101746,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 240
+  },
+  "233": {
+   "src_shard": "state1.zarr",
+   "src_episode": 752,
+   "seed": 101752,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 241
+  },
+  "234": {
+   "src_shard": "state1.zarr",
+   "src_episode": 755,
+   "seed": 101755,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 242
+  },
+  "235": {
+   "src_shard": "state1.zarr",
+   "src_episode": 757,
+   "seed": 101757,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 243
+  },
+  "236": {
+   "src_shard": "state1.zarr",
+   "src_episode": 760,
+   "seed": 101760,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 244
+  },
+  "237": {
+   "src_shard": "state1.zarr",
+   "src_episode": 764,
+   "seed": 101764,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 245
+  },
+  "238": {
+   "src_shard": "state1.zarr",
+   "src_episode": 775,
+   "seed": 101775,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 246
+  },
+  "239": {
+   "src_shard": "state1.zarr",
+   "src_episode": 776,
+   "seed": 101776,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 247
+  },
+  "240": {
+   "src_shard": "state1.zarr",
+   "src_episode": 786,
+   "seed": 101786,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 248
+  },
+  "241": {
+   "src_shard": "state1.zarr",
+   "src_episode": 792,
+   "seed": 101792,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 249
+  },
+  "242": {
+   "src_shard": "state1.zarr",
+   "src_episode": 804,
+   "seed": 101804,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 250
+  },
+  "243": {
+   "src_shard": "state1.zarr",
+   "src_episode": 806,
+   "seed": 101806,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 251
+  },
+  "244": {
+   "src_shard": "state1.zarr",
+   "src_episode": 810,
+   "seed": 101810,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 252
+  },
+  "245": {
+   "src_shard": "state1.zarr",
+   "src_episode": 812,
+   "seed": 101812,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 253
+  },
+  "246": {
+   "src_shard": "state1.zarr",
+   "src_episode": 814,
+   "seed": 101814,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 254
+  },
+  "247": {
+   "src_shard": "state1.zarr",
+   "src_episode": 815,
+   "seed": 101815,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    0.1
+   ],
+   "in_episode": 255
+  },
+  "248": {
+   "src_shard": "state1.zarr",
+   "src_episode": 836,
+   "seed": 101836,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 256
+  },
+  "249": {
+   "src_shard": "state1.zarr",
+   "src_episode": 850,
+   "seed": 101850,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 257
+  },
+  "250": {
+   "src_shard": "state1.zarr",
+   "src_episode": 855,
+   "seed": 101855,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 258
+  },
+  "251": {
+   "src_shard": "state1.zarr",
+   "src_episode": 863,
+   "seed": 101863,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 259
+  },
+  "252": {
+   "src_shard": "state1.zarr",
+   "src_episode": 866,
+   "seed": 101866,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 260
+  },
+  "253": {
+   "src_shard": "state1.zarr",
+   "src_episode": 868,
+   "seed": 101868,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 261
+  },
+  "254": {
+   "src_shard": "state1.zarr",
+   "src_episode": 869,
+   "seed": 101869,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 262
+  },
+  "255": {
+   "src_shard": "state1.zarr",
+   "src_episode": 872,
+   "seed": 101872,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    -0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    0.1
+   ],
+   "start_cell": [
+    -0.26,
+    -0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    0.1
+   ],
+   "in_episode": 263
+  },
+  "256": {
+   "src_shard": "state1.zarr",
+   "src_episode": 877,
+   "seed": 101877,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 264
+  },
+  "257": {
+   "src_shard": "state1.zarr",
+   "src_episode": 889,
+   "seed": 101889,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 265
+  },
+  "258": {
+   "src_shard": "state1.zarr",
+   "src_episode": 890,
+   "seed": 101890,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 266
+  },
+  "259": {
+   "src_shard": "state1.zarr",
+   "src_episode": 895,
+   "seed": 101895,
+   "seed_gate": true,
+   "start_xy": [
+    -0.26,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.26,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 267
+  },
+  "260": {
+   "src_shard": "state1.zarr",
+   "src_episode": 925,
+   "seed": 101925,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    -0.05
+   ],
+   "in_episode": 268
+  },
+  "261": {
+   "src_shard": "state1.zarr",
+   "src_episode": 926,
+   "seed": 101926,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 269
+  },
+  "262": {
+   "src_shard": "state1.zarr",
+   "src_episode": 928,
+   "seed": 101928,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 270
+  },
+  "263": {
+   "src_shard": "state1.zarr",
+   "src_episode": 933,
+   "seed": 101933,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 271
+  },
+  "264": {
+   "src_shard": "state1.zarr",
+   "src_episode": 955,
+   "seed": 101955,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 272
+  },
+  "265": {
+   "src_shard": "state1.zarr",
+   "src_episode": 973,
+   "seed": 101973,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    -0.05
+   ],
+   "goal_xy": [
+    -0.21,
+    0.05
+   ],
+   "start_cell": [
+    -0.11,
+    -0.05
+   ],
+   "goal_cell": [
+    -0.21,
+    0.05
+   ],
+   "in_episode": 273
+  },
+  "266": {
+   "src_shard": "state1.zarr",
+   "src_episode": 976,
+   "seed": 101976,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 274
+  },
+  "267": {
+   "src_shard": "state1.zarr",
+   "src_episode": 986,
+   "seed": 101986,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 275
+  },
+  "268": {
+   "src_shard": "state1.zarr",
+   "src_episode": 987,
+   "seed": 101987,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.06,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.06,
+    -0.1
+   ],
+   "in_episode": 276
+  },
+  "269": {
+   "src_shard": "state1.zarr",
+   "src_episode": 988,
+   "seed": 101988,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 277
+  },
+  "270": {
+   "src_shard": "state1.zarr",
+   "src_episode": 994,
+   "seed": 101994,
+   "seed_gate": true,
+   "start_xy": [
+    -0.06,
+    0.1
+   ],
+   "goal_xy": [
+    -0.26,
+    -0.1
+   ],
+   "start_cell": [
+    -0.06,
+    0.1
+   ],
+   "goal_cell": [
+    -0.26,
+    -0.1
+   ],
+   "in_episode": 278
+  },
+  "271": {
+   "src_shard": "state1.zarr",
+   "src_episode": 997,
+   "seed": 101997,
+   "seed_gate": true,
+   "start_xy": [
+    -0.11,
+    0.05
+   ],
+   "goal_xy": [
+    -0.11,
+    -0.05
+   ],
+   "start_cell": [
+    -0.11,
+    0.05
+   ],
+   "goal_cell": [
+    -0.11,
+    -0.05
+   ],
+   "in_episode": 279
+  }
+ }
+}
