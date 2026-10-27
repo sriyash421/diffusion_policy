@@ -50,11 +50,14 @@ time_for_n() {
 }
 
 STEP="$(basename "$CKPT" .ckpt)"
+# The run is in the name: the skip-if-queued check below matches on it, and the same step
+# of another run's checkpoint is a different job.
+RUN="$(basename "$(dirname "$(dirname "$CKPT")")")"
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 count=0
 for v in $VALUES; do
   for n in $NS; do
-    name="wpbon_${v}${SEL_TAG}_${STEP}_n${n}"
+    name="wpbon_${RUN}_${v}${SEL_TAG}_${STEP}_n${n}"
     if grep -qx "$name" <<< "$LIVE"; then
       echo "skip $name (already queued/running)"; continue
     fi

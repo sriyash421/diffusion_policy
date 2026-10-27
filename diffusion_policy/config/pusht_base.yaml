@@ -344,6 +344,7 @@ training:
   outer_batch_size: 256    # windows whose search context is generated per outer step
   inner_batch_size: 32     # matches dataloader.batch_size
   inner_epochs: 4          # 256/32 = 8 batches/epoch x 4 = 32 updates per outer step
+  fresh_context: false     # legacy default; new v3 runs enable fresh per-update context
   drift_every: 4           # inner steps between drift evaluations (2 extra forwards each)
   # Rollout on GRADIENT STEPS and on a multiple of checkpoint_every, so every rollout
   # number belongs to weights that were saved and can be re-verified against an eval curve.
@@ -427,6 +428,9 @@ checkpoint:
   #
   # save_last_ckpt writes checkpoints/latest.ckpt, which `training.resume` reads. Keep it.
   save_last_ckpt: True
+  # Also rewrite latest.ckpt every N gradient steps (outer/inner trainer only), so a
+  # preempted ckpt-partition job loses <N steps instead of everything since the last 10k.
+  latest_every: 1000
   save_last_snapshot: False
 
 hydra:

@@ -301,8 +301,13 @@ son_suffix: ''                   # e.g. '_son-linsig', '_son-lint', '_son-geo7',
 # architectures resolved to one directory and every capacity arm had to override run_name by
 # hand to avoid it. Empty at the default 4/4/256, on the sw_suffix principle.
 arch_suffix: ''                  # e.g. '_arch-6x8x1024'
+# Success-aware (terminal) verifier scoring: the sim stops a candidate at its first success
+# and argmax ranks successes first. False = legacy full-chunk scoring. Set ts_suffix with it
+# (e.g. '_ts-term'), for the run-dir reason sw_suffix exists.
+verifier_terminal_scoring: False
+ts_suffix: ''
 
-run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+run_name: ${arm}_k${n_candidates}_ver-${verifier_tag}${ts_suffix}${sw_suffix}${son_suffix}${corrupt_suffix}${arch_suffix}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
 
 # Paired with `trainer: outer_inner` below -- see the DEFAULT TRAINER block. These two MUST
 # move together: `trainer` is only a path component of hydra.run.dir, `_target_` is what
@@ -472,6 +477,7 @@ policy:
   verifier_legacy: False
   verifier_use_async: True
   verifier_steps: null
+  verifier_terminal_scoring: ${verifier_terminal_scoring}
   # Which value the verifier scores with -- ${verifier_tag}, so the run DIRECTORY and
   # the scoring rule can never drift apart. See pusht_verifier.VALUE_FNS.
   verifier_value: ${verifier_tag}

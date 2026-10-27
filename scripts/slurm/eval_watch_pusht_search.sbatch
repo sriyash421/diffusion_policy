@@ -61,6 +61,6 @@ python eval_search_pusht.py \
   --device cuda:0 \
   "$@" &
 PID=$!
-trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID; wait $PID;
+trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID 2>/dev/null || true; wait $PID || true;
       scontrol requeue "$SLURM_JOB_ID"; exit 0' USR1
 wait $PID

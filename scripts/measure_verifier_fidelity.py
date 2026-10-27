@@ -103,27 +103,35 @@ def main(zarr, n_episodes, per_episode, horizon, seed):
 
             # (c) TRUE: replay the whole episode up to t, so velocity is exactly right
             e = _fresh(); e._set_state(state_all[s0])
-            _replay(e, action_all[s0:t])
+            _replay(e, action_all[s0:t - 1])
+            true_prev = _state(e)
+            e.step(np.asarray(action_all[t - 1], dtype=np.float64))
             true_pre = _state(e)
             true_post = _replay(e, acts)
+            e.close()
 
             # (a) TODAY: what the verifier does -- reset to state_t, zero velocity
-            e = _fresh(); e._set_state(state_all[t])
+            # All branches must start at the SAME replayed pose. Recorded demo states
+            # can drift from a replay; using state_all[t] here confounds that drift
+            # with the velocity / settle-step error this experiment measures.
+            e = _fresh(); e._set_state(true_pre)
             today_post = _replay(e, acts)
+            e.close()
 
             # (b) WARMUP: reset to t-1, step a_{t-1}, snap POSITIONS back to t (velocity
             #     survives because _set_state writes position/angle only), then replay
-            e = _fresh(); e._set_state(state_all[t - 1])
+            e = _fresh(); e._set_state(true_prev)
             e.step(np.asarray(action_all[t - 1], dtype=np.float64))
-            e._set_state(state_all[t])
+            e._set_state(true_pre)
             warm_post = _replay(e, acts)
+            e.close()
 
             for tag, got in (('today', today_post), ('warmup', warm_post)):
                 err[f'{tag}_pos'].append(float(np.linalg.norm(got[2:4] - true_post[2:4])))
                 d = abs(got[4] - true_post[4]) % (2 * np.pi)
                 err[f'{tag}_ang'].append(float(np.degrees(min(d, 2 * np.pi - d))))
                 err[f'{tag}_kp'].append(abs(_keypoint_dist(got[2:5]) - _keypoint_dist(true_post[2:5])))
-            err['agent_speed_at_t'].append(float(np.linalg.norm(true_pre[:2] - state_all[t - 1][:2])))
+            err['agent_speed_at_t'].append(float(np.linalg.norm(true_pre[:2] - true_prev[:2])))
 
     n = len(err['today_pos'])
     print(f'\n{n} decision points from {len(eps)} test episodes, {horizon}-step replay\n')

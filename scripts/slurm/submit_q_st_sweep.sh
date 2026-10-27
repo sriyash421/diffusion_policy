@@ -5,6 +5,11 @@
 #   bash scripts/slurm/submit_q_st_sweep.sh            # dry run
 #   SUBMIT=1 bash scripts/slurm/submit_q_st_sweep.sh   # ...and sbatch
 #   ARMS_FILTER=split-blq SELECTIONS=argmax SUBMIT=1 bash scripts/slurm/submit_q_st_sweep.sh
+#   VER=wp_v3_la_tgn MIN_CKPTS=1 SUBMIT=1 bash scripts/slurm/submit_q_st_sweep.sh   # other ST arms
+#
+# VER picks the arms (run dirs matching *ver-$VER*); MIN_CKPTS (default 10) is how many
+# step_*.ckpt an arm needs before its watcher is worth a GPU -- lower it to run watchers
+# alongside training, where --watch picks up each new checkpoint as it lands.
 #
 # NO --q FLAG, AND NONE IS POSSIBLE. These arms carry `verifier_tag=q_sac_all` in their own
 # config, so `_build_verifier` rebuilds the same PushTQVerifier they trained against and
@@ -31,6 +36,12 @@ cd "$(dirname "$0")/../.."
 ROOT="${DP_OUTPUT_ROOT:-/gscratch/robotics/harine/diffusion_policy_outputs}"
 B="$ROOT/pusht_search/pusht_image_search_imgonly/outer_inner"
 N_LIST="${N_LIST:-1,2,4,8,16}"
+VER="${VER:-q_sac_all}"
+MIN_CKPTS="${MIN_CKPTS:-10}"
+# EXTRA_ARGS go to eval_search_pusht.py (e.g. --corrupt-obs-eval); NAME_SUFFIX keeps
+# those watchers apart from the plain ones in the "already running" check.
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+NAME_SUFFIX="${NAME_SUFFIX:-}"
 SELECTIONS="${SELECTIONS:-argmax final_pass}"
 ARMS_FILTER="${ARMS_FILTER:-}"
 IDLE="${IDLE:-900}"          # training is done; exit once the grid is covered
@@ -45,28 +56,28 @@ fi
 
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 n=0; skipped=0
-for dir in "$B"/*ver-q_sac_all*/; do
+for dir in "$B"/*ver-"$VER"*/; do
     [ -d "$dir" ] || continue
     run=$(basename "$dir")
     [ -n "$ARMS_FILTER" ] && ! grep -q -- "$ARMS_FILTER" <<<"$run" && continue
     # The full 10k grid must exist before a watcher is worth starting; --watch would sit and
     # poll for the rest, burning a GPU on an arm that is still training.
     have=$(ls "$dir"/checkpoints/step_*.ckpt 2>/dev/null | wc -l)
-    if [ "$have" -lt 10 ]; then
-        printf '%-62s %s\n' "${run:0:62}" "only $have/10 checkpoints, skipping"
+    if [ "$have" -lt "$MIN_CKPTS" ]; then
+        printf '%-62s %s\n' "${run:0:62}" "only $have/$MIN_CKPTS checkpoints, skipping"
         skipped=$((skipped+1)); continue
     fi
     # label: drop the fixed components, keep what varies between arms
-    tag=$(sed -e 's/^value_//' -e 's/_ver-q_sac_all//' -e 's/_enc-resnet18//' \
+    tag=$(sed -e 's/^value_//' -e "s/_ver-$VER//" -e 's/_enc-resnet18//' \
               -e 's/_seed-42$//' -e 's/_son-/_/' -e 's/_demos-[0-9]*//' <<<"$run")
     for sel in $SELECTIONS; do
-        name="qst_${tag}_${sel}"
+        name="st-${VER}_${tag}_${sel}${NAME_SUFFIX}"
         if grep -qxF "$name" <<<"$LIVE"; then
             printf '%-62s %s\n' "$name" "already running, skipping"; skipped=$((skipped+1)); continue
         fi
         cmd=(sbatch --parsable --job-name="$name" --time="$TIME_LIMIT"
              scripts/slurm/eval_watch_pusht_search.sbatch "$dir"
-             --n-list "$N_LIST" --selection "$sel" --skip-val --idle-exit-sec "$IDLE")
+             --n-list "$N_LIST" --selection "$sel" --skip-val --idle-exit-sec "$IDLE" $EXTRA_ARGS)
         if [ -z "${SUBMIT:-}" ]; then
             printf '%-62s WOULD SUBMIT\n' "$name"
         else

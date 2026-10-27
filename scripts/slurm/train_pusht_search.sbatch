@@ -49,14 +49,8 @@
 # NOT pass an explicit hydra.run.dir "to be safe" -- a path that differs from the derived
 # one by so much as a trailing slash starts a second run in a second directory.)
 #
-# Two things a resume does NOT restore, neither of which changes the result:
-#   - RNG state. Noise/timestep draws and the dataloader shuffle restart from
-#     training.seed. They are i.i.d. by design and each epoch still covers the full
-#     dataset, so this is not the biased-resampling hazard it would be for a run that
-#     draws a random POOL per step (the outer/inner trainer, which seeds from position).
-#   - The epoch loop counter, which restarts at 0 while self.epoch continues. Harmless:
-#     num_epochs (1000, ~385k steps) is far above max_gradient_steps, which is the real
-#     bound, and every eval cadence is keyed on gradient steps via last_*_step.
+# Checkpoints save Python/NumPy/Torch RNG state. Fresh-context outer/inner
+# training also saves its minibatch cursor and keys update randomness by step.
 set -euo pipefail
 
 CONFIG_NAME="${CONFIG_NAME:-train_pusht_diffusion_search}"
@@ -127,6 +121,6 @@ python train.py \
   training.device=cuda:0 \
   "$@" &
 PID=$!
-trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID; wait $PID;
+trap 'echo "[$(date -Is)] USR1: requeueing ${SLURM_JOB_ID}"; kill -TERM $PID 2>/dev/null || true; wait $PID || true;
       scontrol requeue "$SLURM_JOB_ID"; exit 0' USR1
 wait $PID

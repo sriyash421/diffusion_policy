@@ -34,6 +34,8 @@
 #   SUBMIT=1 bash scripts/run_q_geometric.sh             # ...and sbatch
 #   DATASET_TAGS=_split-blq SUBMIT=1 bash scripts/run_q_geometric.sh   # one split
 #   VERIFIER=q_sac_106 SUBMIT=1 bash scripts/run_q_geometric.sh        # the leak control
+#   VERIFIER=wp_v3_la_tgn WIDTHS=16 LADDERS="uniform flat600 ramp200to600" SUBMIT=1 \
+#       bash scripts/run_q_geometric.sh                                  # a non-Q value
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -56,14 +58,27 @@ EXCL_FLAG=""; [ -n "$EXCLUDE_NODES" ] && EXCL_FLAG="--exclude=$EXCLUDE_NODES"
 # non-empty split, so that is a supported configuration rather than a hole.
 DATASETS=(
   "_split-blq|$SPL/pusht_blockquad_bottomleft_train137.json|137|50|19"
+  "_split-blq50|$SPL/pusht_blockquad_bottomleft_train50_seed42.json|50|50|19"
+  "_split-blq50far|$SPL/pusht_blockquad_bottomleft_train50_far.json|50|50|19"
   "_split-brd100|$SPL/pusht_blockborder_train100_core50.json|100|50|0"
 )
 DATASET_TAGS="${DATASET_TAGS:-}"   # optional filter, space-separated tags
 
 # Resolved by the registry, so a bad name fails here rather than after the GPU is allocated.
-if ! $PY -c "from diffusion_policy.env.pusht.pusht_verifier import q_verifier_spec; \
-             print('[verifier] %s -> %s (rung %d)' % (('$VERIFIER',) + q_verifier_spec('$VERIFIER')))"; then
-    echo "ERROR: verifier '$VERIFIER' does not resolve; see pusht_verifier.Q_VERIFIERS" >&2
+# A Q resolves to its checkpoint; any other value must be one training accepts
+# (check_verifier_value's rule), so a bad name fails here rather than on the GPU.
+if ! $PY -c "
+from diffusion_policy.env.pusht.pusht_verifier import (
+    q_verifier_spec, is_q_value, VALUE_FNS, TRAINABLE_WAYPOINT_VALUES)
+v = '$VERIFIER'
+if is_q_value(v):
+    print('[verifier] %s -> %s (rung %d)' % ((v,) + q_verifier_spec(v)))
+else:
+    assert v in VALUE_FNS or v in TRAINABLE_WAYPOINT_VALUES, v
+    print('[verifier] %s (per-candidate trainable value)' % v)
+"; then
+    echo "ERROR: verifier '$VERIFIER' is not a Q (pusht_verifier.Q_VERIFIERS), a VALUE_FNS" \
+         "entry or a trainable waypoint value" >&2
     exit 1
 fi
 
@@ -97,6 +112,16 @@ ladder_override() {              # <token> <K> -> hydra overrides, or '' if the 
 # would score the arms on their own held-out set five times a run and log it for nothing.
 # Must stay a multiple of checkpoint_every; 10^8 is.
 COMMON="verifier_tag=$VERIFIER training.rollout_every_steps=100000000"
+# A waypoint value turns the runner off outright (null): PushTSearchImageRunner has no tracker
+# wiring, so it cannot score one (see the rollout_every_steps comment in
+# train_search_outer_inner_workspace.py); the watcher does the readout.
+# EXTRA_OV: further hydra overrides for every arm, e.g. the success-aware scoring pair
+#   EXTRA_OV="verifier_terminal_scoring=True ts_suffix=_ts-term"
+COMMON="$COMMON ${EXTRA_OV:-}"
+if $PY -c "from diffusion_policy.env.pusht.pusht_verifier import is_waypoint_value; \
+           raise SystemExit(0 if is_waypoint_value('$VERIFIER') else 1)" 2>/dev/null; then
+    COMMON="verifier_tag=$VERIFIER training.rollout_every_steps=null ${EXTRA_OV:-}"
+fi
 
 LIVE=$(squeue -u "$USER" -h -o "%j" 2>/dev/null | sort -u)
 

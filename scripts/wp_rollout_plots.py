@@ -95,7 +95,7 @@ def scatter(ax, runs, ep):
                    alpha=0.5, label=f'{sv}: candidate')
         ax.scatter(ex, ey, s=22, marker=mk, color=col, edgecolors='black', lw=0.4,
                    label=f'{sv}: executed')
-    ax.set_xlabel('steering verifier score (0..1)')
+    ax.set_xlabel('steering verifier score (higher = picked)')
     ax.set_ylabel('T-to-goal distance reached (px)')
     ax.legend(fontsize=7)
 

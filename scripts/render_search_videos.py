@@ -61,7 +61,7 @@ from diffusion_policy.env.pusht.veritas.schemas import VeritasDualPlan
 from diffusion_policy.env.pusht.veritas.tracker import load_split_plans
 from eval_search_pusht import (
     _WAYPOINT_PLAN_DIRS, build_envs, get_test_states, load_policy, override_verifier_value,
-    SUCCESS_REWARD, _episode_seed)
+    SUCCESS_REWARD, _episode_seed, override_terminal_scoring)
 
 
 def expert_trajectories(cfg, episode_idxs):
@@ -87,14 +87,14 @@ def resolved_verifier_value(policy, cfg):
     pre-cutover default and is scored on exactly what it was trained on -- but an artifact
     that does not SAY so cannot be told apart from one produced under armT.
     """
-    from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN, VALUE_FNS
+    from diffusion_policy.env.pusht.pusht_verifier import DEFAULT_VALUE_FN, VERIFIER_VALUES
     mode = None
     try:
         mode = cfg.policy.get('verifier_value', None)
     except Exception:
         pass
     mode = str(mode or DEFAULT_VALUE_FN)
-    assert mode in VALUE_FNS, f'unknown verifier_value {mode!r}'
+    assert mode in VERIFIER_VALUES, f'unknown verifier_value {mode!r}'
     return mode
 
 
@@ -398,7 +398,7 @@ def value_strip(values, best, final, width=SCENE, height=92):
     ym = 12 + int(round(4 + ((dist.mean() - lo) / span) * (plot_h - 4)))
     for x in range(0, width, 6):
         cv2.line(strip, (x, ym), (min(x + 3, width - 1), ym), (160, 160, 160), 1)
-    cv2.putText(strip, f'dist px  best {lo:.1f}   worst {hi:.1f}   mean {dist.mean():.1f}',
+    cv2.putText(strip, f'cost (-score)  best {lo:.1f}   worst {hi:.1f}   mean {dist.mean():.1f}',
                 (4, height + LABEL_H - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.32,
                 (190, 190, 190), 1, cv2.LINE_AA)
     return strip
@@ -644,8 +644,12 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                     'env_step': decision * Ta, 'agent_pos': np.round(ap, 2).tolist(),
                     'block_pose': np.round(bp, 4).tolist(),
                     'max_coverage': round(float(cov_now[i]), 4),
-                    'executed': int(bi[i]), 'execute': execute,
+                    'executed': int(bi[i]) if execute != 'final' else final_i,
+                    'execute': execute,
+                    'terminal_scoring': policy.search_kwargs.get('verifier_terminal_scoring', False),
                     'chunks': np.round(chunks[i], 1).tolist(),
+                    'chunks_exact': chunks[i].tolist(),
+                    'initial_state': np.asarray(states[i]).tolist(),
                     'scores': {verifier_value: np.round(sc[i], 5).tolist(),
                                **{k: np.round(v[i], 5).tolist()
                                   for k, v in shadow_sc.items()}},
@@ -710,7 +714,7 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                 (f'chosen #{int(bi[i])} == final' if coincide
                  else f'chosen #{int(bi[i])}  final #{final_i}')
                 + f'  val {sc[i][int(bi[i])]:.1f}  spread {hi - lo:.1f}'
-                + ('  BLIND: no candidate moves the T' if blind else ''),
+                + ('  TIED: verifier does not distinguish candidates' if blind else ''),
                 # DEFAULT PATH IS THE ORIGINAL STRING, VERBATIM. --highlight-slots
                 # defaults to empty and must leave frames byte-identical, and `legend` is
                 # ordered to match `base` ([final, best]) for the fold-in indexing -- so
@@ -741,8 +745,9 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
             frames_written[i] += 1
             if step_log is not None:
                 # stills for the contact sheet; the mp4 is lossy and a pain to index
-                cv2.imwrite(str(out / f'ep{episode_idxs[i]}_{label}_n{n_actions}'
-                                      f'_dec{decision:03d}.png'), frame)
+                still = out / f'ep{episode_idxs[i]}_{label}_n{n_actions}_dec{decision:03d}.png'
+                if not cv2.imwrite(str(still), frame):
+                    raise OSError(f'Failed to write {still}; check disk space and quota')
 
         exec_idx = (best if execute in ('argmax', 'softmax')
                     else torch.full_like(best, final_i))
@@ -792,6 +797,7 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                         'frames': int(frames_written[i]), 'skip_blind': bool(skipping),
                         'execute': execute, 'seed_base': int(seed),
                         'verifier_value': verifier_value,
+                        'terminal_scoring': policy.search_kwargs.get('verifier_terminal_scoring', False),
                         'closeup': bool(closeup), 'value_strip': bool(value_strip_on),
                         'max_reward': float(r.max()),
                         'max_coverage': float(coverage[i]), 'video': name})
@@ -856,6 +862,8 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                    "rules (softmax draws from the policy's selection generator, as eval does)")
 @click.option('--temperature', default=1.0, show_default=True,
               help='--execute softmax temperature on the z-scored candidate values')
+@click.option('--terminal-scoring/--legacy-terminal-scoring', default=False,
+              help='use success-aware scoring; default preserves legacy full-chunk scoring')
 @click.option('--verifier-value', default=None,
               help='override the scoring rule, so an arm trained before the 2026-08-19 '
                    'cutover can be rendered under the same value as the arms it is being '
@@ -881,7 +889,7 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
 def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, hold, seed,
          subgoals, max_fan, zoom_px, zoom_q, skip_blind, blind_eps, execute,
          temperature, closeup, value_strip, highlight_slots, verifier_value, plan_dir,
-         episodes, shadow_values):
+         episodes, shadow_values, terminal_scoring):
     out = pathlib.Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     step = int(''.join(ch for ch in pathlib.Path(checkpoint).stem if ch.isdigit()) or 0)
@@ -909,6 +917,7 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
     # the render of it. A wp_* value rebuilds the verifier as the path-walking subclass.
     if verifier_value is not None:
         override_verifier_value(policy, verifier_value)
+    override_terminal_scoring(policy, terminal_scoring)
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
     states, episode_idxs = get_test_states(cfg)

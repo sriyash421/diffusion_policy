@@ -58,6 +58,8 @@ EXCL_FLAG=""; [ -n "$EXCLUDE_NODES" ] && EXCL_FLAG="--exclude=$EXCLUDE_NODES"
 # so an empty val split is a supported configuration, not a hole.
 DATASETS=(
   "_split-blq|$SPL/pusht_blockquad_bottomleft_train137.json|137|50|19"
+  "_split-blq50|$SPL/pusht_blockquad_bottomleft_train50_seed42.json|50|50|19"
+  "_split-blq50far|$SPL/pusht_blockquad_bottomleft_train50_far.json|50|50|19"
   "_split-trq|$SPL/pusht_blockquad_topright_train173.json|173|33|0"
   "_split-brd30|$SPL/pusht_blockborder_train30_core50.json|30|50|70"
   "_split-brd60|$SPL/pusht_blockborder_train60_core50.json|60|50|40"
@@ -97,15 +99,22 @@ if ! $PY -c 'import hydra' 2>/dev/null; then
     exit 1
 fi
 
+# Optional filters, space-separated: DATASET_TAGS="_split-blq50 _split-blq50far",
+# ARM_CFGS="train_pusht_unet_bc". Empty = every dataset / every arm.
+DATASET_TAGS="${DATASET_TAGS:-}"
+ARM_CFGS="${ARM_CFGS:-}"
+
 n=0; skipped=0
 for ds in "${DATASETS[@]}"; do
     IFS='|' read -r tag file demos ntest nval <<<"$ds"
+    if [ -n "$DATASET_TAGS" ] && ! grep -qw -- "$tag" <<<"$DATASET_TAGS"; then continue; fi
     [ -f "$file" ] || { echo "MISSING MANIFEST: $file (run scripts/make_geometric_splits.py)" >&2; exit 1; }
     dov="task.dataset.split_file=$file n_demos=$demos"
     dov="$dov task.dataset.n_test_episodes=$ntest task.dataset.n_val_episodes=$nval"
     dov="$dov split_suffix=$tag"
     for arm in "${ARM_SPECS[@]}"; do
         IFS='|' read -r cfg aov <<<"$arm"
+        if [ -n "$ARM_CFGS" ] && ! grep -qw -- "$cfg" <<<"$ARM_CFGS"; then continue; fi
         ov="$aov $dov"
         # Ask the config rather than repeating it; a resolution error stops the arm here
         # instead of 30 seconds into a SLURM job.

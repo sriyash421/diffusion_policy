@@ -23,7 +23,7 @@ set +u
 source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
 conda activate "${DP_CONDA_ENV:-vae_pushT_l2s}"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+cd "${DP_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/../..}}"
 
 STEPS=(10000 50000 100000)
 # STEP_OVERRIDE names the step directly, for sweeps that are not one of the three below.
