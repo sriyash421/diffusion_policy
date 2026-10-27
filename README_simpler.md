@@ -6,7 +6,9 @@ in their own checkouts. This branch starts from `harine/improved_verifier`, so i
 shared search transformer, the Veritas verifiers and the PushT/maze code as well.
 
 Checked out at `/mmfs1/home/harine/diffusion_policy_standalone_simpler`, as a worktree of
-the same `diffusion_policy` repo as `~/diffusion_policy_standalone_{maze,pushT}`.
+the same `diffusion_policy` repo as `~/diffusion_policy_standalone_{maze,pushT}`. That repo's
+git data is the bare repo `/mmfs1/home/harine/diffusion_policy.git` (moved out of
+`RoboMonkey/.git/modules/diffusion_policy` on 2026-10-27; RoboMonkey itself was then deleted).
 
 ## Layout
 
@@ -46,9 +48,14 @@ All conda envs live in `/gscratch/robotics/harine/miniconda3/envs`.
 
 | Env | Used for |
 | --- | --- |
-| `simpler_env` | sim evals, Veritas prep, collection. Its `simpler_env` / `mani_skill2_real2sim` editable installs point at **this** checkout's `SimplerEnv/` |
-| `monkey-verifier` | default `CONDA_ENV` for BC / search training and evals (just the env name; the LLaVA verifier itself is not used here). Its SimplerEnv editable still points at `RoboMonkey/SimplerEnv` (same code plus the wide scene) |
+| `simpler_env` | sim evals, Veritas prep |
+| `monkey-verifier` | default `CONDA_ENV` for BC / search training and evals (just the env name; the LLaVA verifier itself is not used here) |
 | `dqc_jax`, `dqc_repo` | DQC verifier training / BoN |
+
+`simpler_env`, `monkey-verifier` and `dqc_jax` load `simpler_env` / `mani_skill2_real2sim`
+editable from **this** checkout's `SimplerEnv/`. Their old `openvla` / `llava` editable
+installs pointed into the deleted RoboMonkey checkout and no longer import; nothing on the
+train / eval path uses them.
 | `gsam2` | Grounded-SAM-2 tracking server for Veritas (`/gscratch/robotics/harine/Grounded-SAM-2`) |
 
 To point another env at this SimplerEnv (in a Slurm job, not on a login node):
@@ -86,17 +93,15 @@ Paths in `scripts/simpler` were rewritten mechanically:
 Submit sbatch jobs from the repo root, e.g.
 `sbatch --export=ALL,... scripts/simpler/train_search/train_search_veritas.sbatch`.
 
-**Left behind in RoboMonkey** (still at `/mmfs1/home/harine/RoboMonkey`, branch
-`harine/improved_verifier`, not deleted, because the maze/pushT/simpler worktrees keep their git metadata
-in `RoboMonkey/.git/modules/diffusion_policy`):
+**Not carried over.** The local RoboMonkey checkout was deleted on 2026-10-27; its history is
+on GitHub (`github.com/harine/RoboMonkey`, branch `harine/improved_verifier` @ `2634271`).
 
-- `monkey-verifier/` (LLaVA reward model) and `sglang-vla/`. Dropped scripts:
-  `scriptsv2/{bon,bon_eval,robomonkey_repro,mse_q}/`, `q_fn_eval/eval_robomonkey.py`,
-  `eval_search/sweep_bc_llava.sbatch`, `train_search/{train_diffusion_llava_na1,smoke_kvprefix}.sbatch`,
-  `analysis/make_verifier_videos.sbatch`. The optional LLaVA verifier paths in
-  `eval_search.py` / `eval_diffusion.py` still resolve to `RoboMonkey/monkey-verifier`.
-- Data collection and filtering: `openvla-mini/` (the OpenVLA expert), and the scripts
-  `scriptsv2/{data_collect,bridge_to_zarr}/`, pinned at `github.com/harine/RoboMonkey` @
-  `2634271`. How the existing data was collected and filtered is written up next to it in
-  `/gscratch/robotics/harine/data/README.md`. To collect more wide-eggplant data from
-  RoboMonkey, import `diffusion_policy.env.simpler.wide_eggplant` before the collector makes the env.
+- `monkey-verifier/` (LLaVA reward model), `sglang-vla/`, `openvla-mini/`. Dropped scripts:
+  `scriptsv2/{bon,bon_eval,robomonkey_repro,mse_q,data_collect,bridge_to_zarr}/`,
+  `q_fn_eval/eval_robomonkey.py`, `eval_search/sweep_bc_llava.sbatch`,
+  `train_search/{train_diffusion_llava_na1,smoke_kvprefix}.sbatch`, `analysis/make_verifier_videos.sbatch`.
+  The optional LLaVA / OpenVLA verifier paths in `eval_search.py`, `eval_diffusion.py` and
+  `policy/verifiers.py` still name `/mmfs1/home/harine/RoboMonkey/...` and fail if selected.
+- How the existing data was collected and filtered is written up next to it in
+  `/gscratch/robotics/harine/data/README.md`; the OpenVLA collector and sglang server source
+  (never pushed) are snapshotted in `/gscratch/robotics/harine/data/_collection_code/`.
