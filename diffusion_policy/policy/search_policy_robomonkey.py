@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.policy.diffusion_transformer_search_policy import (
-    SearchTransformerForDiffusion,
+    DiffusionTransformerSearchPolicy,
 )
 from diffusion_policy.common.pytorch_util import dict_apply
 from torch.distributions import Normal
@@ -17,11 +17,6 @@ from transformers import GPT2Config, GPT2Model
 
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 
-import numpy as np
-
-# SeedSequence keys that separate the per-episode noise streams (see set_sample_seeds).
-_SEED_KEY_CANDIDATE = 0
-_SEED_KEY_OBS = 1
 
 
 def _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps):
@@ -192,6 +187,8 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         # Tunable mode (obs_noise_level set): apply the configured level at both
         # train and eval. Random mode (None): only at train time.
         if not self.corrupt_obs:
+            return obs_features
+        if self.obs_noise_level is not None and float(self.obs_noise_level) <= 0:
             return obs_features
         if self.obs_noise_level is None and not self.training:
             return obs_features
@@ -505,19 +502,16 @@ class SearchPolicyRoboMonkey(BaseImagePolicy):
         return loss, {'actions': raw_actions, 'values': values}
 
 
-class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
-    """RoboMonkey adaptation of :class:`DiffusionTransformerSearchPolicy`.
+class SearchPolicyRoboMonkeyDiffusion(DiffusionTransformerSearchPolicy):
+    """SIMPLER arm of the diffusion search transformer.
 
-    Same encoder-decoder diffusion-transformer architecture as the maze
-    version, with two differences:
-      * The verifier is injected (Hydra-instantiated), not a hard-coded
-        ``MazeVerifier``. Use any client from ``diffusion_policy.policy.verifiers``.
-      * ``_state_keys`` filters the obs dict so RGB / depth keys are reserved
-        for the verifier and never enter the policy's obs encoder.
+    Everything about the network, search loop, selection, seeding and loss is the maze
+    class's. SIMPLER adds: an injected (Hydra-built) verifier, low_dim-only policy obs
+    (rgb keys are reserved for the verifier), a fixed ``obs_noise_level`` corruption mode,
+    the expert action forwarded to ground-truth verifiers, KV-prefix verifier chunking,
+    and an optional advantage policy-gradient term (off by default; ablation only).
     """
 
-    # The eval harness seeds candidate + obs-corruption noise per episode via
-    # set_sample_seeds (see _candidate_noise / corrupt_obs_features).
     supports_sample_seeds = True
 
     def __init__(
@@ -529,553 +523,113 @@ class SearchPolicyRoboMonkeyDiffusion(BaseImagePolicy):
             n_action_steps: int,
             n_obs_steps: int,
             verifier,
-            num_inference_steps=None,
-            n_layer: int = 8,
-            n_cond_layers: int = 0,
-            n_head: int = 4,
-            n_emb: int = 256,
-            p_drop_emb: float = 0.0,
-            p_drop_attn: float = 0.3,
-            causal_attn: bool = True,
-            corrupt_obs: bool = False,
             obs_noise_level: Optional[float] = None,
             pg_lambda: float = 0.0,
             pg_mode: str = 'reinforce',
             **kwargs,
         ):
-        super().__init__()
-        action_shape = shape_meta['action']['shape']
-        assert len(action_shape) == 1
-        action_dim = action_shape[0]
+        self._injected_verifier = verifier
         self._state_keys = [
             k for k, v in shape_meta['obs'].items()
             if v.get('type', 'low_dim') == 'low_dim'
         ]
-        obs_feature_dim = obs_encoder.output_shape()[0]
-        max_actions = kwargs['max_actions']
-
-        self.obs_encoder = obs_encoder
-        self.noise_scheduler = noise_scheduler
-        self.normalizer = LinearNormalizer()
-        self.verifier = verifier
-        self.horizon = horizon
-        self.n_action_steps = n_action_steps
-        self.n_obs_steps = n_obs_steps
-        _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps)
-        self.action_dim = action_dim
-        self.obs_feature_dim = obs_feature_dim
-        self.max_actions = max_actions
-        self.kwargs = kwargs
-        self.step_kwargs = kwargs.get('scheduler_step_kwargs', dict())
-        # Opt-in REINFORCE/advantage policy-gradient term (0.0 -> pure BC).
-        # pg_mode selects how the frozen-verifier advantage enters the loss:
-        #   'reinforce' -> REINFORCE on the policy sample a_pi (original behavior)
-        #   'awbc'      -> advantage-weighted imitation of the expert a*
+        # Fixed corruption level in [0, 1] -> one DDPM timestep at train AND eval;
+        # None -> the base's random-timestep, train-only corruption.
+        self.obs_noise_level = obs_noise_level
+        # pg_lambda > 0 adds a frozen-verifier advantage term; 'reinforce' re-noises the
+        # policy's own sample, 'awbc' weights the expert loss. Unused by any config.
         self._pg_lambda = float(pg_lambda)
         self._pg_mode = str(pg_mode)
+        # Pre-2026-09-30 checkpoints have no corrupt_obs_eval; their semantics were: a
+        # fixed level is applied at eval, a random level is not.
+        if kwargs.get('corrupt_obs') and kwargs.get('corrupt_obs_eval') is None:
+            kwargs['corrupt_obs_eval'] = obs_noise_level is not None
+        super().__init__(
+            shape_meta=shape_meta, obs_encoder=obs_encoder,
+            noise_scheduler=noise_scheduler, horizon=horizon,
+            n_action_steps=n_action_steps, n_obs_steps=n_obs_steps, **kwargs)
+        _maybe_set_executed_chunk_window(verifier, n_obs_steps, n_action_steps)
 
-        # Same network as the maze / PushT search transformer. cond_encoder and
-        # context_decay default to the pre-unification values so old checkpoints rebuild.
-        self.model = SearchTransformerForDiffusion(
-            action_dim=action_dim,
-            obs_feature_dim=obs_feature_dim,
-            horizon=horizon,
-            n_obs_steps=n_obs_steps,
-            max_context_actions=max_actions - 1,
-            n_layer=n_layer,
-            n_cond_layers=n_cond_layers,
-            n_head=n_head,
-            n_emb=n_emb,
-            p_drop_emb=p_drop_emb,
-            p_drop_attn=p_drop_attn,
-            causal_attn=causal_attn,
-            cond_encoder=kwargs.get('cond_encoder', 'transformer'),
-            context_decay=kwargs.get('context_decay', 1.0),
-        )
+    def _build_verifier(self, **kwargs):
+        return self._injected_verifier
 
-        if num_inference_steps is None:
-            num_inference_steps = noise_scheduler.config.num_train_timesteps
-        self.num_inference_steps = num_inference_steps
-
-        self.corrupt_obs = corrupt_obs
-        self.obs_noise_level = obs_noise_level
-        self.obs_noise_scheduler = DDPMScheduler(
-            num_train_timesteps=100,
-            beta_start=0.001,
-            beta_end=0.02,
-            prediction_type="epsilon",
-        )
-        if corrupt_obs:
-            level_str = "random" if obs_noise_level is None else f"fixed={obs_noise_level}"
-            print(f"Corrupting obs with a separate noise scheduler (level={level_str})")
-        # Eval-only switch: False feeds clean obs at eval even when the policy was trained
-        # with a fixed obs_noise_level. Set by the eval harness (--obs-corruption clean).
-        self.corrupt_obs_eval = True
-        # Per-episode sampling seeds, set by the eval harness (set_sample_seeds). None ->
-        # global RNG, which is what training uses.
-        self._sample_seeds = None
-
-    def set_sample_seeds(self, seeds):
-        """Make eval noise a pure function of (episode seed, candidate index).
-
-        ``seeds`` is one int per batch row (None restores the global RNG). Both the
-        initial diffusion noise and the obs-corruption noise are then drawn from per-row
-        CPU generators, so a row's samples do not depend on its batch position, on how
-        many other envs are active, or on the device. DDIM (eta=0) draws nothing else.
-        """
-        self._sample_seeds = None if seeds is None else [int(s) for s in seeds]
-
-    def _seeded_randn(self, shape, key, device, dtype):
-        """(B, *shape) standard normal; row b is drawn from SeedSequence([seed_b, *key])."""
-        rows = []
-        for base in self._sample_seeds:
-            g = torch.Generator()
-            g.manual_seed(int(np.random.SeedSequence([base, *key]).generate_state(1)[0]))
-            rows.append(torch.randn(tuple(shape), generator=g, dtype=torch.float32))
-        return torch.stack(rows).to(device=device, dtype=dtype)
-
-    def _check_seed_rows(self, batch_size):
-        assert len(self._sample_seeds) == batch_size, (
-            f'set_sample_seeds got {len(self._sample_seeds)} seeds, batch is {batch_size}')
-
-    def _candidate_noise(self, index, batch_size, device, dtype):
-        """Seeded initial noise for candidate ``index`` of this decision, or None."""
-        if self._sample_seeds is None:
-            return None
-        self._check_seed_rows(batch_size)
-        return self._seeded_randn(
-            (self.horizon, self.action_dim), (_SEED_KEY_CANDIDATE, int(index)), device, dtype)
-
-    def set_normalizer(self, normalizer: LinearNormalizer):
-        self.normalizer.load_state_dict(normalizer.state_dict())
-
-    def encode_obs_cond(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
-        nobs = self.normalizer.normalize(obs_dict)
-        obs_value = next(iter(nobs.values()))
-        B = obs_value.shape[0]
-        To = self.n_obs_steps
-        if isinstance(nobs, dict):
-            this_nobs = dict_apply(
-                {k: nobs[k] for k in self._state_keys},
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]),
-            )
-        else:
-            this_nobs = nobs[:, :To, ...].reshape(-1, *nobs.shape[2:])
-        nobs_features = self.obs_encoder(this_nobs)
-        nobs_features = nobs_features.reshape(B, To, -1)
-        return self.corrupt_obs_features(nobs_features)
+    def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        return super()._encode_obs_features({k: obs_dict[k] for k in self._state_keys})
 
     def corrupt_obs_features(self, obs_features):
-        # Tunable mode (obs_noise_level set): apply the configured level at
-        # both train and eval — `obs_noise_level` in [0, 1] maps to a discrete
-        # DDPM timestep. Random mode (None): random timestep at train time only,
-        # eval is clean. corrupt_obs_eval=False also makes the tunable mode clean at eval.
-        if not self.corrupt_obs:
-            return obs_features
-        if not self.training and (self.obs_noise_level is None or not self.corrupt_obs_eval):
-            return obs_features
-
-        bsz = obs_features.shape[0]
-        if self._sample_seeds is not None and not self.training:
-            self._check_seed_rows(bsz)
-            obs_noise = self._seeded_randn(
-                obs_features.shape[1:], (_SEED_KEY_OBS,),
-                obs_features.device, obs_features.dtype)
-        else:
-            obs_noise = torch.randn_like(obs_features)
-        max_t = self.obs_noise_scheduler.config.num_train_timesteps
         if self.obs_noise_level is None:
-            timesteps = torch.randint(
-                0, max_t, (bsz,), device=obs_features.device,
-            ).long()
+            if self.corrupt_obs and (self.training or self.corrupt_obs_eval):
+                obs_features = self._corrupt_at(obs_features, None)
+            return obs_features
+        if float(self.obs_noise_level) <= 0:
+            return obs_features
+        if not self.corrupt_obs or (not self.training and not self.corrupt_obs_eval):
+            return obs_features
+        max_t = self.obs_noise_scheduler.config.num_train_timesteps
+        t = max(0, min(max_t - 1, int(round(float(self.obs_noise_level) * (max_t - 1)))))
+        return self._corrupt_at(obs_features, t)
+
+    def _corrupt_at(self, obs_features, t):
+        """Noise drawn from the per-episode stream (`_init_noise`), like the candidates."""
+        bsz = obs_features.shape[0]
+        noise = self._init_noise(obs_features.shape, obs_features.dtype, obs_features.device)
+        max_t = self.obs_noise_scheduler.config.num_train_timesteps
+        if t is None:
+            timesteps = torch.randint(0, max_t, (bsz,), device=obs_features.device)
         else:
-            t = int(round(float(self.obs_noise_level) * (max_t - 1)))
-            t = max(0, min(max_t - 1, t))
-            timesteps = torch.full(
-                (bsz,), t, device=obs_features.device, dtype=torch.long,
-            )
-        return self.obs_noise_scheduler.add_noise(
-            obs_features,
-            obs_noise,
-            timesteps,
-        )
+            timesteps = torch.full((bsz,), t, device=obs_features.device, dtype=torch.long)
+        return self.obs_noise_scheduler.add_noise(obs_features, noise, timesteps)
 
-    def conditional_sample(
-            self,
-            obs_cond: torch.Tensor,
-            actions: Optional[torch.Tensor] = None,
-            values: Optional[torch.Tensor] = None,
-            context_lengths: Optional[torch.Tensor] = None,
-            generator=None,
-            noise: Optional[torch.Tensor] = None,
-            **kwargs,
-        ) -> torch.Tensor:
-        scheduler = self.noise_scheduler
-        # `noise`, when provided, is the initial trajectory (DDIM is deterministic
-        # from here, so this fully determines the candidate). The search harness
-        # uses it to seed candidate generation PER-ENV in tiled/batched rollouts so
-        # each episode's noise is anchored to its own seed (not its batch position),
-        # matching the single-env path. None -> draw from the (seeded) global RNG.
-        if noise is not None:
-            trajectory = noise.to(dtype=obs_cond.dtype, device=obs_cond.device)
-        else:
-            trajectory = torch.randn(
-                size=(obs_cond.shape[0], self.horizon, self.action_dim),
-                dtype=obs_cond.dtype,
-                device=obs_cond.device,
-                generator=generator,
-            )
-
-        scheduler.set_timesteps(self.num_inference_steps)
-        for t in scheduler.timesteps:
-            model_output = self.model(
-                trajectory,
-                t,
-                obs_cond=obs_cond,
-                actions=actions,
-                values=values,
-                context_lengths=context_lengths,
-            )
-            trajectory = scheduler.step(
-                model_output,
-                t,
-                trajectory,
-                generator=generator,
-                **kwargs,
-            ).prev_sample
-        return trajectory
-
-    def _normalize_context_actions(self, actions):
-        """Put context actions into the space the model works in.
-
-        The search loop carries candidates in RAW action units because the verifier
-        scores them there and the env executes them. But the model is trained against a
-        NORMALIZED target, so handing it raw actions puts the two halves of the
-        action+value context on wildly different scales. Normalizing here -- at the model
-        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
-
-        Matches the convention already used for the policy-gradient branch, which keeps a
-        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
-        """
-        if actions is None:
-            return None
-        return self.normalizer['action'].normalize(actions)
-
-    def predict_action(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            actions: Optional[torch.Tensor] = None,
-            values: Optional[torch.Tensor] = None,
-            noise: Optional[torch.Tensor] = None,
-            obs_cond: Optional[torch.Tensor] = None,
-        ) -> Dict[str, torch.Tensor]:
-        """``obs_cond`` is an already-encoded (and, if enabled, corrupted) obs; the search
-        loop encodes once per decision so every candidate sees the same observation."""
-        assert 'past_action' not in obs_dict
-        if obs_cond is None:
-            obs_cond = self.encode_obs_cond(obs_dict)
-        nsample = self.conditional_sample(
-            obs_cond=obs_cond,
-            actions=self._normalize_context_actions(actions),
-            values=values,
-            noise=noise,
-            **self.step_kwargs,
-        )
-        action_pred = self.normalizer['action'].unnormalize(nsample)
-
-        start = self.n_obs_steps - 1
-        end = start + self.n_action_steps
-        action = action_pred[:, start:end]
-        return {
-            'action': action,
-            'action_pred': action_pred,
-        }
-
-    def _init_candidate_noise(self, noise_seq, index, obs_cond):
-        """Candidate ``index``'s initial noise: ``noise_seq`` if given, else the per-episode
-        seeded stream, else None (global RNG)."""
-        if noise_seq is not None:
-            return noise_seq[index]
-        return self._candidate_noise(index, obs_cond.shape[0], obs_cond.device, obs_cond.dtype)
-
-    def search_candidates(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions,
-            noise_seq: Optional[torch.Tensor] = None,
-            return_scores: bool = False,
-            return_subgoals: bool = False,
-            obs_cond: Optional[torch.Tensor] = None,
-        ):
-        """``n_actions`` candidates, each conditioned on the previous ones.
-
-        Returns ``(actions, values[, scores][, subgoals])``, the same tuple contract as the
-        maze / PushT ``SearchProcedureMixin.search_candidates``: ``scores`` is the verifier
-        value itself (the context here is scalar) and ``subgoals`` is always None.
-        ``noise_seq``: optional (n_actions, B, horizon, action_dim) initial noise.
-        """
-        if obs_cond is None:
-            obs_cond = self.encode_obs_cond(obs_dict)
-        actions = None
-        values = None
-        for _i in range(n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=actions,
-                values=values,
-                noise=self._init_candidate_noise(noise_seq, _i, obs_cond),
-                obs_cond=obs_cond,
-            )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
-            if actions is None:
-                actions = new_action.unsqueeze(1)
-                values = new_value.unsqueeze(1)
-            else:
-                actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
-                values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        out = (actions, values)
-        if return_scores:
-            out = out + (values,)
-        if return_subgoals:
-            out = out + (None,)
-        return out
-
-    @torch.inference_mode()
-    def predict_n_actions(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions,
-            noise_seq: Optional[torch.Tensor] = None,
-        ):
-        # n_actions > max_actions slides a (max_actions - 1) context window. The obs is
-        # encoded once for the whole decision, and candidate j's noise is keyed on j.
-        obs_cond = self.encode_obs_cond(obs_dict)
-        if n_actions <= self.max_actions:
-            return self.search_candidates(
-                obs_dict, verifier, n_actions, noise_seq=noise_seq, obs_cond=obs_cond)
-
-        actions, values = self.search_candidates(
-            obs_dict, verifier, self.max_actions,
-            noise_seq=(noise_seq[:self.max_actions] if noise_seq is not None else None),
-            obs_cond=obs_cond)
-        all_actions = actions.clone()
-        all_values = values.clone()
-
-        action_history = actions[:, 1:]
-        value_history = values[:, 1:]
-        for _j in range(self.max_actions, n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=action_history,
-                values=value_history,
-                noise=self._init_candidate_noise(noise_seq, _j, obs_cond),
-                obs_cond=obs_cond,
-            )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
-
-            all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
-            all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
-            action_history = torch.cat([action_history[:, 1:], new_action.unsqueeze(1)], dim=1)
-            value_history = torch.cat([value_history[:, 1:], new_value.unsqueeze(1)], dim=1)
-
-        return all_actions, all_values
-
-    def generate_search_context(self, obs_dict, action=None):
-        """The search context ``compute_loss`` conditions on: ``(actions, values)``.
-
-        Exactly the search the training loss runs, split out so a trainer can generate the
-        context ONCE for a pool of windows and reuse it across several gradient steps (see
-        TrainSearchOuterInnerRoboMonkeyWorkspace) instead of paying for ``max_actions - 1`` candidate
-        samples plus their verifier calls on every update.
-
-        ``action`` is the expert action, passed through so ground-truth verifiers (e.g.
-        MSEVerifier) can read it; verifiers that ignore it are unaffected.
-
-        Deliberately ``no_grad`` rather than ``inference_mode``: inference tensors carry a
-        permanent restriction against taking part in autograd-recorded operations, which
-        makes them unsafe to buffer and feed to the model on a LATER step. ``no_grad``
-        yields ordinary tensors, so the returned context can be stored for as long as the
-        caller likes. The search builds no graph either way.
-
-        ``actions`` come back in RAW action units (the verifier scores them there); the
-        normalization the model needs happens at the model boundary, see
-        ``_normalize_context_actions``.
-        """
+    def generate_search_context(self, obs_dict, obs_features=None, action=None):
+        """``action`` (the expert chunk) is forwarded so ground-truth verifiers can read it."""
         search_obs = dict(obs_dict)
         if action is not None:
             search_obs['action'] = action
         with torch.no_grad():
-            return _run_search(self, search_obs, self.max_actions - 1)
+            return _run_search(self, search_obs, self.max_actions - 1,
+                               obs_features=obs_features)
 
-    def predict_epsilon(self, batch, actions, values, noisy_trajectory, timesteps):
-        """One denoiser forward on EXTERNALLY supplied noise, timesteps and context.
-
-        Used to compare two snapshots of this policy at matched inputs. For a fixed
-        ``(noisy_trajectory, timestep, obs, context)`` the two snapshots' reverse
-        transition kernels are Gaussians whose variance comes from the scheduler and so is
-        identical between them; they differ only in a mean that is affine in the predicted
-        noise. Their KL is therefore proportional to ``||eps_a - eps_b||^2``, which makes
-        epsilon-space MSE at matched inputs a per-denoising-step KL -- the tractable stand-in
-        for the policy KL that PPO would monitor (a diffusion policy has no closed-form
-        ``log p(a|s)`` to take a ratio of).
-
-        Obs corruption is deliberately NOT applied: ``corrupt_obs_features`` draws fresh
-        noise per call, so including it would book corruption noise as policy drift. The
-        obs ARE re-encoded from ``batch`` rather than taken from the caller, because the
-        obs encoder is part of what drifts and each snapshot must use its own.
-        """
-        with torch.no_grad():
-            nobs = self.normalizer.normalize(batch['obs'])
-            To = self.n_obs_steps
-            B = next(iter(nobs.values())).shape[0]
-            this_nobs = dict_apply(
-                {k: nobs[k] for k in self._state_keys},
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]),
-            )
-            obs_cond = self.obs_encoder(this_nobs).reshape(B, To, -1)
-            return self.model(
-                noisy_trajectory,
-                timesteps,
-                obs_cond=obs_cond,
-                actions=self._normalize_context_actions(actions),
-                values=values,
-            )
-
-    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
-        """Denoising loss for the expert action, conditioned on a best-of-n search context.
-
-        ``actions``/``values`` optionally supply a PRE-GENERATED search context, in the form
-        ``generate_search_context`` returns it. ``None`` (the default) generates it here from
-        the current weights -- the offline path, which pays the full search cost on every
-        gradient step. A trainer that amortizes the search across several updates passes the
-        buffered context back in instead.
-
-        ``return_aux`` additionally returns the exact inputs the denoiser was called with,
-        so a frozen snapshot of this policy can be re-run on identical inputs via
-        ``predict_epsilon``; matched inputs are what make that comparison a KL.
-        """
-        target_actions = self.normalizer['action'].normalize(batch['action'])
-        B, T, Da = target_actions.shape
-        assert T == self.horizon, \
-            f"Expected action horizon {self.horizon}, got {T}"
-        assert Da == self.action_dim, \
-            f"Expected action dim {self.action_dim}, got {Da}"
-
-        obs_cond = self.encode_obs_cond(batch['obs'])
-
+    def compute_loss(self, batch, actions=None, values=None, return_aux=False,
+                     slot_weighting=True, obs_features=None):
         if actions is None:
             actions, values = self.generate_search_context(
-                batch['obs'], action=batch['action'])
-
-        trajectory = target_actions.unsqueeze(1).expand(
-            -1,
-            self.max_actions,
-            -1,
-            -1,
-        )
-
-        noise = torch.randn_like(trajectory)
-        timesteps = torch.randint(
-            0,
-            self.noise_scheduler.config.num_train_timesteps,
-            (B, self.max_actions),
-            device=trajectory.device,
-        ).long()
-        flat_trajectory = trajectory.reshape(
-            B * self.max_actions,
-            self.horizon,
-            self.action_dim,
-        )
-        flat_noise = noise.reshape(
-            B * self.max_actions,
-            self.horizon,
-            self.action_dim,
-        )
-        noisy_trajectory = self.noise_scheduler.add_noise(
-            flat_trajectory,
-            flat_noise,
-            timesteps.reshape(-1),
-        ).reshape(B, self.max_actions, self.horizon, self.action_dim)
-
-        pred = self.model(
-            noisy_trajectory,
-            timesteps,
-            obs_cond=obs_cond,
-            actions=self._normalize_context_actions(actions),
-            values=values,
-        )
-
-        pred_type = self.noise_scheduler.config.prediction_type
-        if pred_type == 'epsilon':
-            target = noise
-        elif pred_type == 'sample':
-            target = trajectory
-        else:
-            raise ValueError(f"Unsupported prediction type {pred_type}")
-
-        loss_b = reduce(
-            F.mse_loss(pred, target, reduction='none'), 'b ... -> b', 'mean'
-        )                                                              # (B,) per-sample BC loss
-        loss = loss_b.mean()
-
-        # --- Opt-in advantage policy-gradient term (frozen DQC verifier in the loss) ---
-        # Both modes use the frozen verifier's Q as a stop-grad scalar (no backprop
-        # through Q); a* = expert action, a_pi = the policy's OWN sample:
-        #   'reinforce' (default, original): REINFORCE on a_pi with advantage
-        #       Q(a_pi)-Q(a*), realized as advantage-weighted denoising loss on a_pi
-        #       re-noised at an independent timestep t2. adv>0 -> lower a_pi's
-        #       denoising loss -> raise pi(a_pi).
-        #   'awbc': advantage-weighted imitation of the EXPERT,
-        #       grad = E[ grad_logpi(a*) * (Q(a*)-Q(a_pi)) ], realized as the
-        #       per-sample BC denoising loss on a* weighted by the clamped
-        #       expert-over-policy advantage. The weight -> 0 once the policy matches
-        #       a*'s Q; clamp>=0 so an over-optimistic critic cannot push pi AWAY
-        #       from the expert.
+                batch['obs'], obs_features=obs_features, action=batch['action'])
+        loss, aux = super().compute_loss(
+            batch, actions, values, return_aux=True,
+            slot_weighting=slot_weighting, obs_features=obs_features)
         if self._pg_lambda > 0.0:
-            img_key = getattr(self.verifier, 'image_obs_key', 'agentview_image')
-            img = batch['obs'][img_key]
-            with torch.no_grad():
-                na_pi = self.conditional_sample(
-                    obs_cond, actions=self._normalize_context_actions(actions),
-                    values=values, **self.step_kwargs
-                )                                                       # (B, T, Da) normalized
-                a_pi_raw = self.normalizer['action'].unnormalize(na_pi)
-                q_pi = self.verifier.get_value({img_key: img}, a_pi_raw)            # (B,)
-                q_star = self.verifier.get_value({img_key: img}, batch['action'])  # (B,)
-            if self._pg_mode == 'awbc':
-                w = (q_star - q_pi).clamp(min=0.0).detach().to(loss.device)  # (B,) >= 0
-                loss_pg = (w * loss_b).mean()
-                loss = loss + self._pg_lambda * loss_pg
-            else:
-                adv = (q_pi - q_star).detach().to(loss.device)          # (B,) frozen advantage
-                na_pi = na_pi.detach()
-                noise2 = torch.randn_like(na_pi)
-                t2 = torch.randint(
-                    0, self.noise_scheduler.config.num_train_timesteps,
-                    (B,), device=na_pi.device,
-                ).long()
-                noisy2 = self.noise_scheduler.add_noise(na_pi, noise2, t2)  # (B, T, Da)
-                pred2 = self.model(
-                    noisy2.unsqueeze(1), t2.unsqueeze(1),
-                    obs_cond=obs_cond, actions=self._normalize_context_actions(actions),
-                    values=values,
-                )                                                           # (B, 1, T, Da)
-                tgt2 = (noise2 if pred_type == 'epsilon' else na_pi).unsqueeze(1)
-                mse2 = reduce(F.mse_loss(pred2, tgt2, reduction='none'), 'b ... -> b', 'mean')
-                loss_pg = (adv * mse2).mean()
-                loss = loss + self._pg_lambda * loss_pg
-        if not return_aux:
-            return loss
-        # everything a frozen snapshot needs to reproduce this exact denoiser forward
-        return loss, {
-            'noisy_trajectory': noisy_trajectory,
-            'timesteps': timesteps,
-            'actions': actions,
-            'values': values,
-        }
+            loss = loss + self._pg_lambda * self._pg_loss(batch, actions, values)
+        return (loss, aux) if return_aux else loss
 
+    def _pg_loss(self, batch, actions, values):
+        """Frozen-verifier advantage term; Q is a stop-grad scalar in both modes."""
+        img_key = getattr(self.verifier, 'image_obs_key', 'agentview_image')
+        img = batch['obs'][img_key]
+        obs_cond = self.corrupt_obs_features(self._encode_obs_features(batch['obs']))
+        nctx = self._normalize_context_actions(actions)
+        with torch.no_grad():
+            na_pi = self.conditional_sample(obs_cond, actions=nctx, values=values,
+                                            **self.step_kwargs)
+            q_pi = self.verifier.get_value({img_key: img}, self.normalizer['action'].unnormalize(na_pi))
+            q_star = self.verifier.get_value({img_key: img}, batch['action'])
+        B = na_pi.shape[0]
+        if self._pg_mode == 'awbc':
+            target = self.normalizer['action'].normalize(batch['action'])
+            noise = torch.randn_like(target)
+            t = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (B,),
+                              device=target.device)
+            pred = self.model(self.noise_scheduler.add_noise(target, noise, t).unsqueeze(1),
+                              t.unsqueeze(1), obs_cond=obs_cond, actions=nctx, values=values)
+            per_sample = reduce(F.mse_loss(pred[:, 0], noise, reduction='none'), 'b ... -> b', 'mean')
+            w = (q_star - q_pi).clamp(min=0.0).to(per_sample)
+            return (w * per_sample).mean()
+        noise = torch.randn_like(na_pi)
+        t = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (B,),
+                          device=na_pi.device)
+        pred = self.model(self.noise_scheduler.add_noise(na_pi, noise, t).unsqueeze(1),
+                          t.unsqueeze(1), obs_cond=obs_cond, actions=nctx, values=values)
+        per_sample = reduce(F.mse_loss(pred[:, 0], noise, reduction='none'), 'b ... -> b', 'mean')
+        return ((q_pi - q_star).to(per_sample) * per_sample).mean()
 
 class BCSearchWrapper(nn.Module):
     """Wraps a plain BC diffusion policy (e.g. DiffusionUnetImagePolicy) to
@@ -1100,6 +654,47 @@ class BCSearchWrapper(nn.Module):
         self.normalizer = base_policy.normalizer
         self.n_obs_steps = base_policy.n_obs_steps
         self.n_action_steps = base_policy.n_action_steps
+        # Eval-only state noise (None = off): the fixed-level DDPM forward noise of
+        # SearchPolicyRoboMonkeyDiffusion.corrupt_obs_features, on the normalized low-dim
+        # obs the BC conditions on. One draw per replan, shared by all N candidates (a
+        # noisy state sensor, not a source of candidate diversity); the verifier keeps
+        # reading the clean obs.
+        self.eval_obs_noise_level: Optional[float] = None
+        self.obs_noise_scheduler = DDPMScheduler(
+            num_train_timesteps=100, beta_start=0.001, beta_end=0.02,
+            prediction_type="epsilon")
+
+    OBS_NOISE_SEED_KEY = 2   # SeedSequence([replan_seed, 2]); 1 is eval_search's selection stream
+
+    def noisy_policy_obs(self, obs_dict: Dict[str, Any],
+                         obs_noise_seed: Optional[int] = None) -> Dict[str, Any]:
+        """``obs_dict`` with the base policy's low-dim keys noised at
+        ``eval_obs_noise_level``; every other key (images, verifier inputs) untouched.
+        The noise comes from its own generator keyed on the replan seed, so the candidate
+        draws stay on the same RNG stream as a clean run of the same seed."""
+        level = self.eval_obs_noise_level
+        if level is None or float(level) <= 0.0:
+            return obs_dict
+        import numpy as _np
+        max_t = self.obs_noise_scheduler.config.num_train_timesteps
+        t = max(0, min(max_t - 1, int(round(float(level) * (max_t - 1)))))
+        abar = float(self.obs_noise_scheduler.alphas_cumprod[t])
+        g = torch.Generator()
+        if obs_noise_seed is not None:
+            g.manual_seed(int(_np.random.SeedSequence(
+                [int(obs_noise_seed), self.OBS_NOISE_SEED_KEY]).generate_state(1)[0]))
+        else:
+            g.manual_seed(int(torch.randint(0, 2 ** 31 - 1, (1,)).item()))
+        out = dict(obs_dict)
+        for k in getattr(self._base, "obs_keys", ()):
+            v = obs_dict.get(k)
+            if not torch.is_tensor(v) or v.ndim > 3 or not v.is_floating_point():
+                continue                     # images / non-state keys stay clean
+            nv = self._base.normalizer[k].normalize(v)
+            eps = torch.randn(nv.shape, generator=g, dtype=nv.dtype).to(nv.device)
+            nv = abar ** 0.5 * nv + (1.0 - abar) ** 0.5 * eps
+            out[k] = self._base.normalizer[k].unnormalize(nv)
+        return out
 
     @torch.no_grad()
     def predict_n_actions(
@@ -1107,6 +702,7 @@ class BCSearchWrapper(nn.Module):
         obs_dict: Dict[str, Any],
         verifier,
         n_actions: int,
+        obs_noise_seed: Optional[int] = None,
         **_kw,
     ):
         """Run BC policy n_actions times; verifier-score each sample.
@@ -1133,16 +729,43 @@ class BCSearchWrapper(nn.Module):
         step = int(_os.environ.get("BC_VERIFIER_STEP", "0"))
         agg = _os.environ.get("BC_VERIFIER_AGG", "mean").lower()
 
-        # 1) Draw the N candidate chunks.
+        # 1) Draw the N candidate chunks. BC_BATCH_CANDIDATES=1 draws all N in ONE
+        #    batched predict_action over N copies of the observation (same model, same
+        #    sampler, independent noise per row) instead of N sequential calls; the
+        #    candidates are a different, equally valid draw from the same distribution,
+        #    still deterministic under the per-replan seed. Default off so earlier
+        #    sweeps reproduce exactly.
         full_list, exec_list = [], []
-        for _ in range(n_actions):
-            result = self._base.predict_action(obs_dict)
-            full_list.append(result.get("action_pred", result["action"]))  # (B,H,7)
-            exec_list.append(result["action"])                              # (B,S,7)
+        policy_obs = self.noisy_policy_obs(obs_dict, obs_noise_seed)   # verifier: obs_dict
+        if _os.environ.get("BC_BATCH_CANDIDATES", "0") == "1":
+            B0 = next(v for v in policy_obs.values() if torch.is_tensor(v)).shape[0]
+            assert B0 == 1, "BC_BATCH_CANDIDATES assumes rollout batch B=1"
+            # Optional fixed-size pool makes N sweeps exact prefixes at the same
+            # state/seed, including batched CUDA RNG and numerical batch geometry.
+            pool_size = int(_os.environ.get('BC_CANDIDATE_POOL', n_actions))
+            if pool_size < n_actions:
+                raise ValueError('BC_CANDIDATE_POOL must be >= n_actions')
+            rep = {k: (v.expand(pool_size, *v.shape[1:]) if torch.is_tensor(v) else v)
+                   for k, v in policy_obs.items()}
+            result = self._base.predict_action(rep)
+            full = result.get("action_pred", result["action"])               # (N,H,7)
+            for i in range(n_actions):
+                full_list.append(full[i:i + 1])
+                exec_list.append(result["action"][i:i + 1])
+        else:
+            for _ in range(n_actions):
+                result = self._base.predict_action(policy_obs)
+                full_list.append(result.get("action_pred", result["action"]))  # (B,H,7)
+                exec_list.append(result["action"])                              # (B,S,7)
         actions = torch.stack(full_list, dim=1)   # (B, N, H, 7) -> returned
         B, N = actions.shape[0], actions.shape[1]
 
         if score_mode == "full":
+            if B == 1 and _os.environ.get("BC_BATCH_CANDIDATES", "0") == "1":
+                # one verifier call over all N candidates (obs repeated per candidate)
+                rep = {k: (v.expand(N, *v.shape[1:]) if torch.is_tensor(v) else v)
+                       for k, v in obs_dict.items()}
+                return actions, verifier.get_value(rep, actions[0]).unsqueeze(0)
             vals = [verifier.get_value(obs_dict, full_list[i]) for i in range(N)]
             return actions, torch.stack(vals, dim=1)
 
@@ -1232,309 +855,3 @@ class BCSearchWrapper(nn.Module):
 
     def compute_loss(self, batch):
         return self._base.compute_loss(batch)
-
-
-class SearchPolicyRoboMonkeyDiffusionNoiseCond(SearchPolicyRoboMonkeyDiffusion):
-    """Noise-conditioned variant of SearchPolicyRoboMonkeyDiffusion.
-
-    Mirrors tmrl's :class:`ContextSmoothedFlowPolicy`: at training time a
-    per-sample ``tcont_context`` is drawn from ``U[0, 1]`` and used to
-       (a) noise the encoded state via the DDPM scheduler at
-           ``timestep = round(tcont_context * (num_train_timesteps-1))`` and
-       (b) condition the denoiser by adding a sinusoidal embedding of the
-           timestep onto every obs token before the diffusion transformer.
-
-    At inference, the caller passes ``tcont_context`` explicitly (default
-    ``0.0`` = clean state). A downstream RL head could learn to set it,
-    exactly as tmrl's SAC actor outputs a timestep dimension alongside the
-    action.
-    """
-
-    # Its own search_candidates / encode_obs_cond do not use the per-episode seed streams,
-    # so the eval harness falls back to seeding the global RNG for it.
-    supports_sample_seeds = False
-
-    def __init__(
-            self,
-            *args,
-            tcont_emb_dim: int = 128,
-            **kwargs,
-        ):
-        # corrupt_obs is mandatory for this class — noise IS the conditioning.
-        kwargs['corrupt_obs'] = True
-        # obs_noise_level is unused here (tcont is always sampled / supplied),
-        # null it out so the parent doesn't apply its own corruption.
-        kwargs['obs_noise_level'] = None
-        super().__init__(*args, **kwargs)
-
-        max_t = self.obs_noise_scheduler.config.num_train_timesteps
-        self.register_buffer(
-            "_tcont_max_t", torch.tensor(max_t, dtype=torch.long),
-            persistent=False,
-        )
-
-        hidden = max(64, tcont_emb_dim // 2)
-        self.tcont_emb = nn.Sequential(
-            SinusoidalPosEmb(tcont_emb_dim),
-            nn.Linear(tcont_emb_dim, hidden),
-            nn.Mish(),
-            nn.Linear(hidden, self.obs_feature_dim),
-        )
-        print(
-            "SearchPolicyRoboMonkeyDiffusionNoiseCond: "
-            f"conditioning on obs-noise level (sinusoidal -> {self.obs_feature_dim}-dim "
-            f"shift on obs tokens)."
-        )
-
-    # --- noise sampling + injection ---
-
-    def _resolve_tcont(self, batch_size: int, device, tcont_context) -> torch.Tensor:
-        """Return a (B,) float tensor in [0, 1]."""
-        if tcont_context is None:
-            if self.training:
-                return torch.rand(batch_size, device=device)
-            # Eval default: clean obs. Override to study sensitivity to noise.
-            return torch.zeros(batch_size, device=device)
-        if torch.is_tensor(tcont_context):
-            t = tcont_context.to(device=device, dtype=torch.float)
-            if t.ndim == 0:
-                t = t.expand(batch_size)
-            elif t.shape[0] == 1 and batch_size > 1:
-                t = t.expand(batch_size)
-            return t.clamp(0.0, 1.0)
-        return torch.full(
-            (batch_size,), float(tcont_context),
-            device=device, dtype=torch.float,
-        ).clamp(0.0, 1.0)
-
-    def _apply_tunable_noise(
-            self, obs_features: torch.Tensor, tcont: torch.Tensor,
-        ) -> torch.Tensor:
-        """obs_features: (B, To, D); tcont: (B,) float in [0, 1]."""
-        max_t = int(self._tcont_max_t.item())
-        timesteps = (tcont * max_t).long().clamp(max=max_t - 1)
-        noise = torch.randn_like(obs_features)
-        return self.obs_noise_scheduler.add_noise(obs_features, noise, timesteps)
-
-    def encode_obs_cond(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            tcont_context: Optional[torch.Tensor] = None,
-        ) -> torch.Tensor:
-        nobs = self.normalizer.normalize(obs_dict)
-        obs_value = next(iter(nobs.values()))
-        B = obs_value.shape[0]
-        To = self.n_obs_steps
-        if isinstance(nobs, dict):
-            this_nobs = dict_apply(
-                {k: nobs[k] for k in self._state_keys},
-                lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]),
-            )
-        else:
-            this_nobs = nobs[:, :To, ...].reshape(-1, *nobs.shape[2:])
-        nobs_features = self.obs_encoder(this_nobs).reshape(B, To, -1)
-
-        tcont = self._resolve_tcont(B, nobs_features.device, tcont_context)
-        noisy_features = self._apply_tunable_noise(nobs_features, tcont)
-
-        # Inject noise-level conditioning: sinusoidal embedding broadcast over
-        # the To obs tokens.  We embed the discrete timestep (not tcont) so the
-        # representation aligns with how the DDPM scheduler indexes noise.
-        max_t = int(self._tcont_max_t.item())
-        t_discrete = (tcont * max_t).clamp(max=max_t - 1)
-        emb = self.tcont_emb(t_discrete)  # (B, obs_feature_dim)
-        return noisy_features + emb.unsqueeze(1)  # (B, To, obs_feature_dim)
-
-    # --- threading tcont through the prediction stack ---
-
-    def _normalize_context_actions(self, actions):
-        """Put context actions into the space the model works in.
-
-        The search loop carries candidates in RAW action units because the verifier
-        scores them there and the env executes them. But the model is trained against a
-        NORMALIZED target, so handing it raw actions puts the two halves of the
-        action+value context on wildly different scales. Normalizing here -- at the model
-        boundary, not in the search loop -- keeps one tensor from serving both boundaries.
-
-        Matches the convention already used for the policy-gradient branch, which keeps a
-        normalized `na_pi` and unnormalizes a separate `a_pi_raw` copy for the verifier.
-        """
-        if actions is None:
-            return None
-        return self.normalizer['action'].normalize(actions)
-
-    def predict_action(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            actions: Optional[torch.Tensor] = None,
-            values: Optional[torch.Tensor] = None,
-            tcont_context: Optional[torch.Tensor] = None,
-        ) -> Dict[str, torch.Tensor]:
-        assert 'past_action' not in obs_dict
-        obs_cond = self.encode_obs_cond(obs_dict, tcont_context=tcont_context)
-        nsample = self.conditional_sample(
-            obs_cond=obs_cond,
-            actions=self._normalize_context_actions(actions),
-            values=values,
-            **self.step_kwargs,
-        )
-        action_pred = self.normalizer['action'].unnormalize(nsample)
-        start = self.n_obs_steps - 1
-        end = start + self.n_action_steps
-        return {
-            'action': action_pred[:, start:end],
-            'action_pred': action_pred,
-        }
-
-    def search_candidates(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions,
-            tcont_context: Optional[torch.Tensor] = None,
-            return_scores: bool = False,
-            return_subgoals: bool = False,
-        ):
-        actions = None
-        values = None
-        for _ in range(n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=actions,
-                values=values,
-                tcont_context=tcont_context,
-            )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
-            if actions is None:
-                actions = new_action.unsqueeze(1)
-                values = new_value.unsqueeze(1)
-            else:
-                actions = torch.cat([actions, new_action.unsqueeze(1)], dim=1)
-                values = torch.cat([values, new_value.unsqueeze(1)], dim=1)
-        out = (actions, values)
-        if return_scores:
-            out = out + (values,)
-        if return_subgoals:
-            out = out + (None,)
-        return out
-
-    @torch.inference_mode()
-    def predict_n_actions(
-            self,
-            obs_dict: Dict[str, torch.Tensor],
-            verifier,
-            n_actions,
-            tcont_context: Optional[torch.Tensor] = None,
-        ):
-        if n_actions <= self.max_actions:
-            return self.search_candidates(
-                obs_dict, verifier, n_actions, tcont_context=tcont_context,
-            )
-
-        actions, values = self.search_candidates(
-            obs_dict, verifier, self.max_actions, tcont_context=tcont_context,
-        )
-        all_actions = actions.clone()
-        all_values = values.clone()
-        action_history = actions[:, 1:]
-        value_history = values[:, 1:]
-        for _ in range(self.max_actions, n_actions):
-            new_action = self.predict_action(
-                obs_dict,
-                actions=action_history,
-                values=value_history,
-                tcont_context=tcont_context,
-            )['action_pred']
-            new_value = verifier.get_value(obs_dict, new_action)
-            all_actions = torch.cat([all_actions, new_action.unsqueeze(1)], dim=1)
-            all_values = torch.cat([all_values, new_value.unsqueeze(1)], dim=1)
-            action_history = torch.cat(
-                [action_history[:, 1:], new_action.unsqueeze(1)], dim=1,
-            )
-            value_history = torch.cat(
-                [value_history[:, 1:], new_value.unsqueeze(1)], dim=1,
-            )
-        return all_actions, all_values
-
-    def generate_search_context(self, obs_dict, action=None):
-        """Not supported for the noise-conditioned variant.
-
-        This class draws a fresh ``tcont`` per batch and uses that SAME value both to noise
-        the encoded state and to generate the search context, so the candidates and the
-        observation they were produced from share one noise level (see ``compute_loss``).
-        A buffered context breaks that coupling: the context would carry the ``tcont`` of
-        the outer step while the obs it is paired with is re-encoded at a freshly drawn one.
-
-        Raising is deliberate. Inheriting the parent's implementation would silently drop
-        the ``tcont`` argument and train on mismatched pairs with no error. Buffering
-        ``tcont`` alongside the context would fix it, but that is a change to what this
-        variant measures and should be a deliberate decision, not a side effect.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support a buffered search context: its "
-            "tcont noise level couples the context to the observation encoding, and "
-            "buffering one without the other trains on mismatched pairs. Train this "
-            "variant with TrainMLPImageWorkspace (context regenerated per step).")
-
-    def compute_loss(self, batch, actions=None, values=None, return_aux=False):
-        if actions is not None:
-            raise NotImplementedError(
-                f"{type(self).__name__} cannot consume a pre-generated search context; "
-                "see generate_search_context.")
-        target_actions = self.normalizer['action'].normalize(batch['action'])
-        B, T, Da = target_actions.shape
-        assert T == self.horizon
-        assert Da == self.action_dim
-
-        # Single tcont per sample, reused for the search-context rollout and
-        # the diffusion loss so the candidate sequence is internally consistent.
-        device = target_actions.device
-        tcont = torch.rand(B, device=device)
-
-        obs_cond = self.encode_obs_cond(batch['obs'], tcont_context=tcont)
-
-        with torch.inference_mode():
-            actions, values = _run_search(
-                self, batch['obs'], self.max_actions - 1,
-                tcont_context=tcont,
-            )
-
-        trajectory = target_actions.unsqueeze(1).expand(
-            -1, self.max_actions, -1, -1,
-        )
-        noise = torch.randn_like(trajectory)
-        timesteps = torch.randint(
-            0,
-            self.noise_scheduler.config.num_train_timesteps,
-            (B, self.max_actions),
-            device=trajectory.device,
-        ).long()
-        flat_trajectory = trajectory.reshape(
-            B * self.max_actions, self.horizon, self.action_dim,
-        )
-        flat_noise = noise.reshape(
-            B * self.max_actions, self.horizon, self.action_dim,
-        )
-        noisy_trajectory = self.noise_scheduler.add_noise(
-            flat_trajectory, flat_noise, timesteps.reshape(-1),
-        ).reshape(B, self.max_actions, self.horizon, self.action_dim)
-
-        pred = self.model(
-            noisy_trajectory,
-            timesteps,
-            obs_cond=obs_cond,
-            actions=self._normalize_context_actions(actions),
-            values=values,
-        )
-
-        pred_type = self.noise_scheduler.config.prediction_type
-        if pred_type == 'epsilon':
-            target = noise
-        elif pred_type == 'sample':
-            target = trajectory
-        else:
-            raise ValueError(f"Unsupported prediction type {pred_type}")
-
-        loss = F.mse_loss(pred, target, reduction='none')
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        return loss.mean()

@@ -31,7 +31,7 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.workspace.base_workspace import clone_policy, set_initial_lr
 from diffusion_policy.workspace.train_mlp_image_workspace import (
-    TrainMLPImageWorkspace, _is_search_policy)
+    TrainMLPImageWorkspace, _is_search_policy, _stamp_dataset_provenance)
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -116,6 +116,7 @@ class TrainSearchOuterInnerRoboMonkeyWorkspace(TrainMLPImageWorkspace):
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
+        _stamp_dataset_provenance(cfg)
         self.last_rollout_step = 0
         self.last_val_step = 0
         self.last_sample_step = 0

@@ -83,6 +83,13 @@ class EMAModel:
                     ema_param.mul_(self.decay)
                     ema_param.add_(param.data.to(dtype=ema_param.dtype), alpha=1 - self.decay)
 
+            # Running statistics and discrete state are buffers, not parameters.
+            # Copy them directly: averaging a bool/counter is invalid, and leaving
+            # observation-noise scales at initialization changes inference noise.
+            for name, buffer in module.named_buffers(recurse=False):
+                ema_buffer = ema_module.get_buffer(name)
+                ema_buffer.copy_(buffer.to(device=ema_buffer.device, dtype=ema_buffer.dtype))
+
         # verify that iterating over module and then parameters is identical to parameters recursively.
         # assert old_all_dataptrs == all_dataptrs
         self.optimization_step += 1

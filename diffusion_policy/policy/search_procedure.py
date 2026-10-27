@@ -37,6 +37,31 @@ class SearchProcedureMixin:
     ``_encode_obs_features``.
     """
 
+    # ---- pickling / deepcopy -------------------------------------------------
+    # The policy owns torch.Generator streams (_selection_generator here, _crop_generator
+    # in CropScopeMixin). torch.Generator is not picklable, and the trainers deepcopy the
+    # policy (EMA copy, frozen collector snapshot: base_workspace.clone_policy), so the
+    # generators travel as their state tensors and are rebuilt on the copy. The copy
+    # therefore continues the SAME stream the original was at when cloned.
+    _GENERATOR_TAG = '__torch_generator__'
+
+    def __getstate__(self):
+        state = dict(super().__getstate__())
+        for k, v in list(state.items()):
+            if isinstance(v, torch.Generator):
+                state[k] = (self._GENERATOR_TAG, str(v.device), v.get_state())
+        return state
+
+    def __setstate__(self, state):
+        state = dict(state)
+        for k, v in list(state.items()):
+            if isinstance(v, tuple) and len(v) == 3 and v[0] == self._GENERATOR_TAG:
+                g = torch.Generator(device=v[1])
+                g.set_state(v[2])
+                state[k] = g
+        super().__setstate__(state)
+
+
     def _init_slot_weighting(self, slot_weight_decay=False, slot_weights=None):
         """Resolve the per-candidate-slot loss weighting. OFF (uniform) by default.
 
@@ -838,6 +863,26 @@ class SearchProcedureMixin:
         """
         self._sample_seeds = None if seeds is None else [int(x) for x in seeds]
         self._sample_draw = 0
+        self._obs_noise_draw = 0
+        self._obs_level_draw = 0
+
+    def _obs_random(self, shape, dtype, device, *, levels=None):
+        """Independent per-episode observation streams; training uses global RNG."""
+        if getattr(self, '_sample_seeds', None) is None:
+            if levels is None:
+                return torch.randn(shape, dtype=dtype, device=device)
+            return torch.randint(levels[0], levels[1], shape, device=device)
+        counter = '_obs_noise_draw' if levels is None else '_obs_level_draw'
+        draw = getattr(self, counter, 0)
+        setattr(self, counter, draw + 1)
+        assert len(self._sample_seeds) == shape[0]
+        salt = 17293481 if levels is None else 98376451
+        rows = []
+        for seed in self._sample_seeds:
+            g = torch.Generator().manual_seed((seed * 1_000_003 + salt + draw) % (2**63-1))
+            rows.append(torch.randn(tuple(shape[1:]), dtype=dtype, generator=g) if levels is None
+                        else torch.randint(levels[0], levels[1], tuple(shape[1:]), generator=g))
+        return torch.stack(rows).to(device)
 
     def _init_noise(self, shape, dtype, device, generator=None):
         """Initial denoising noise: per-row streams when seeded, else the global RNG.
@@ -1289,4 +1334,3 @@ class SearchProcedureMixin:
         if scores is not None:
             out['scores'] = scores
         return out
-
