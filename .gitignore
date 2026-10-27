@@ -139,3 +139,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Symlinks into gscratch
+/analysis
+/attn
+/ckpts
+/modes
+/videos
+/viz_quadrant_seed0
+/maze17pad_splits_all_metrics.csv
+/maze_splits_all_metrics.csv
+/openloop11_all_metrics.csv
