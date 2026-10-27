@@ -168,3 +168,8 @@ attention_analysis/outputs
 
 # Rendered mode/dispersion panels, 82M of PNG regenerable from mode_analysis/
 modes24/
+
+# Simpler pipeline scripts: keep their data/ and analysis/ subdirs tracked
+!scripts/simpler/data/
+!scripts/simpler/analysis/
+/simpler_veritas_videos
