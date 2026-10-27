@@ -1,0 +1,107 @@
+{
+ "BC|42": {
+  "step": 10000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.5434782608695652
+ },
+ "BC|43": {
+  "step": 10000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.5869565217391305
+ },
+ "BC|44": {
+  "step": 10000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.6739130434782609
+ },
+ "ST k1|42": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.6521739130434783
+ },
+ "ST k1|43": {
+  "step": 20000,
+  "n": 32,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.2826086956521739
+ },
+ "ST k1|44": {
+  "step": 20000,
+  "n": 32,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.30434782608695654
+ },
+ "ST k16 uniform|42": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.5434782608695652
+ },
+ "ST k16 uniform|43": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.5652173913043478
+ },
+ "ST k16 uniform|44": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.6304347826086957
+ },
+ "ST k16 flat600|42": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.782608695652174
+ },
+ "ST k16 flat600|43": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "corrupt",
+  "success": 0.9347826086956522
+ },
+ "ST k16 flat600|44": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "corrupt",
+  "success": 0.6521739130434783
+ },
+ "ST k16 ramp200to600|42": {
+  "step": 50000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "corrupt",
+  "success": 0.717391304347826
+ },
+ "ST k16 ramp200to600|43": {
+  "step": 30000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "corrupt",
+  "success": 0.6521739130434783
+ },
+ "ST k16 ramp200to600|44": {
+  "step": 2000,
+  "n": 64,
+  "sel": "argmax",
+  "obs": "clean",
+  "success": 0.6521739130434783
+ }
+}

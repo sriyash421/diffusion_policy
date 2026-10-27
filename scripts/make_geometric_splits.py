@@ -9,7 +9,7 @@ agent's. The two disagree: agent and block start in the same 256-px quadrant in 
 51 of 206 episodes.
 
 Family 1 -- quadrant. Eval is one quadrant of the 512x512 arena, train is everything
-else. The two datasets are not size-matched, because the demos are not uniform over the
+else. Four quadrants since 2026-10-06 (bottomleft and topright are the 2026-09 originals). The two datasets are not size-matched, because the demos are not uniform over the
 arena: 69 episodes start with the T bottom-left, only 33 top-right.
 
 Family 2 -- border. `d = min(x, y, 512-x, 512-y)` is the T's distance to the nearest
@@ -47,10 +47,37 @@ SEED = 42                        # only used to pick WHICH quadrant episodes are
 
 BORDER_BUDGETS = (30, 60, 100)
 CORE_TEST = 50                   # the shared interior eval set
-QUADRANTS = {
-    'bottomleft': lambda x, y: (x < WS / 2) & (y >= WS / 2),   # y is down (see frame())
-    'topright':   lambda x, y: (x >= WS / 2) & (y < WS / 2),
+# (x is left, y is down -- see frame()). Each quadrant is its half-plane pair: True means
+# the coordinate is >= WS/2.
+QUADRANT_SIDES = {
+    'bottomleft':  (False, True),
+    'topright':    (True, False),
+    'topleft':     (False, False),
+    'bottomright': (True, True),
 }
+QUADRANTS = {
+    q: (lambda x, y, hx=hx, hy=hy: ((x >= WS / 2) == hx) & ((y >= WS / 2) == hy))
+    for q, (hx, hy) in QUADRANT_SIDES.items()
+}
+# Family 3: smaller training sets for a quadrant split, val and test copied verbatim.
+QUAD_SUBSET_BUDGETS = {'bottomleft': (50,)}
+# Family 4 (2026-10-06): far-k training subset whose VAL is drawn from the train pool left
+# over after the far-k pick, not from the held-out quadrant -- for the quadrants whose
+# region is too small to spare a val set (topleft: 46 episodes) and, for a like-for-like
+# second held-out quadrant, bottomright. Test stays the parent's test; the parent's
+# in-region val (bottomright: 8 episodes) is UNUSED here, not merged into anything.
+# {quadrant: (k_train, n_val)}
+QUAD_FAR_POOLVAL = {'topleft': (50, 19), 'bottomright': (50, 19)}
+
+
+def quadrant_distance(qname, xy):
+    """Distance (px) from each T start to the nearest point of quadrant `qname`."""
+    x, y = xy[:, 0], xy[:, 1]
+    h = WS / 2
+    hx, hy = QUADRANT_SIDES[qname]
+    dx = np.maximum(0, h - x) if hx else np.maximum(0, x - h)
+    dy = np.maximum(0, h - y) if hy else np.maximum(0, y - h)
+    return np.hypot(dx, dy)
 
 
 def block_starts(zarr_path):
@@ -130,6 +157,47 @@ def main():
             {'quadrant': qname, 'n_eval_region': int(len(evalset)),
              'val_seed': SEED if len(val) else None},
             train, val, test, ends, args.zarr)
+
+        # --- family 3: a k-episode subset of that train set, same val and test --------
+        parent = f'pusht_blockquad_{qname}_train{len(train)}'
+        dq = quadrant_distance(qname, xy)
+        for k in QUAD_SUBSET_BUDGETS.get(qname, ()):
+            rnd = np.random.default_rng(SEED).permutation(train)[:k]
+            far = train[np.argsort(-dq[train], kind='stable')[:k]]   # ties -> episode index
+            finish(
+                f'pusht_blockquad_{qname}_train{k}_seed{SEED}',
+                f'train = the first {k} of a seed-{SEED} permutation of {parent} train; '
+                f'val and test copied verbatim.',
+                {'quadrant': qname, 'parent': parent, 'n_train': k, 'train_seed': SEED},
+                rnd, val, test, ends, args.zarr)
+            finish(
+                f'pusht_blockquad_{qname}_train{k}_far',
+                f'train = the {k} episodes of {parent} train whose T starts farthest from '
+                f'the {qname} quadrant (distance to the region, descending, ties by '
+                f'episode index); val and test copied verbatim.',
+                {'quadrant': qname, 'parent': parent, 'n_train': k,
+                 'train_quad_dist_min_px': round(float(dq[far].min()), 3)},
+                far, val, test, ends, args.zarr)
+
+        # --- family 4: far-k subset, val drawn from the leftover train pool -----------
+        if qname in QUAD_FAR_POOLVAL:
+            k, n_val = QUAD_FAR_POOLVAL[qname]
+            far = train[np.argsort(-dq[train], kind='stable')[:k]]
+            pool = np.setdiff1d(train, far)
+            pool_val = np.random.default_rng(SEED).permutation(pool)[:n_val]
+            finish(
+                f'pusht_blockquad_{qname}_train{k}_far_valpool{n_val}',
+                f'train = the {k} episodes of {parent} train whose T starts farthest from '
+                f'the {qname} quadrant (distance to the region, descending, ties by '
+                f'episode index); val = {n_val} episodes drawn by a seed-{SEED} permutation '
+                f'of the {len(pool)} {parent} train episodes NOT in that far-{k} set; '
+                f'test copied verbatim. The parent\'s {len(val)} in-region val episodes are '
+                f'unused.',
+                {'quadrant': qname, 'parent': parent, 'n_train': k, 'n_val': n_val,
+                 'val_source': 'train_pool', 'val_seed': SEED, 'n_pool': int(len(pool)),
+                 'train_quad_dist_min_px': round(float(dq[far].min()), 3),
+                 'n_region_unused': int(len(val))},
+                far, pool_val, test, ends, args.zarr)
 
     # --- family 2: border band -----------------------------------------------------
     core = order[n - CORE_TEST:]                  # largest d -> interior
