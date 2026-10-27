@@ -1,7 +1,8 @@
 """Waypoint-progress trackers for the Veritas PushT plans (v5 dual, v3 pusher-only),
 on the 96x96 obs image.
 
-``WaypointTracker`` is a line-for-line port of ``VeritasVerifier.update``
+``WaypointTracker`` (now in ``diffusion_policy.veritas.tracker``) is a line-for-line
+port of ``VeritasVerifier.update``
 (veritas/src/agent/veritas_verifier/veritas_verifier.py): hysteresis hold, min_hold,
 stall detection, the ahead/stalled/transit skip rules, and the
 ``0.7*progress + 0.3*exp(-d/sigma)`` score. Two deliberate departures:
@@ -40,23 +41,20 @@ from diffusion_policy.env.pusht.feedback_util import keypoints_at_pose
 from diffusion_policy.env.pusht.veritas.pusht_client import (
     WORKSPACE_SIZE, pose_keypoints_px)
 from diffusion_policy.env.pusht.veritas.schemas import VeritasDualPlan, VeritasPlan
+from diffusion_policy.veritas.tracker import (  # noqa: F401  (WaypointTracker re-exported)
+    TrackerParams, WaypointTracker, anchored)
 
 IMAGE_SIZE = 96
 # Veritas's pixel constants (sigma 50, skip margin 10, stall eps 1) are tuned for a
-# 640-wide frame; distances here live on 96 px.
-_SCALE = IMAGE_SIZE / 640.0
-SIGMA_PX = 50.0 * _SCALE           # 7.5
-SKIP_MARGIN_PX = 10.0 * _SCALE     # 1.5
-STALL_EPS_PX = 1.0 * _SCALE        # 0.15
-HYSTERESIS_RATIO = 1.25
-STALL_HIST_LEN = 6
-STALL_FRAMES = 6
-SKIP_FRAMES = 6
-TRANSIT_SKIP_FRAMES = 3
-TRANSIT_SKIP_T = 0.4
-SKIP_PENALTY = 0.05
-PROGRESS_WEIGHT = 0.7
-CLOSENESS_WEIGHT = 0.3
+# 640-wide frame; distances here live on 96 px. Rescaled by the shared tracker.
+PARAMS = TrackerParams.for_image_width(IMAGE_SIZE)
+SIGMA_PX = PARAMS.sigma_px             # 7.5
+SKIP_MARGIN_PX = PARAMS.skip_margin_px # 1.5
+STALL_EPS_PX = PARAMS.stall_eps_px     # 0.15
+
+
+def _anchored(kps_list, tols, holds, skips, start_kps):
+    return anchored(kps_list, tols, holds, skips, start_kps, params=PARAMS)
 
 
 def agent_px_from_pos(agent_pos) -> np.ndarray:
@@ -69,158 +67,6 @@ def t_kps_px_from_pose(block_pose) -> np.ndarray:
     """(..., 3) workspace block pose -> (..., 8, 2) pixel T keypoints (T_VERTS order)."""
     kps = keypoints_at_pose(np.asarray(block_pose, dtype=np.float64))
     return kps.astype(np.float64) * (IMAGE_SIZE / WORKSPACE_SIZE)
-
-
-class WaypointTracker:
-    """Progress along one waypoint list. See the module docstring for provenance."""
-
-    def __init__(self, waypoints_px: np.ndarray, tol_px, min_hold, skippable):
-        """
-        Args:
-            waypoints_px: (N, K, 2) pixel keypoint sets, one per waypoint. The caller
-                prepends the start anchor (Veritas's ``initialize_episode`` behaviour)
-                before constructing; nothing is prepended here.
-            tol_px / min_hold / skippable: per-waypoint, length N.
-        """
-        self.waypoints = np.asarray(waypoints_px, dtype=np.float64)
-        assert self.waypoints.ndim == 3 and self.waypoints.shape[-1] == 2, \
-            f'waypoints_px must be (N, K, 2), got {self.waypoints.shape}'
-        n = len(self.waypoints)
-        self.tol_px = np.asarray(tol_px, dtype=np.float64)
-        self.min_hold = np.asarray(min_hold, dtype=int)
-        self.skippable = np.asarray(skippable, dtype=bool)
-        assert self.tol_px.shape == (n,) and self.min_hold.shape == (n,) \
-            and self.skippable.shape == (n,)
-        self.i = 0
-        self.hold = 0
-        self.skip_hold_next = 0
-        self.transit_hold = 0
-        self.d_hist: deque = deque(maxlen=STALL_HIST_LEN)
-        self.stall_counter = 0
-        self.last_score = 0.0
-        self.last_d_px = float('nan')
-
-    @property
-    def n(self) -> int:
-        return len(self.waypoints)
-
-    @property
-    def done(self) -> bool:
-        return self.i >= self.n
-
-    def copy(self) -> 'WaypointTracker':
-        """Independent copy for scoring a candidate without touching the live state.
-        The waypoint arrays are immutable here and shared, so this is cheap."""
-        new = object.__new__(WaypointTracker)
-        new.__dict__.update(self.__dict__)
-        new.d_hist = deque(self.d_hist, maxlen=STALL_HIST_LEN)
-        return new
-
-    def _d(self, point: np.ndarray, idx: int) -> float:
-        """Mean per-keypoint distance from ``point`` (K, 2) to waypoint ``idx``."""
-        return float(np.linalg.norm(point - self.waypoints[idx], axis=-1).mean())
-
-    def update(self, point) -> dict:
-        """Advance on one observed frame. ``point`` is (K, 2) pixels."""
-        point = np.asarray(point, dtype=np.float64)
-        if self.done:
-            self.last_score = 1.0
-            return {'done': True, 'score': 1.0, 'active_idx': self.i, 'd_px': 0.0,
-                    'skip_reason': None}
-
-        d_px = self._d(point, self.i)
-        tol_on = self.tol_px[self.i]
-        tol_off = HYSTERESIS_RATIO * tol_on
-
-        # Hysteresis hold: dead-band between tol_on and tol_off avoids chatter.
-        if d_px < tol_on:
-            self.hold += 1
-        elif d_px > tol_off:
-            self.hold = 0
-
-        # Completion
-        if self.hold >= self.min_hold[self.i]:
-            self._advance()
-            if self.done:
-                self.last_score, self.last_d_px = 1.0, d_px
-                return {'done': True, 'score': 1.0, 'active_idx': self.i,
-                        'd_px': d_px, 'skip_reason': None}
-            d_px = self._d(point, self.i)
-            tol_on = self.tol_px[self.i]
-
-        # Stall detection
-        self.d_hist.append(d_px)
-        if len(self.d_hist) == self.d_hist.maxlen:
-            mean_d = float(np.mean(self.d_hist))
-            trend = float((self.d_hist[-1] - self.d_hist[0]) / self.d_hist.maxlen)
-            if (mean_d > tol_on) and (trend >= -STALL_EPS_PX):
-                self.stall_counter += 1
-            else:
-                self.stall_counter = 0
-
-        # Skip-ahead (max 1 step). The segment projection runs on the flattened
-        # (2K,) vectors; at K=1 that is Veritas's own point projection.
-        skip_reason = None
-        if self.i + 1 < self.n and self.skippable[self.i + 1]:
-            d_next = self._d(point, self.i + 1)
-            if d_next < self.tol_px[self.i + 1]:
-                self.skip_hold_next += 1
-            else:
-                self.skip_hold_next = 0
-
-            seg = (self.waypoints[self.i + 1] - self.waypoints[self.i]).ravel()
-            seg_len2 = float(np.dot(seg, seg))
-            rel = (point - self.waypoints[self.i]).ravel()
-            t_along = float(np.dot(rel, seg)) / seg_len2 if seg_len2 > 1e-6 else 0.0
-            if t_along > TRANSIT_SKIP_T and d_px > tol_on:
-                self.transit_hold += 1
-            else:
-                self.transit_hold = 0
-            transit_skip = self.transit_hold >= TRANSIT_SKIP_FRAMES
-
-            ahead = d_next + SKIP_MARGIN_PX < d_px
-            next_satisfied = self.skip_hold_next >= max(int(self.min_hold[self.i + 1]), 1)
-            stalled_flag = self.stall_counter >= STALL_FRAMES
-            if (transit_skip
-                    or (stalled_flag and next_satisfied)
-                    or (ahead and next_satisfied and self.skip_hold_next >= SKIP_FRAMES)):
-                skip_reason = ('transit_skip' if transit_skip
-                               else ('stalled_skip' if stalled_flag else 'ahead_skip'))
-                self._advance()
-                if not self.done:
-                    d_px = self._d(point, self.i)
-
-        # Scoring
-        progress = self.i / max(1, self.n)
-        closeness = float(np.exp(-d_px / SIGMA_PX)) if np.isfinite(d_px) else 0.0
-        score = PROGRESS_WEIGHT * progress + CLOSENESS_WEIGHT * closeness
-        if skip_reason is not None:
-            score = max(0.0, min(1.0, score - SKIP_PENALTY))
-        if self.done:
-            score = 1.0
-        self.last_score, self.last_d_px = score, d_px
-        return {'done': self.done, 'score': score, 'active_idx': self.i,
-                'd_px': d_px, 'skip_reason': skip_reason}
-
-    def _advance(self):
-        self.i += 1
-        self.hold = 0
-        self.skip_hold_next = 0
-        self.transit_hold = 0
-        self.d_hist.clear()
-        self.stall_counter = 0
-
-
-def _anchored(kps_list: List[np.ndarray], tols, holds, skips, start_kps: np.ndarray):
-    """Prepend the start anchor and pin the endpoints, as Veritas's
-    ``initialize_episode`` does: anchor at the current position with the first
-    waypoint's tol, min_hold 1; first and last skippable forced False."""
-    wps = np.stack([np.asarray(start_kps, dtype=np.float64)] + list(kps_list))
-    tols = np.concatenate([[tols[0]], tols])
-    holds = np.concatenate([[1], holds])
-    skips = np.concatenate([[False], skips])
-    skips[-1] = False
-    return WaypointTracker(wps, tols, holds, skips)
 
 
 class DualTracker:

@@ -1,4 +1,9 @@
-"""Pydantic schemas for the Veritas waypoint plan (ported from veritas/src/agent/veritas_verifier/schemas.py)."""
+"""PushT plan schemas on the 96x96 obs image.
+
+``VeritasWaypoint``/``VeritasPlan`` specialise the shared schemas
+(``diffusion_policy.veritas.schemas``) with pixel defaults rescaled by 96/640; the
+T-pose and dual plans are PushT-only.
+"""
 
 from __future__ import annotations
 
@@ -6,24 +11,21 @@ from typing import List, Optional, Tuple
 
 from pydantic import BaseModel
 
+from diffusion_policy.veritas.schemas import VeritasPlan as _BasePlan
+from diffusion_policy.veritas.schemas import VeritasWaypoint as _BaseWaypoint
 
-class VeritasWaypoint(BaseModel):
+
+class VeritasWaypoint(_BaseWaypoint):
     """Absolute pixel waypoint in the 96x96 obs image."""
 
-    uv: Tuple[float, float]
     # Veritas's 60 px is ~9.4% of a 640-wide frame; 9 px is the same fraction of 96.
     tol_px: float = 9.0
-    min_hold: int = 2
-    skippable: bool = True
-    weight: float = 1.0
 
 
-class VeritasPlan(BaseModel):
+class VeritasPlan(_BasePlan):
     """Waypoint plan returned by Gemini."""
 
     waypoints: List[VeritasWaypoint]
-    confidence: float = 0.0
-    notes: Optional[str] = None
 
 
 class VeritasPoseWaypoint(BaseModel):
