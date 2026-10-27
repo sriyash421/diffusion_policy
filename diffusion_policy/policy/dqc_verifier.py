@@ -57,7 +57,7 @@ import torch
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.35")
 
-_REPO = Path(__file__).resolve().parents[3]  # /home/harine/RoboMonkey
+_REPO = Path(__file__).resolve().parents[2]  # repo root (dqc is a submodule here)
 _DQC_PKG = _REPO / "dqc"
 
 
@@ -101,7 +101,7 @@ def _resolve_text_emb(instruction: str, text_emb_file: Optional[str]) -> np.ndar
     candidates = []
     if text_emb_file:
         candidates.append(Path(text_emb_file))
-    candidates.append(_REPO / "scriptsv2" / "q_fn_eval" / "task_emb_use3.npy")
+    candidates.append(_REPO / "scripts" / "simpler" / "q_fn_eval" / "task_emb_use3.npy")
     for c in candidates:
         if c and Path(c).is_file():
             emb = np.load(c).astype(np.float32)

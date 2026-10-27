@@ -3,7 +3,7 @@
 ``3rd_view_camera`` is mounted on the WidowX base link and the base is placed at a fixed
 per-task pose (``custom_scenes/base_env.py`` ``robot_init_options``), so K, the
 world->camera extrinsic and the base rotation are constants of a task. They are
-captured once from a live reset (``scriptsv2/veritas/capture_simpler_camera.py``) into
+captured once from a live reset (``scripts/simpler/veritas/capture_simpler_camera.py``) into
 a json that training can use without a simulator, and re-checked against every live
 reset by ``assert_matches``.
 """

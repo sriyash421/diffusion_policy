@@ -302,7 +302,7 @@ def test_plan_store_roundtrip_and_provider(tmp_path):
 # ------------------------------------------------------------------ split manifests
 
 def test_split_manifest_rules_nesting_and_loader(tmp_path, monkeypatch):
-    sys.path.insert(0, str(ROOT.parent / 'scriptsv2' / 'splits'))
+    sys.path.insert(0, str(ROOT / 'scripts' / 'simpler' / 'splits'))
     import make_simpler_splits as ms
     from diffusion_policy.common.split_manifest import load_split_manifest
     rng = np.random.default_rng(1)

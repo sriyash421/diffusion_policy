@@ -108,7 +108,7 @@ checkpoint:
   # not have selected the right checkpoint if it had been wired up: it monitored a LOSS
   # (train_loss / val_loss / train_action_mse_error), and on this task loss does not rank
   # policies -- success rate does. Selection is done from real evaluation instead
-  # (scriptsv2/eval_search), against checkpoints/step_*.ckpt.
+  # (scripts/simpler/eval_search), against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 

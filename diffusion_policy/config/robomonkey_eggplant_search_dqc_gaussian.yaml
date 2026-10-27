@@ -61,7 +61,7 @@ policy:
     image_obs_key: agentview_image
     # Precomputed multilingual USE-3 embedding (matches the model's text processor).
     # (If this path is missing the verifier falls back to the repo's copy.)
-    text_emb_file: /mmfs1/home/harine/RoboMonkey/scriptsv2/q_fn_eval/task_emb_use3.npy
+    text_emb_file: /mmfs1/home/harine/diffusion_policy_standalone_simpler/scripts/simpler/q_fn_eval/task_emb_use3.npy
     # 8-step DQC chunk_critic: one Q over the whole predicted chunk.
     critic_type: chunk
     q_agg: min
@@ -128,7 +128,7 @@ checkpoint:
   # not have selected the right checkpoint if it had been wired up: it monitored a LOSS
   # (train_loss / val_loss / train_action_mse_error), and on this task loss does not rank
   # policies -- success rate does. Selection is done from real evaluation instead
-  # (scriptsv2/eval_search), against checkpoints/step_*.ckpt.
+  # (scripts/simpler/eval_search), against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 

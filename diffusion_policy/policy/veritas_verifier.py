@@ -25,7 +25,7 @@ eval the env wrapper writes it, in training a precomputed per-frame array does.
 ``action_pos_scale``: ``None`` reproduces upstream exactly. The simulator's PD
 controller realises only ~70-85% of a commanded delta (fit on the strict eggplant
 data at H=8: ~(0.72, 0.74, 0.87) in base frame), so a per-axis scale corrects the mean
-endpoint error; ``scriptsv2/train_search/calibrate_distance_verifier.py --fit
+endpoint error; ``scripts/simpler/train_search/calibrate_distance_verifier.py --fit
 horizon_cumulative --frame base`` measures it.
 """
 

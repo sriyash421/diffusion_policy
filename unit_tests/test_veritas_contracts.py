@@ -18,7 +18,7 @@ from test_veritas_simpler import _camera
 
 def test_eval_overrides_preserve_normalization_and_use_execution_horizon(tmp_path, monkeypatch):
     # Load the actual helper without importing the simulator/GPU evaluation entrypoint.
-    script = Path(__file__).resolve().parents[2] / 'scriptsv2/eval_search/eval_search.py'
+    script = Path(__file__).resolve().parents[1] / 'scripts/simpler/eval_search/eval_search.py'
     tree = ast.parse(script.read_text())
     helper = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
                   and n.name == '_build_veritas_verifier')

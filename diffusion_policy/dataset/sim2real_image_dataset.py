@@ -79,7 +79,7 @@ class Sim2RealImageDataset(BaseImageDataset):
             use_disk=use_disk)
 
         # Per-frame obs computed OUTSIDE the zarr (e.g. Veritas waypoint targets built by
-        # scriptsv2/veritas/build_veritas_targets.py). Each is a .npy of shape
+        # scripts/simpler/veritas/build_veritas_targets.py). Each is a .npy of shape
         # (n_steps, D) aligned row-for-row with the zarr, attached as data/obs/<key>, and
         # declared in shape_meta.auxiliary_obs so the sampler emits it without making it
         # a policy input. Validated against the zarr's episode boundaries so a stale

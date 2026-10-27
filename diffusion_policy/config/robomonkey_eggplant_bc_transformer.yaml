@@ -10,10 +10,10 @@
 #
 # NO verifier at training time. At eval time, N independent samples from this
 # policy are scored by the in-process RoboMonkey verifier via BCSearchWrapper
-# (see scriptsv2/eval_search/eval_search.py and search_policy_robomonkey.py).
+# (see scripts/simpler/eval_search/eval_search.py and search_policy_robomonkey.py).
 #
 # Train:
-#   cd /mmfs1/home/harine/RoboMonkey/diffusion_policy
+#   cd /mmfs1/home/harine/diffusion_policy_standalone_simpler
 #   python diffusion_policy/workspace/train_diffusion_unet_image_workspace.py \
 #       --config-name=robomonkey_eggplant_bc_transformer \
 #       +training.max_gradient_steps=7000 \
@@ -145,7 +145,7 @@ checkpoint:
   # not have selected the right checkpoint if it had been wired up: it monitored a LOSS
   # (train_loss / val_loss / train_action_mse_error), and on this task loss does not rank
   # policies -- success rate does. Selection is done from real evaluation instead
-  # (scriptsv2/eval_search), against checkpoints/step_*.ckpt.
+  # (scripts/simpler/eval_search), against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 

@@ -130,7 +130,7 @@ class CachedPlanProvider:
         if not (self.allow_live and self.planner is not None):
             raise FileNotFoundError(
                 f'no plan for seed {seed} at {path}. Generate it offline with '
-                f'scriptsv2/veritas/plan_simpler_episodes.py, or set '
+                f'scripts/simpler/veritas/plan_simpler_episodes.py, or set '
                 f'VERITAS_ALLOW_LIVE=1 to call Gemini at reset.')
         # Gemini overload (503) spikes outlast the client's own retries; keep trying for
         # up to VERITAS_PLAN_MAX_WAIT_S before giving up (nothing has run yet at reset)

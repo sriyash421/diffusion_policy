@@ -59,7 +59,7 @@ flip about z between the action frame and the pose frame, on top of the unit sca
 A single pooled scalar averages the two negative axes against the positive one, very
 nearly cancels, and reports a near-zero fit (R^2 = 0.03) for a relationship that is
 in fact strong (per-axis |r| = 0.79 / 0.88 / 0.88, R^2 ~ 0.70 with the signs right).
-Calibrate with ``scriptsv2/train_search/calibrate_distance_verifier.py``.
+Calibrate with ``scripts/simpler/train_search/calibrate_distance_verifier.py``.
 
 The deltas are NOT body-frame: rotating them by the end-effector quaternion before
 integrating makes the fit strictly WORSE (R^2 0.13 vs 0.70), so no rotation is applied
@@ -195,7 +195,7 @@ class DistanceVerifier:
             print("[DistanceVerifier] action_pos_scale=(1,1,1) — the UNCALIBRATED "
                   "default. Predicted chunk displacement will be wrong in both scale "
                   "AND sign (the measured map on the eggplant set is negative on x,y). "
-                  "Run scriptsv2/train_search/calibrate_distance_verifier.py.")
+                  "Run scripts/simpler/train_search/calibrate_distance_verifier.py.")
         if normalize == "fixed" and value_mean == 0.0 and value_std == 1.0:
             print("[DistanceVerifier] normalize='fixed' with the identity affine "
                   "(mean=0, std=1) — values are raw negative metres. Calibrate "

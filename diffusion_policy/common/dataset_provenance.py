@@ -4,7 +4,7 @@ No dataset stores its seeds, but every filter/subsample stage keeps the raw-shar
 coordinates (``src_shard``, ``src_episode``) in ``filter_manifest.json``, and collection
 used ``env.reset(seed=START_SEED + global_idx)``, so a seed is
 ``START_SEED + start_index[src_shard] + src_episode``. The split manifests under ``config/splits/simpler/<task>/`` carry that seed per episode
-and are the eval seed source; ``scriptsv2/eval_search/demoseeds/<task>_<split>.json``
+and are the eval seed source; ``scripts/simpler/eval_search/demoseeds/<task>_<split>.json``
 (``reconstruct_demo_seeds.py``) predates them and only describes the archived sub50 sets.
 """
 import hashlib
@@ -26,7 +26,7 @@ def demoseed_dir() -> Path:
     env = os.environ.get('DEMOSEED_DIR')
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3] / 'scriptsv2' / 'eval_search' / 'demoseeds'
+    return Path(__file__).resolve().parents[2] / 'scripts' / 'simpler' / 'eval_search' / 'demoseeds'
 
 
 def file_md5(path) -> Optional[str]:
@@ -44,7 +44,7 @@ def load_split(env_task: str, split: str) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f'no demo-seed manifest for task={env_task!r} split={split!r}: {path}. '
-            f'Run scriptsv2/analysis/reconstruct_demo_seeds.py first.')
+            f'Run scripts/simpler/analysis/reconstruct_demo_seeds.py first.')
     d = json.loads(path.read_text())
     d['path'] = str(path)
     d['md5'] = file_md5(path)

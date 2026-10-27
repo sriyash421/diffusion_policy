@@ -19,7 +19,7 @@
 #
 # Run in the `dqc_jax` env (no JAX needed here, but it is the env the launcher and the
 # rest of this pipeline use). Train:
-#   bash scriptsv2/train_search/launch_distance_search_sub50.sh
+#   bash scripts/simpler/train_search/launch_distance_search_sub50.sh
 defaults:
   - _self_
   - task: robomonkey_eggplant_state
@@ -114,7 +114,7 @@ policy:
     w_reach: 1.0
     w_place: 1.0
     # DATASET CONSTANTS — overridden by the launcher from
-    # scriptsv2/train_search/calibrate_distance_verifier.py. The defaults here are
+    # scripts/simpler/train_search/calibrate_distance_verifier.py. The defaults here are
     # deliberately the identity so an uncalibrated run announces itself in the log
     # rather than quietly ranking candidates on a wrong length scale.
     # PER-AXIS (x, y, z), not a scalar: the measured map on this data is
@@ -204,7 +204,7 @@ logging:
 checkpoint:
   # No topk/best checkpoint, deliberately: it would monitor a LOSS, and loss does not
   # rank policies on this task — success rate does. Selection is done from real
-  # evaluation (scriptsv2/eval_search) against checkpoints/step_*.ckpt.
+  # evaluation (scripts/simpler/eval_search) against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 

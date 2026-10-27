@@ -12,15 +12,15 @@
 # of the distance config so the arms differ ONLY in the verifier.
 #
 # Per-frame targets (task.dataset.extra_obs_arrays.veritas_targets) come from
-# scriptsv2/veritas/build_veritas_targets.py; the verifier reads them as obs. Train:
-#   bash scriptsv2/train_search/train_search_veritas.sbatch (via sbatch)
+# scripts/simpler/veritas/build_veritas_targets.py; the verifier reads them as obs. Train:
+#   bash scripts/simpler/train_search/train_search_veritas.sbatch (via sbatch)
 defaults:
   - _self_
   - task: robomonkey_eggplant_state
 
 task:
   dataset:
-    # Strict dataset + split manifest (scriptsv2/splits/make_simpler_splits.py); the
+    # Strict dataset + split manifest (scripts/simpler/splits/make_simpler_splits.py); the
     # launcher sets both.
     dataset_dir: /gscratch/robotics/harine/data/strict_distance_success_split
     split_file: null
@@ -95,7 +95,7 @@ policy:
 
   verifier:
     _target_: diffusion_policy.policy.veritas_verifier.VeritasPixelVerifier
-    # Fixed camera + base pose of the task (scriptsv2/veritas/capture_simpler_camera.py).
+    # Fixed camera + base pose of the task (scripts/simpler/veritas/capture_simpler_camera.py).
     camera_file: diffusion_policy/config/veritas/camera_widowx_put_eggplant_in_basket.json
     # null = 1:1; any fitted scale must match the executed/scored horizon.
     action_pos_scale: null
@@ -192,7 +192,7 @@ logging:
 checkpoint:
   # No topk/best checkpoint, deliberately: it would monitor a LOSS, and loss does not
   # rank policies on this task — success rate does. Selection is done from real
-  # evaluation (scriptsv2/eval_search) against checkpoints/step_*.ckpt.
+  # evaluation (scripts/simpler/eval_search) against checkpoints/step_*.ckpt.
   save_last_ckpt: True
   save_last_snapshot: False
 
