@@ -1,0 +1,7 @@
+[submodule "SimplerEnv"]
+	path = SimplerEnv
+	url = https://github.com/simpler-env/SimplerEnv
+[submodule "dqc"]
+	path = dqc
+	url = git@github.com:sriyash421/dqc.git
+	branch = harine-simpler
