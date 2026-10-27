@@ -305,6 +305,12 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
+        if 'action_mask' in batch:
+            # steps the dataset edge-padded past the episode's end (PushTImageDataset
+            # emit_action_mask): excluded, and the mean is taken over the valid steps only
+            am = batch['action_mask'].to(loss.dtype)[:, :, None]           # (B, T, 1)
+            loss = (loss * am).sum() / (am.expand_as(loss) * loss_mask.type(loss.dtype)).sum().clamp_min(1.0)
+            return loss
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
 

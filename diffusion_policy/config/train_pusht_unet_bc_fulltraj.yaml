@@ -1,0 +1,36 @@
+# UNet BC that predicts the WHOLE trajectory open-loop: horizon 300 (the episode cap) denoised in
+# one pass from the first frame and executed without replanning. The full-trajectory BC baseline
+# beside the DT arms (eval_dt_pusht.py, ChunkPolicyAdapter: with n_action_steps == the cap, each
+# attempt is one sample). Everything else is train_pusht_unet_bc's.
+#
+# Windows start at every frame (the chunk arm's sampler), edge-padded past the episode's end by
+# repeating the last action; those steps carry no loss (task.dataset.emit_action_mask), so a
+# window asks "finish the trajectory from here" and the model is never trained on the pad.
+defaults:
+  - train_pusht_unet_bc
+  - _self_
+
+name: train_pusht_unet_bc_fulltraj
+run_name: unetbc-full${horizon}_ver-${verifier_tag}${gm_suffix}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+n_demos: 50
+split_suffix: _split-blq50far
+
+# one conditioning frame; the action chunk IS the trajectory (300 = PushTEnv's step cap, and a
+# multiple of 4 as the UNet's two downsamplings need)
+horizon: 300
+n_obs_steps: 1
+n_action_steps: 300
+
+task:
+  dataset:
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    n_test_episodes: 50
+    n_val_episodes: 19
+    emit_action_mask: True
+
+# a 300-step window is ~19x the chunk arm's; keep the batch at 32 (fits an L40S) and the budget
+dataloader:
+  batch_size: 32
+val_dataloader:
+  batch_size: 32

@@ -462,7 +462,8 @@ class PushTImageDataset(BaseImageDataset):
             return_sequences=False,
             split_file=None,
             goal_mask_noise=None,
-            transition_file=None
+            transition_file=None,
+            emit_action_mask=False,
             ):
 
         super().__init__()
@@ -590,6 +591,11 @@ class PushTImageDataset(BaseImageDataset):
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.return_sequences = return_sequences
+        # emit `action_mask` (horizon,) bool per window: False where the sampler EDGE-PADDED
+        # past the episode's end (the last action repeated), so a long-horizon open-loop
+        # policy can mask those steps out of its loss. Off by default: the chunk arms never
+        # look at it and their batches are left exactly as they were.
+        self.emit_action_mask = emit_action_mask
 
     def _index_filter(self, split):
         """The window filter for one split, or None when no transition manifest is loaded.
@@ -761,6 +767,11 @@ class PushTImageDataset(BaseImageDataset):
         sample = self.sampler.sample_sequence(idx)
         data = self._sample_to_data(sample)
         torch_data = dict_apply(data, torch.from_numpy)
+        if self.emit_action_mask and not self.return_sequences:
+            _, _, s0, s1 = self.sampler.indices[idx]
+            mask = torch.zeros(self.horizon, dtype=torch.bool)
+            mask[int(s0):int(s1)] = True
+            torch_data['action_mask'] = mask
         if self._goal_mask_on:
             from diffusion_policy.env.pusht.goal_mask import apply_goal_mask_noise
             img = torch_data['obs']['image']

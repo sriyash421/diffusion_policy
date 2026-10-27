@@ -1,0 +1,11 @@
+# Single-step k=1, matching the existing geometric-split ST baseline's trainer.
+# Preserve depth, heads, dropout and clipping; widen only n_emb.
+defaults:
+  - train_pusht_diffusion_search_single
+  - _self_
+
+name: train_pusht_st_k1_capacity
+n_candidates: 1
+arch_suffix: _capacity-st${policy.n_layer}x${policy.n_head}x${policy.n_emb}
+policy:
+  n_emb: 528
