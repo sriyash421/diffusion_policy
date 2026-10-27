@@ -4,83 +4,28 @@ Scripts that move data from raw sources to trained diffusion-policy
 checkpoints, run SimplerEnv evaluations on those checkpoints, and analyze
 their action-variance / verifier-ranked performance.
 
-Organized into six sub-pipelines. Each directory is self-contained: the
+Organized into sub-pipelines. Each directory is self-contained: the
 shell wrapper inside it knows how to find its sibling Python file.
 
 ```
 scripts/simpler/
-├── data_collect/        # 1. roll out the RoboMonkey VLA in SIMPLER  →  zarr shards
-├── bridge_to_zarr/      # 2. download + filter Bridge V2  →  SIMPLER-style zarr
 ├── plot_zarr/           # 3. plot a (multi-)zarr dataset
 ├── eval_diffusion/      # 4. evaluate a diffusion_policy ckpt in SimplerEnv
-├── bon_eval/            # 5. RoboMonkey best-of-N verifier sweeps
 └── action_variance/     # 6. measure per-step action variance (motivation for BON)
 ```
 
-The companion **[README_L2S.md](../README_L2S.md)** walks through these
+The companion **[README_L2S.md](../../docs/simpler/README_L2S.md)** walks through these
 sub-pipelines end-to-end with concrete examples.
 
 ---
 
-## 1. `data_collect/` — SIMPLER rollout collection
+## Data collection and filtering (not in this repo)
 
-Roll out the RoboMonkey/OpenVLA policy in SimplerEnv and write trajectories to
-SIMPLER-style zarr shards (the same layout `bridge_to_zarr.py` mirrors). Shards
-store **both successful and failed** episodes by default, plus the agentview RGB
-frames (`--save_images`), so they can train image- or state-conditioned policies.
-
-| Script | What it does |
-|---|---|
-| `collect_simpler.sh` | Task-parameterized collector wrapping `openvla-mini/.../collect_trajectories.py`. Pick the task with `TASK=` (`carrot`/`eggplant`/`spoon`/`stack`, or a raw `widowx_*` id); positional args are `START_INDEX NUM SHARD`. Activates `simpler_env`, runs headless via `xvfb-run`/osmesa. Requires a running OpenVLA sglang action server. |
-| `collect_simpler.sbatch` | A100 batch job for any task: launches the OpenVLA server in the background, waits for it to become healthy, then runs `collect_simpler.sh` and tears everything down on exit. Parameterized via `--export`. |
-| `filter_val_success.py` | Post-hoc filter: copy only the successful episodes out of a collected validation shard into a `*_val_success` zarr. |
-
-```bash
-# One carrot shard (success + fail, with images) on an A100 — server auto-launched:
-sbatch --export=ALL,TASK=carrot,START_INDEX=0,NUM=2000,SHARD=state0.zarr \
-    scripts/simpler/data_collect/collect_simpler.sbatch
-
-# Other tasks: TASK=eggplant | spoon | stack. Override the GPU pool if needed:
-sbatch --partition=gpu-a40 --gres=gpu:a40:1 \
-    --export=ALL,TASK=eggplant,START_INDEX=0,NUM=2000,SHARD=state0.zarr \
-    scripts/simpler/data_collect/collect_simpler.sbatch
-
-# Chain shards back-to-back so they queue in order:
-J=$(sbatch --parsable --export=ALL,TASK=carrot,START_INDEX=0,NUM=2000,SHARD=state0.zarr     scripts/simpler/data_collect/collect_simpler.sbatch)
-J=$(sbatch --parsable --dependency=afterany:$J --export=ALL,TASK=carrot,START_INDEX=2000,NUM=2000,SHARD=state1.zarr scripts/simpler/data_collect/collect_simpler.sbatch)
-
-# Run the collector directly against an already-running server (no SLURM):
-TASK=carrot bash scripts/simpler/data_collect/collect_simpler.sh 0 2000 state0.zarr
-
-# Keep only successes (e.g. for a clean val set), no images:
-TASK=carrot ONLY_SUCCESSFUL=True SAVE_IMAGES=False \
-    bash scripts/simpler/data_collect/collect_simpler.sh 0 500 val0.zarr
-```
-
-Shards land in `/gscratch/robotics/harine/data/<task>/` (e.g. `carrot_on_plate/`,
-`eggplant_in_basket/`) unless `OUT_DIR=` overrides it. Knobs: `TASK`, `OUT_DIR`,
-`SAVE_IMAGES` (default `True`), `ONLY_SUCCESSFUL` (default `False`),
-`INITIAL_SAMPLES` (samples/step for the recorded action mean/std), and
-`ACTION_SERVER_PORT` (default `3200`).
-
-## 2. `bridge_to_zarr/` — Bridge V2 → Zarr
-
-| Script | What it does |
-|---|---|
-| `filter_bridge_v2.py` | Download Bridge V2 `meta/*` from HuggingFace, filter tasks by keyword (e.g. `carrot,plate`), download only the matching `.parquet` + `.mp4` episodes. |
-| `bridge_to_zarr.py` | Convert the filtered LeRobot subset into a SIMPLER-compatible zarr shard (proxy `insertive_asset_pose` / `receptive_asset_pose`, finite-diff EE velocity, etc.). |
-| `bridge_to_zarr.sh` | One-shot wrapper: runs the filter stage, then the convert stage for both carrot and eggplant. |
-
-```bash
-# Full pipeline (filter + download + convert):
-bash scripts/simpler/bridge_to_zarr/bridge_to_zarr.sh
-
-# Dry run (just print task matches, no download):
-DRY_RUN=1 bash scripts/simpler/bridge_to_zarr/bridge_to_zarr.sh
-
-# Filter only (skip zarr conversion):
-SKIP_CONVERT=1 bash scripts/simpler/bridge_to_zarr/bridge_to_zarr.sh
-```
+The collected datasets stay on gscratch; how they were collected (OpenVLA expert, seeds,
+stored keys) and how the strict filters work is documented next to the data in
+[`/gscratch/robotics/harine/data/README.md`](/gscratch/robotics/harine/data/README.md).
+The collection / filter scripts (`data_collect/`, `bridge_to_zarr/`) and the LLaVA BoN
+sweeps (`bon_eval/`) are at `github.com/harine/RoboMonkey` @ `2634271`, `scriptsv2/`.
 
 ## 3. `plot_zarr/` — Zarr dataset plots
 
@@ -129,43 +74,6 @@ python scripts/simpler/eval_diffusion/eval_summary.py \
     data/eval/<run_b>/eval_log.json
 ```
 
-## 5. `bon_eval/` — Best-of-N verifier sweeps
-
-| Script | What it does |
-|---|---|
-| `bon_eval.sh` | Ordered sweep over `k ∈ {2,4,8,16,32,64}` (U-Net only by default; set `SKIP_MLP=0` and pass an `<mlp_ckpt>` to also run the MLP rows), using fixed `replan_every_n_steps=4 / score_num_actions=4`. Has resume support (skips runs whose `eval_log.json` already exists; set `FORCE=1` to override). Aggregates everything into a side-by-side summary at the end. Supports `SEEDS="..."` to use an explicit seed list (output dirs are namespaced with `_seeds<tag>` so they don't collide with default sweeps), and `VIZ_Q=1` to dump per-replan Q-values for branching viz. |
-
-```bash
-# Default U-Net-only sweep on eggplant (100 episodes per cell)
-bash scripts/simpler/bon_eval/bon_eval.sh
-
-# Quick smoke test (5 episodes per cell)
-bash scripts/simpler/bon_eval/bon_eval.sh 5
-
-# Re-run only k=16 cells
-ONLY_K="16" bash scripts/simpler/bon_eval/bon_eval.sh
-
-# Switch task
-TASK=carrot bash scripts/simpler/bon_eval/bon_eval.sh
-
-# Sweep ONE custom U-Net checkpoint, explicit seeds, save Q-values
-# (per-replan candidate actions + verifier rewards) for later branching viz:
-SEEDS="17,50,3,9" VIZ_Q=1 \
-    bash scripts/simpler/bon_eval/bon_eval.sh \
-        /path/to/checkpoints/latest.ckpt
-# Each row writes data/eval/bon/<run_name>/replan4_k<k>_score4_seeds17_50_3_9/
-#   ├── eval_log.json
-#   ├── episodes.jsonl
-#   └── bon_q/ep000_seed17.npz, ep001_seed50.npz, ...
-
-# Include MLP rows too (legacy mode):
-SKIP_MLP=0 bash scripts/simpler/bon_eval/bon_eval.sh \
-    /path/to/unet/checkpoints/latest.ckpt \
-    /path/to/mlp/checkpoints/latest.ckpt
-```
-
-Requires the monkey-verifier server running on `REWARD_SERVER_PORT` (default `3100`).
-
 ## 6. `action_variance/` — Per-step action variance
 
 | Script | What it does |
@@ -182,11 +90,6 @@ N_SAMPLES=64 bash scripts/simpler/action_variance/analyze_variance.sh
 
 ## Notes
 
-- `scripts/` (sibling directory) holds environment / infrastructure scripts
-  (`setup.sh`, `env_*.sh`, `vulkan.sh`, `run_openvla_server.sh`) plus the older
-  per-task SIMPLER collectors (`collect_carrot_on_plate.sh`,
-  `collect_eggplant_in_basket.sh`). The task-parameterized `data_collect/`
-  scripts above generalize those two; the originals are kept for reference.
 - All `bash *.sh` scripts here assume the `simpler_env` conda env exists and
   the `diffusion_policy` repo is cloned at `$DIFFUSION_POLICY_ROOT`
   (default `~/diffusion_policy`).

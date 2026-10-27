@@ -59,7 +59,9 @@ pip install --no-deps --no-build-isolation -e SimplerEnv/ManiSkill2_real2sim -e 
 
 ## Data
 
-Nothing was moved. All datasets and runs stay on gscratch:
+Nothing was moved. All datasets and runs stay on gscratch. How the data was collected
+(OpenVLA expert, seeds, stored keys) and how the strict filters work:
+[`/gscratch/robotics/harine/data/README.md`](/gscratch/robotics/harine/data/README.md).
 
 | Where | What |
 | --- | --- |
@@ -93,8 +95,8 @@ in `RoboMonkey/.git/modules/diffusion_policy`):
   `eval_search/sweep_bc_llava.sbatch`, `train_search/{train_diffusion_llava_na1,smoke_kvprefix}.sbatch`,
   `analysis/make_verifier_videos.sbatch`. The optional LLaVA verifier paths in
   `eval_search.py` / `eval_diffusion.py` still resolve to `RoboMonkey/monkey-verifier`.
-- `openvla-mini/` (the OpenVLA expert). Collecting **new** data
-  (`scripts/simpler/data_collect/collect_simpler.{sh,sbatch}`) still runs
-  `RoboMonkey/openvla-mini/experiments/robot/simpler/collect_trajectories.py` against the
-  sglang OpenVLA server. `collect_simpler.sh` registers the wide eggplant task before
-  running it. The filter / subsample scripts in `data_collect/` don't need OpenVLA.
+- Data collection and filtering: `openvla-mini/` (the OpenVLA expert), and the scripts
+  `scriptsv2/{data_collect,bridge_to_zarr}/`, pinned at `github.com/harine/RoboMonkey` @
+  `2634271`. How the existing data was collected and filtered is written up next to it in
+  `/gscratch/robotics/harine/data/README.md`. To collect more wide-eggplant data from
+  RoboMonkey, import `diffusion_policy.env.simpler.wide_eggplant` before the collector makes the env.

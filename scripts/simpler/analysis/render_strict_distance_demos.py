@@ -3,7 +3,7 @@
 
 These are the success-only eggplant demos whose eggplant->basket distance
 decreases monotonically over time (no drops / re-grasps) — see
-scripts/simpler/data_collect/filter_strict_distance_success.py and the dataset README.
+RoboMonkey@2634271 scriptsv2/data_collect/filter_strict_distance_success.py and /gscratch/robotics/harine/data/README.md.
 
 Reads the merged Zarr replay buffer (agentview_image frames) and the companion
 filter_manifest.json (per-episode source provenance + distance metrics), then

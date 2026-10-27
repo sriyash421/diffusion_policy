@@ -1,7 +1,7 @@
 """Plot dataset-level diagnostics for a filtered Bridge V2 LeRobot subset.
 
 This is the *pre-conversion* preview: it reads the raw LeRobot v2.0 layout
-(parquet + mp4) produced by ``scripts/simpler/bridge_to_zarr/filter_bridge_v2.py``
+(parquet + mp4) produced by ``RoboMonkey@2634271 scriptsv2/bridge_to_zarr/filter_bridge_v2.py``
 without going through ``bridge_to_zarr.py`` first. Useful for inspecting
 camera frames and per-step traces before committing to a zarr conversion.
 
@@ -451,7 +451,7 @@ def main() -> int:
     if not info_path.exists() or not episodes_path.exists():
         sys.exit(
             f"Missing meta files in {data_dir}/meta. "
-            "Run scripts/simpler/bridge_to_zarr/filter_bridge_v2.py first."
+            "Run RoboMonkey@2634271 scriptsv2/bridge_to_zarr/filter_bridge_v2.py first."
         )
     info = json.loads(info_path.read_text())
     chunk_size = int(info.get("chunks_size", CHUNK_SIZE_DEFAULT))
