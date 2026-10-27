@@ -262,6 +262,42 @@ class OnlineSearchPolicy(ObsCorruptionMixin, SearchProcedureMixin, BaseImagePoli
                 for r in rollouts]
         return self.pad_context_rows(rows)
 
+    # ------------------------------------------------------------------ stepping
+    def reset(self):
+        """Start a new episode stream: drop the KV cache."""
+        self._past = None
+
+    def begin_attempt(self):
+        """Attempt boundary. The KV cache is KEPT, as `_incontext_rollout_chunk` keeps `past`
+        across its n_trajs loop: attempt k attends to attempts < k through the cache."""
+
+    def _cached_step(self, obs):
+        """One (B, 1, ...) obs frame through the GPT2 with the running KV cache -> (token (B, hidden),
+        action (B, Da) raw)."""
+        obs_t = {k: torch.as_tensor(v, device=self.device, dtype=self.dtype) for k, v in obs.items()
+                 if k in self.normalizer.params_dict}
+        token = self._encode_obs(self.normalizer.normalize(obs_t))      # (B, 1, hidden)
+        gpt = self.transformer(inputs_embeds=token, past_key_values=getattr(self, '_past', None),
+                               use_cache=True)
+        self._past = gpt.past_key_values
+        hidden = gpt.last_hidden_state[:, -1]
+        log_std = self.log_std_head(hidden).clamp(min=self.log_std_limits[0], max=self.log_std_limits[1])
+        naction = Normal(self.mean_head(hidden), torch.exp(log_std)).rsample()
+        return token[:, -1], self.normalizer['action'].unnormalize(naction)
+
+    @torch.no_grad()
+    def predict_step(self, obs_dict):
+        """The eval harness's per-step call: raw obs (B, 1, ...) -> (action (B, Da), active (B,)).
+
+        Extra harness keys (`fb`, `done`, `attention_mask`) are ignored: this model reads its
+        feedback from the obs and has no stop head, so every row stays active and the harness
+        ends attempts on env done / its guard.
+        """
+        B = next(iter(obs_dict.values())).shape[0]
+        _, action = self._cached_step({k: v[:, -1:] for k, v in obs_dict.items()
+                                       if k not in ('fb', 'done', 'attention_mask')})
+        return action, torch.ones(B, dtype=torch.bool, device=action.device)
+
     def _incontext_rollout_chunk(self, states_chunk: np.ndarray, n_trajs: int):
         """Autoregressively generate n_trajs rollouts per env with the full transformer.
 
@@ -280,26 +316,16 @@ class OnlineSearchPolicy(ObsCorruptionMixin, SearchProcedureMixin, BaseImagePoli
             states_full = states_chunk
 
         round_tokens = [[[] for _ in range(self.n_envs)] for _ in range(n_trajs)]
-        past = None
+        self.reset()
         for k in range(n_trajs):
+            self.begin_attempt()
             set_reset_states(vec, list(states_full))
             obs = vec.reset()  # dict, each (n_envs, 1, ...)
             done = np.zeros(self.n_envs, dtype=bool)
             for _ in range(self.max_rollout_steps):
-                obs_t = {key: torch.as_tensor(v, device=self.device, dtype=self.dtype)
-                         for key, v in obs.items()}
-                token = self._encode_obs(self.normalizer.normalize(obs_t))  # (n_envs, 1, hidden)
-                gpt = self.transformer(
-                    inputs_embeds=token, past_key_values=past, use_cache=True)
-                past = gpt.past_key_values
-                hidden = gpt.last_hidden_state[:, -1]  # (n_envs, hidden)
-                log_std = self.log_std_head(hidden).clamp(
-                    min=self.log_std_limits[0], max=self.log_std_limits[1])
-                naction = Normal(self.mean_head(hidden), torch.exp(log_std)).rsample()
-                action = self.normalizer['action'].unnormalize(naction)
-
+                token, action = self._cached_step(obs)
                 for i in range(self.n_envs):
-                    round_tokens[k][i].append(token[i, -1])
+                    round_tokens[k][i].append(token[i])
 
                 obs, _, step_done, _ = vec.step(
                     action.detach().cpu().numpy()[:, None, :])

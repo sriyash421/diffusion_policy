@@ -1,0 +1,14 @@
+# DT k=8 with the env's GROUND-TRUTH coverage as the end-of-attempt feedback: the boundary token
+# carries [verifier value at the final state, max coverage over the attempt] instead of the
+# verifier value twice. Per-step feedback is unchanged. Everything else is train_pusht_dt_search's.
+# Separate file (not an override) so the run name records the arm and a requeue of the
+# verifier-only k=8 run (dt-gpt2_k8_fb-step_...) keeps its own token semantics.
+defaults:
+  - train_pusht_dt_search
+  - _self_
+
+name: train_pusht_dt_search_cov
+run_name: dt-${arch_tag}_k${n_candidates}_fb-${reward_mode}_tf-cov_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+policy:
+  terminal_feedback: coverage

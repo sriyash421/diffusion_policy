@@ -1,0 +1,93 @@
+# l2s_online's OnlineSearchPolicy (sriyash/l2s_online @ 86d5ef9) on the blq50far split with
+# pusht_base's scaffolding -- the first of the three full-trajectory arms (DT k=1 and k=8 are the
+# others, train_pusht_dt_*). Fixes the two deviations docs/reports/DEAD_CODE.md records for
+# train_online_search.yaml: the encoder is the SHARED ${obs_encoder} (no private imagenet_norm
+# copy) and the split comes from the manifest. The original config is left untouched.
+#
+# The observation is image + agent_pos + feedback, as the original (task/pusht_image_online):
+# that is what this arm IS; the image-only question is the DT master's.
+defaults:
+  - pusht_base
+  - override task: pusht_image_online
+  - _self_
+
+name: train_pusht_online_search
+_target_: diffusion_policy.workspace.train_online_search_workspace.TrainOnlineSearchWorkspace
+
+trainer: online_search
+family_tag: online-search
+
+# No verifier: the context is on-policy rollouts whose feedback is an obs channel.
+verifier_tag: null
+
+n_demos: 50
+split_suffix: _split-blq50far
+run_name: online_ntraj-${policy.n_trajs}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+logging:
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+# single-step policy; the dataset runs whole episodes
+horizon: 1
+n_obs_steps: 1
+n_action_steps: 1
+dataset_horizon: 300
+
+task:
+  dataset:
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    n_train_episodes: ${n_demos}
+    n_test_episodes: 50
+    n_val_episodes: 19
+    goal_mask_noise: ${goal_mask_noise}
+    transition_file: ${transition_file}
+  env_runner:
+    # the manifest-aware runner (the original's PushTImageRunner re-derives the split by seed)
+    _target_: diffusion_policy.env_runner.pusht_search_image_runner.PushTSearchImageRunner
+    split_file: ${task.dataset.split_file}
+    n_test_episodes: ${task.dataset.n_test_episodes}
+    n_val_episodes: ${task.dataset.n_val_episodes}
+    n_train_episodes: ${task.dataset.n_train_episodes}
+    n_search_actions: 1
+    n_vis: 5
+
+policy:
+  _target_: diffusion_policy.policy.online_search_policy.OnlineSearchPolicy
+  shape_meta: ${shape_meta}
+  obs_encoder: ${obs_encoder}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  hidden_dim: 256
+  hidden_depth: 4
+  n_head: 4
+  n_positions: ${eval:'${policy.n_trajs} * ${policy.max_rollout_steps} + 512'}
+  n_trajs: 8
+  n_envs: 32
+  max_rollout_steps: 300
+  use_async_envs: True
+
+dataloader:
+  batch_size: 8
+  num_workers: 4
+val_dataloader:
+  batch_size: 8
+  num_workers: 4
+
+training:
+  # OFF: TrainOnlineSearchWorkspace never steps the EMA copy, so pusht_base's `use_ema: True`
+  # would only save an untrained clone that eval tools then prefer. (The 2026-10-25 run was
+  # trained with it on; its evals read the live weights, see eval_dt_pusht.load_eval_policy.)
+  use_ema: False
+  # the reference run's budget: 100 outer x 100 inner = 10k updates
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_outer_steps: 100
+  outer_batch_size: 128
+  inner_batch_size: 8
+  num_inner_steps: 100
+  min_context_trajs: 0
+  max_context_trajs: ${policy.n_trajs}
+  # in-training rollouts are context-free; success is measured offline (eval_dt_pusht.py)
+  rollout_every: 1000000
+  checkpoint_every: 10

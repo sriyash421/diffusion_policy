@@ -1,0 +1,15 @@
+# DT at width 1: no context, every attempt starts an empty stream, so N attempts at eval are
+# i.i.d. draws ranked by the feedback (best-of-N). Everything else is train_pusht_dt_search's.
+defaults:
+  - train_pusht_dt_search
+  - _self_
+
+name: train_pusht_dt_bc
+n_candidates: 1
+
+training:
+  # no context to roll out: ~0.25 s per update, so the full 20k budget (~1.5 h)
+  max_gradient_steps: 20000
+  lr_scheduler_kwargs:
+    decay_steps: 19500
+  checkpoint_every: 2000

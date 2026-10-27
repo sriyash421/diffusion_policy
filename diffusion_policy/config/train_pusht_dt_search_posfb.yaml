@@ -1,0 +1,20 @@
+# DT with agent_pos + feedback IN THE OBSERVATION (as l2s_online's task/pusht_image_online),
+# against the image-only master. The 16-d feedback is the exact goal-relative T pose, so this
+# arm's numbers are not comparable with the image-only arms -- it answers whether the per-step
+# feedback TOKEN carries what the closed-form pose would.
+defaults:
+  - train_pusht_dt_search
+  - _self_
+
+name: train_pusht_dt_search_posfb
+run_name: dt-${arch_tag}-posfb_k${n_candidates}_fb-${reward_mode}_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+task:
+  shape_meta:
+    obs:
+      agent_pos:
+        shape: [2]
+        type: low_dim
+      feedback:
+        shape: [16]
+        type: low_dim

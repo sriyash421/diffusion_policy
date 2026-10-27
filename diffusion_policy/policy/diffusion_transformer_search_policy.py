@@ -753,6 +753,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         'scheduler_step_kwargs',
         # PushT verifier
         'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
+        'verifier_terminal_scoring',
         'verifier_value', 'render_size',
         # maze verifier
         'maze_path', 'device', 'verifier_noise',
@@ -848,7 +849,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
             # candidate would corrupt slot 0 and slot K-1 at slightly different scales and
             # the ladder would no longer be one observation seen at graded levels.
             self._update_obs_feature_std(obs_features)
-            eps = torch.randn_like(obs_features)
+            eps = self._obs_random(obs_features.shape, obs_features.dtype, obs_features.device)
             if self._corrupt_depth > 0:
                 self._corrupt_eps = eps
         return eps
@@ -926,7 +927,7 @@ class DiffusionTransformerSearchPolicy(ObsCorruptionMixin, CropScopeMixin, Searc
         # size or on another device must redraw rather than broadcast the wrong rows.
         if base is None or base.shape[0] != B or base.device != obs_features.device:
             lo, hi = self.slot_obs_base_range()
-            base = torch.randint(lo, hi + 1, (B,), device=obs_features.device)
+            base = self._obs_random((B,), torch.long, obs_features.device, levels=(lo, hi + 1))
             if self._corrupt_depth > 0:
                 self._corrupt_t_base = base
         return self.rescale_slot_timesteps(

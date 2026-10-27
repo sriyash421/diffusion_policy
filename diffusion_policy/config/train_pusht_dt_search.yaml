@@ -1,0 +1,127 @@
+# PushT full-trajectory search transformer (DT) -- the master for the k>=1 DT arms.
+#
+# One action per env step with a learned stop flag; candidate k is conditioned on the whole
+# token streams of candidates < k (policy docstring). Scaffolding from pusht_base; this file is
+# the DT policy plus what a whole-episode, per-step arm has to change. A child sets ONLY what
+# it changes -- restating an inherited value silently detaches it from pusht_base.
+#
+# TRAINED ON blq50far, baked in rather than passed as overrides (the geometric launchers pass
+# `task.dataset.split_file ... split_suffix` on the command line; this arm is only ever trained
+# on this split, so the config is the record). The four keys below must move together.
+defaults:
+  - pusht_base
+  - _self_
+
+name: train_pusht_dt_search
+_target_: diffusion_policy.workspace.train_mlp_image_workspace.TrainMLPImageWorkspace
+
+trainer: dt_search
+family_tag: dt-search
+
+# Width of the attempt window: the stream keeps the last n_candidates-1 attempts as context.
+# 1 = best-of-N (every attempt starts an empty stream), see train_pusht_dt_bc.
+n_candidates: 8
+# step: per-step feedback token + the final value on the boundary token; traj: boundary only.
+reward_mode: step
+# gpt2 (transformers.GPT2Model, KV-cached stepping -- the trained one) or te
+# (nn.TransformerEncoder, full recompute per step; tests only, never trained: ~4x slower rollouts).
+backbone: gpt2
+arch_tag: ${backbone}
+
+# veritas pin cost + T-to-goal heuristic. The DT does not run PushTVerifier's sim pool; the
+# tag names the feedback the model is trained with (pusht_step_feedback) and selects the v3
+# plan directory. check_verifier_value still demands policy.verifier_value == this tag.
+verifier_tag: wp_v3_la_tgn
+
+n_demos: 50
+split_suffix: _split-blq50far
+
+# `dt-<arch>_` is a NEW generation: the round-1 `dt_k1_...` / `dt-posfb_k1_...` dirs carry a stop
+# head in their state_dicts and must not be resumed into.
+run_name: dt-${arch_tag}_k${n_candidates}_fb-${reward_mode}_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+# ONE TOKEN PER ENV STEP: the env hands back one frame per policy call and the policy emits one
+# action. The dataset still runs whole episodes (return_sequences), so these are not window sizes.
+horizon: 1
+n_obs_steps: 1
+n_action_steps: 1
+
+task:
+  dataset:
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    n_test_episodes: 50
+    n_val_episodes: 19
+    # WHOLE EPISODES: one sample per episode, variable length, padded by sampler.collate_fn
+    # which also emits the attention_mask the loss masks with.
+    return_sequences: True
+    # a floor for an assert, not a length: in sequence mode the episode's own length is used
+    horizon: 300
+    pad_before: 0
+    pad_after: 0
+  env_runner:
+    # instantiated by the workspace even with rollouts off; this policy has no search interface
+    n_search_actions: 1
+
+policy:
+  _target_: diffusion_policy.policy.pusht_dt_search_policy.PushTDTSearchPolicy
+  shape_meta: ${shape_meta}
+  obs_encoder: ${obs_encoder}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  max_actions: ${n_candidates}
+  reward_mode: ${reward_mode}
+  # guard on an attempt's length; the env's own cap (task.env_runner.max_steps) is the same 300
+  max_attempt_steps: 300
+  # what the boundary token's trajectory channel carries: `value` (the verifier value at the
+  # attempt's final state, maze's recipe) or `coverage` (the env's max coverage over the
+  # attempt, see train_pusht_dt_search_cov)
+  terminal_feedback: value
+  backbone: ${backbone}
+  # GPT-2's learned position table must cover the longest stream: max_actions attempts of
+  # max_attempt_steps tokens, plus the expert episode appended in training (<= 246 frames)
+  gpt2_n_positions: ${eval:'${n_candidates} * ${policy.max_attempt_steps} + 512'}
+  n_emb: 256
+  n_layer: 4
+  n_head: 4
+  p_drop: 0.1
+  log_std_init: -1.0
+  log_std_min: -2.0
+  crop_shape: ${crop_shape}
+  random_crop: True
+  verifier_value: ${verifier_tag}
+  # the demos' waypoint plans, for the expert tokens' feedback
+  zarr_path: ${task.dataset.zarr_path}
+  plan_dir: null
+
+# One episode is ~120 frames of ResNet forwards per sample; batch 8 as the LSTM arm.
+dataloader:
+  batch_size: 8
+  num_workers: 4
+val_dataloader:
+  batch_size: 8
+  num_workers: 4
+
+training:
+  gradient_accumulate_every: 1
+  num_epochs: 2000000
+  # k=8 WITH FRESH CONTEXT: ~2 min per update (7 x 300-step live-env attempts per sample,
+  # measured 107 s at batch 2 on an L40S), so 10k updates is ~2 weeks. The k=1 child restores
+  # the 20k budget. Each must keep warmup + decay_steps == max_gradient_steps.
+  max_gradient_steps: 10000
+  # pusht_base's decay_then_constant, re-centred on the budget: 500 + 9500 puts the 0.1x
+  # floor at exactly 10k (a child's lr_scheduler_kwargs MERGE with the parent's, so the keys
+  # are restated rather than emptied)
+  lr_warmup_steps: 500
+  lr_scheduler_kwargs:
+    decay_steps: 9500
+    min_lr_ratio: 0.1
+  # ~8 h apart at k=8; latest.ckpt is rewritten at the same cadence, which bounds what a
+  # requeue loses. 40 checkpoints over the run.
+  checkpoint_every: 250
+  # OFF: success is measured offline by eval_dt_pusht.py (8 sequential in-context attempts),
+  # which the in-training runner cannot do.
+  rollout_every_steps: null
+  val_every_steps: 500
+  # OFF: the sample block's gt slice is a window-policy convention (see train_pusht_lstm_bc)
+  sample_every_steps: 1000000000
