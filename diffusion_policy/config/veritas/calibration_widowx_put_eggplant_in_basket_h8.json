@@ -1,0 +1,23 @@
+{
+  "fit": "horizon_cumulative",
+  "frame": "base",
+  "action_pos_scale": [
+    0.7208613638400105,
+    0.7345565918594098,
+    0.8731594003936648
+  ],
+  "action_pos_scale_pooled": 0.7928522867010741,
+  "action_pos_scale_r2": 0.8799251696417127,
+  "action_pos_scale_r2_pooled": 0.8724648079617092,
+  "action_pos_corr": [
+    0.8727180395680236,
+    0.9417427606106225,
+    0.9714705120938875
+  ],
+  "value_mean": -0.2992751577728393,
+  "value_std": 0.03535464918558754,
+  "horizon": 8,
+  "n_windows": 11141,
+  "grasped_fraction": 0.7992101247643838,
+  "dataset_dir": "/gscratch/robotics/harine/data/strict_distance_success"
+}

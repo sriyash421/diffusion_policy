@@ -1,0 +1,210 @@
+# Eggplant conditional-diffusion SEARCH policy verified by the Veritas PIXEL-WAYPOINT
+# verifier (Gemini plan per episode, upstream lookahead endpoint cost), trained with the
+# outer/inner loop on a strict-split manifest.
+#
+#   value = -( sum_k alpha^k * || pix(ee after chunk) - waypoint_k || )   over the
+#           tracker's next K waypoints, leading satisfied ones skipped (upstream Veritas)
+#
+# Standalone rather than `defaults: [robomonkey_eggplant_search_distance_outer_inner]`
+# for the same reason that file gives: hydra MERGES nested mappings, so an inherited
+# verifier block would leave DistanceVerifier's kwargs in place. Everything below other
+# than the verifier, the split/targets dataset keys and auxiliary_obs is a deliberate copy
+# of the distance config so the arms differ ONLY in the verifier.
+#
+# Per-frame targets (task.dataset.extra_obs_arrays.veritas_targets) come from
+# scriptsv2/veritas/build_veritas_targets.py; the verifier reads them as obs. Train:
+#   bash scriptsv2/train_search/train_search_veritas.sbatch (via sbatch)
+defaults:
+  - _self_
+  - task: robomonkey_eggplant_state
+
+task:
+  dataset:
+    # Strict dataset + split manifest (scriptsv2/splits/make_simpler_splits.py); the
+    # launcher sets both.
+    dataset_dir: /gscratch/robotics/harine/data/strict_distance_success_split
+    split_file: null
+    # Per-frame Veritas targets aligned to the zarr (build_veritas_targets.py).
+    extra_obs_arrays:
+      veritas_targets: null
+    # Sampled with the obs (so the verifier sees it) but NOT a policy input:
+    # SearchPolicyRoboMonkeyDiffusion only encodes shape_meta.obs low_dim keys. Set on
+    # the DATASET's shape_meta: the task yaml's `*shape_meta` anchor is expanded at
+    # parse time, so task.shape_meta and task.dataset.shape_meta are separate dicts.
+    shape_meta:
+      auxiliary_obs:
+        veritas_targets:
+          shape: [8]
+
+name: robomonkey_eggplant_search_veritas
+_target_: diffusion_policy.workspace.train_search_outer_inner_robomonkey_workspace.TrainSearchOuterInnerRoboMonkeyWorkspace
+output_dir: null
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 8
+n_obs_steps: 1
+n_action_steps: 4      # rollout 4 of the 8 predicted, then recalculate
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+policy:
+  _target_: diffusion_policy.policy.search_policy_robomonkey.SearchPolicyRoboMonkeyDiffusion
+  shape_meta: ${shape_meta}
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.FlattenObsEncoder
+    shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 8
+
+  n_layer: 4
+  n_cond_layers: 2
+  n_head: 4
+  n_emb: 256
+  p_drop_emb: 0.0
+  p_drop_attn: 0.2
+  # Same ST setup as PushT (gpt2 cond encoder, causal decoder). Maze is still
+  # transformer / causal_attn False; checkpoints are not interchangeable across the two.
+  causal_attn: True
+  cond_encoder: gpt2
+
+  corrupt_obs: True
+  corrupt_obs_eval: True
+  obs_noise_level: 0.0
+
+  max_actions: 16
+
+  verifier:
+    _target_: diffusion_policy.policy.veritas_verifier.VeritasPixelVerifier
+    # Fixed camera + base pose of the task (scriptsv2/veritas/capture_simpler_camera.py).
+    camera_file: diffusion_policy/config/veritas/camera_widowx_put_eggplant_in_basket.json
+    # null = 1:1; any fitted scale must match the executed/scored horizon.
+    action_pos_scale: null
+    lookahead_k: 3
+    lookahead_alpha: 0.5
+    default_tol_px: 60.0
+    # Rank the chunk that will actually execute before replanning.
+    horizon: ${n_action_steps}
+    plan_done_mode: zero
+    ee_key: end_effector_pose
+    targets_key: veritas_targets
+    # The policy CONDITIONS on these values; the launcher passes the expert-chunk
+    # mean/std from build_veritas_targets.py (veritas_targets.json).
+    normalize: fixed
+    value_mean: 0.0
+    value_std: 1.0
+    health_check: True
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 256
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: polynomial
+  lr_warmup_steps: 500
+  gradient_accumulate_every: 1
+  gradient_clip_norm: 1.0
+  freeze_encoder: False
+  tqdm_interval_sec: 1.0
+
+  max_gradient_steps: 20000
+
+  # Same outer/inner geometry as the DQC arm so wall-clock and drift stay comparable.
+  # 4 epochs x ceil(512/256) = 8 updates per outer step -> 2500 outer steps.
+  #
+  # NOTE the amortization argument is WEAKER here than on the DQC arm. There the
+  # verifier was the dominant term in step time, so reusing the context was nearly a
+  # 4x saving. This verifier is a handful of vector norms — essentially free — so what
+  # outer/inner still buys is 4x fewer DDIM candidate SAMPLES per update, and the
+  # staleness cost is unchanged. If train_drift_mse_eps climbs across the inner loop,
+  # this arm can afford inner_epochs=1 (i.e. the offline trainer) far more cheaply
+  # than the DQC arm could.
+  outer_batch_size: 512
+  inner_batch_size: 256
+  inner_epochs: 4
+  drift_every: 4
+
+  use_ema: False
+  ema_decay: 0.995
+
+  # Cadences in GRADIENT STEPS. checkpoint_every=1000 (not 5000) so a preempted run
+  # loses at most 1000 steps; the 5k/10k/15k/20k eval milestones are a subset of what
+  # this writes.
+  rollout_every_steps: 5000
+  val_every_steps: 1000
+  sample_every_steps: 1000
+  checkpoint_every: 1000
+
+  # The verifier is ~free here, so the normalized-RMSE readout can afford more batches
+  # than the DQC arm's 4. On a 50-demo set this is most of the val split anyway.
+  nrmse_max_batches: 8
+  max_val_steps: 20
+
+logging:
+  project: veritas_verifier_simpler
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}", "veritas_verifier", "outer_inner"]
+  id: null
+  group: null
+
+checkpoint:
+  # No topk/best checkpoint, deliberately: it would monitor a LOSS, and loss does not
+  # rank policies on this task — success rate does. Selection is done from real
+  # evaluation (scriptsv2/eval_search) against checkpoints/step_*.ckpt.
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
