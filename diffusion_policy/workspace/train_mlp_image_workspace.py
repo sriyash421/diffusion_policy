@@ -250,8 +250,10 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             if self.global_step >= next_checkpoint_step and self.accelerator.is_main_process:
                                 print(f"Saving checkpoint at step {self.global_step} (target was {next_checkpoint_step})")
                                 # set before saving, so latest.ckpt resumes on the same checkpoint grid
-                                # (it used to carry the previous value and resumed runs saved at k*1000 + 1)
-                                self.last_checkpoint_step = self.global_step
+                                # (it used to carry the previous value and resumed runs saved at k*1000 + 1).
+                                # The grid value, not global_step: the check is skipped on an epoch's last batch, so a
+                                # multiple landing there is saved one step late, and the grid must not shift with it.
+                                self.last_checkpoint_step = next_checkpoint_step
                                 model_ddp = self.model
                                 self.model = self.accelerator.unwrap_model(self.model)
                                 if cfg.checkpoint.save_last_ckpt:

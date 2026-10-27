@@ -1,4 +1,5 @@
 from typing import Dict, Any
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -11,7 +12,7 @@ from torch.distributions import Normal
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import GPT2Config, GPT2Model
 
-from diffusion_policy.common.maze_verifier import MazeVerifier
+from diffusion_policy.common.maze_verifier import MazeVerifier, get_shortest_path_table
 
 class SearchPolicy(BaseImagePolicy):
     def __init__(self,
@@ -45,6 +46,15 @@ class SearchPolicy(BaseImagePolicy):
             noise_mode=kwargs.get('verifier_noise_mode', 'multiplicative'),
         )
         self.kwargs = kwargs
+        # value_norm='diameter': as DiffusionTransformerSearchPolicy, the verifier values are divided by the
+        # layout's BFS diameter where they enter the model; values returned for ranking/logging stay in BFS steps.
+        self.value_norm = kwargs.get('value_norm', None)
+        if self.value_norm not in (None, 'diameter'):
+            raise ValueError(f"unknown value_norm: {self.value_norm}")
+        self._diameter_cache = {}
+        # clip_sample: clamp each sampled chunk to [-1, 1] in normalized action space (the expert's one cell per
+        # step), as the diffusion policies' scheduler clip_sample does; applies wherever a chunk is sampled.
+        self.clip_sample = bool(kwargs.get('clip_sample', False))
         self.mask_obs = mask_obs
         self.concat_obs = concat_obs
         if self.concat_obs:
@@ -208,12 +218,14 @@ class SearchPolicy(BaseImagePolicy):
             action_value_features = None
         else:
             actions = actions.reshape(B, actions.shape[1], -1).to(obs_features.device) # B, max_actions, horizon*action_dim
-            values = values.to(obs_features.device) # B, max_actions
+            values = self._model_values(obs_dict, values).to(obs_features.device) # B, max_actions
             action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1)
             action_value_features = self.act_projection(action_value_input)
 
         dist = self.forward(obs_features, action_value_features) # B, max_actions, horizon, action_dim
         naction_pred = dist.rsample() # B, max_actions, horizon, action_dim
+        if self.clip_sample:
+            naction_pred = naction_pred.clamp(-1.0, 1.0)
         action_pred = self.normalizer['action'].unnormalize(naction_pred) # B, max_actions, horizon, action_dim
 
         start = To - 1
@@ -291,6 +303,25 @@ class SearchPolicy(BaseImagePolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
+    def _diameter(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """(B,) BFS diameter (longest shortest path) of each row's layout, cached per layout."""
+        # image is B,T,C,H,W and channel 0 is wall/free: wall=1, free=0 after dataset scaling.
+        free = (obs_dict['image'][:, -1, 0] < 0.5).detach().cpu().numpy()
+        out = []
+        for maze in free:
+            key = (maze.shape, maze.tobytes())
+            if key not in self._diameter_cache:
+                dists, _, unreachable = get_shortest_path_table(maze.astype(np.uint8), 'cpu')
+                self._diameter_cache[key] = float(dists[dists < unreachable].max())
+            out.append(self._diameter_cache[key])
+        return torch.tensor(out, dtype=torch.float32, device=obs_dict['image'].device)
+
+    def _model_values(self, obs_dict, values):
+        """Verifier values as the model sees them (see value_norm)."""
+        if values is None or self.value_norm is None:
+            return values
+        return values / self._diameter(obs_dict).to(values.device)[:, None]
+
     def compute_loss(self, batch):
         nobs = self.normalizer.normalize(batch['obs'])
         target_actions = self.normalizer['action'].normalize(batch['action'])
@@ -322,7 +353,7 @@ class SearchPolicy(BaseImagePolicy):
             ) # B, max_actions, horizon*action_dim and B, max_actions
 
         actions = actions.reshape(B, self.max_actions-1, -1) # B, max_actions, horizon*action_dim
-        action_value_input = torch.cat([actions, values.unsqueeze(-1)], dim=-1) # B, max_actions, horizon*action_dim + 1
+        action_value_input = torch.cat([actions, self._model_values(batch['obs'], values).unsqueeze(-1)], dim=-1) # B, max_actions, horizon*action_dim + 1
         action_value_features = self.act_projection(action_value_input) # B, max_actions, hidden_dim
         dist = self.forward(obs_features, action_value_features)  # B, max_actions, horizon, action_dim
         target_actions = target_actions.unsqueeze(1).expand(-1, self.max_actions, -1, -1) # B, max_actions, horizon, action_dim

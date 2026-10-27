@@ -168,7 +168,10 @@ class Sim2RealImageDataset(BaseImageDataset):
             # Create fingerprint for caching
             shape_meta_json = json.dumps(
                 OmegaConf.to_container(shape_meta), sort_keys=True)
-            dataset_stat = os.stat(dataset_path)
+            # stat <zarr>/data, not the zarr dir: every cache written into the dir changes its mtime, which gave each
+            # job start a fresh cache key, and concurrent first-time writers corrupted each other's zips
+            data_dir = os.path.join(dataset_path, 'data')
+            dataset_stat = os.stat(data_dir if os.path.isdir(data_dir) else dataset_path)
             cache_fingerprint = {
                 'shape_meta': shape_meta_json,
                 'dataset_path': dataset_path,
@@ -203,8 +206,10 @@ class Sim2RealImageDataset(BaseImageDataset):
                         gc.collect()
                         replay_buffer = None
                     except Exception as e:
-                        if os.path.exists(cache_zarr_path):
+                        if os.path.isdir(cache_zarr_path):
                             shutil.rmtree(cache_zarr_path)
+                        elif os.path.exists(cache_zarr_path):  # a ZipStore is a file
+                            os.remove(cache_zarr_path)
                         raise e
                 else:
                     print('Loading cached ReplayBuffer from disk.')

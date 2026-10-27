@@ -620,11 +620,12 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
 
         action_history = actions[:, 1:]
         value_history = values[:, 1:]
+        has_context = self.max_actions > 1  # max_actions 1: no context, every candidate is drawn on its own
         for _ in range(self.max_actions, n_actions):
             new_action = self._predict_action(
                 obs_dict,
-                actions=action_history,
-                values=value_history,
+                actions=action_history if has_context else None,
+                values=value_history if has_context else None,
             )['action_pred']
             sampled.append(new_action.unsqueeze(1))
             # same context rule as predict_action (harine/openloop): realized, snapped, stop at goal

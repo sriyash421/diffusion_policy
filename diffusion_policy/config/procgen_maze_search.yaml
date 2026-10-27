@@ -35,6 +35,8 @@ policy:
   hidden_depth: 4
   corrupt_obs: False
   max_actions: 16
+  value_norm: null  # 'diameter': divide verifier values by the layout's BFS diameter at the model input
+  clip_sample: False  # clamp sampled chunks to [-1, 1] normalized (one cell per step), as diffusion clip_sample
   device: ${training.device}
   verifier_noise: 0.0
 
