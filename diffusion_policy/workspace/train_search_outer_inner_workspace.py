@@ -12,6 +12,7 @@ import copy
 import math
 import os
 import pathlib
+import random
 
 import hydra
 import numpy as np
@@ -119,6 +120,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
     include_keys = [
         'global_step', 'epoch', 'last_checkpoint_step',
         'last_rollout_step', 'last_val_step', 'last_sample_step',
+        'next_inner_idx',
     ]
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -126,6 +128,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         self.last_rollout_step = 0
         self.last_val_step = 0
         self.last_sample_step = 0
+        self.next_inner_idx = 0
         # Waypoint-tracker snapshot store, built in run() for a trainable wp
         # verifier_value; None on every other arm.
         self._wp_store = None
@@ -138,19 +141,10 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         if cfg.training.use_ema:
             self.ema_model = _clone_policy(self.model)
 
-        # OPEN, UNFIXED: subgoal contexts are mis-registered on this trainer, and it is not
-        # detectable from the loss. _fill_context_buffer runs under policy.eval(), so a
-        # buffered subgoal image is CENTRE-cropped, while the observation re-encoded in the
-        # inner step is RANDOMLY cropped -- the registration mismatch the per-sample shared
-        # crop offset exists to prevent. The offline trainer generates its context inside
-        # the same forward pass and shares one offset, so it does not have this.
-        #
-        # A warning rather than an error: whether the context should be generated in eval or
-        # train mode at all is the open question, and that is not a decision to make
-        # silently at construction. Under `search_context: value` -- the default, and every
-        # arm currently trained -- the buffer holds scalars and there is no image to
-        # mis-register, so this never fires there.
-        if str(cfg.get('search_context', 'value') or 'value').startswith('subgoal'):
+        # Legacy buffered mode can misregister subgoal images. Fresh-context mode
+        # shares the crop and encoded observations inside each loss call.
+        if (not cfg.training.get('fresh_context', False)
+                and str(cfg.get('search_context', 'value') or 'value').startswith('subgoal')):
             print(f'WARNING: {type(self).__name__} with search_context='
                   f'{cfg.search_context!r}: buffered subgoal images are centre-cropped '
                   f'while the inner step re-encodes the observation at a random crop.')
@@ -306,6 +300,16 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 payload = self.load_checkpoint(path=lastest_ckpt_path)
                 checkpoint_loaded = True
+                saved_training = payload['cfg'].training
+                fresh_now = bool(cfg.training.get('fresh_context', False))
+                if fresh_now != bool(saved_training.get('fresh_context', False)):
+                    raise RuntimeError('Changing fresh_context requires a new run directory; '
+                                       'do not mix buffered and fresh-context training.')
+                if fresh_now:
+                    for key in ('outer_batch_size', 'inner_batch_size', 'inner_epochs'):
+                        if cfg.training[key] != saved_training[key]:
+                            raise RuntimeError(f'Cannot resume a saved minibatch cursor with '
+                                               f'changed training.{key}; start a new run.')
                 # Refuse a pre-EMA payload resumed into a use_ema run. This class overrides
                 # run(), so the parent's resume block never executes here -- the guard was
                 # simply absent on this path, which matters more than anywhere else now
@@ -370,6 +374,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         outer_bs = min(cfg.training.outer_batch_size, len(dataset))
         inner_bs = cfg.training.inner_batch_size
         inner_epochs = cfg.training.inner_epochs
+        fresh_context = bool(cfg.training.get('fresh_context', False))
         drift_every = cfg.training.drift_every
         rollout_every_steps = cfg.training.rollout_every_steps
         val_every_steps = cfg.training.val_every_steps
@@ -380,6 +385,9 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
         # not re-fire (the membership test is on the exact post-increment step).
         extra_ckpt_steps = set(
             int(s) for s in (cfg.training.get('checkpoint_steps', None) or []))
+        # Resume-only saves (latest.ckpt, no step file, anchor untouched): a ckpt-partition
+        # segment (~9 h, ~6-7k steps) otherwise ends before the next 10k save and loses it all.
+        latest_every = (cfg.checkpoint.get('latest_every', None) or 0) if cfg.checkpoint.save_last_ckpt else 0
 
         if cfg.training.debug:
             max_steps = 6
@@ -470,6 +478,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             collector = _clone_policy(self.accelerator.unwrap_model(self.model))
             collector.eval()
             collector.requires_grad_(False)
+            self.restore_training_rng()
 
             while self.global_step < max_steps:
                 policy = self.accelerator.unwrap_model(self.model)
@@ -487,8 +496,11 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                 pool_rng = np.random.default_rng([cfg.training.seed, self.epoch])
                 pool = pool_rng.choice(
                     len(dataset), size=outer_bs, replace=outer_bs > len(dataset))
-                buf_actions, buf_values = self._fill_context_buffer(
-                    policy, dataset, collate, pool, device, buffer_chunk)
+                if fresh_context:
+                    buf_actions, buf_values = None, None
+                else:
+                    buf_actions, buf_values = self._fill_context_buffer(
+                        policy, dataset, collate, pool, device, buffer_chunk)
 
                 # ======== inner: reuse that buffer for inner_epochs passes ============
                 self.model.train()
@@ -500,6 +512,21 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                     for start in range(0, len(order), inner_bs):
                         if self.global_step >= max_steps:
                             break
+                        if fresh_context and inner_idx < self.next_inner_idx:
+                            inner_idx += 1
+                            continue
+                        if fresh_context:
+                            # Isolate update randomness from validation/logging and
+                            # startup work. Resume reproduces the update's streams.
+                            update_seed = (int(cfg.training.seed) * 1_000_003
+                                           + int(self.global_step)) % (2 ** 31 - 1)
+                            random.seed(update_seed)
+                            np.random.seed(update_seed)
+                            torch.manual_seed(update_seed)
+                            if self._wp_store is not None:
+                                policy.set_waypoint_trackers([
+                                    self._wp_store.for_dataset_index(dataset, int(pool[p]))
+                                    for p in order[start:start + inner_bs]])
                         sel = order[start:start + inner_bs]
                         batch = collate([dataset[int(pool[p])] for p in sel])
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
@@ -517,13 +544,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         # would stay 0 and every update would see the SAME crop -- no
                         # augmentation at all.
                         #
-                        # Known gap, inherent to amortizing the search: _build_context_buffer
-                        # runs under policy.eval(), so the buffered subgoal images are
-                        # CENTER-cropped, while the obs re-encoded here is randomly cropped.
-                        # The offline trainer shares one offset between the two because it
-                        # generates the context inside the same forward pass; a buffer reused
-                        # across many updates cannot. Fold into the P1-2 decision (that path
-                        # also generates its context in eval mode).
+                        # Fresh context is generated inside compute_loss, sharing its
+                        # crop, encoded observation and corruption scope.
                         if hasattr(policy, 'set_crop_step'):
                             policy.set_crop_step(cfg.training.seed, self.global_step)
                         # beside set_crop_step so the crop offset and the
@@ -546,13 +568,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                         lr_scheduler.step()
                         if ema is not None:
                             ema.step(policy)
-                            # EMAModel averages parameters and never copies BUFFERS, so the running
-                            # value-normalizer statistics would stay at their construction values on
-                            # the EMA copy -- which is the copy evaluation scores. No-op on every arm
-                            # that has no learned-Q normalizer.
+                            # Compatibility hook for policies owning value-normalizer state.
+                            # EMAModel now also copies registered buffers directly.
                             if hasattr(ema.averaged_model, 'sync_value_norm_from'):
                                 ema.averaged_model.sync_value_norm_from(policy)
                         self.global_step += 1
+                        self.next_inner_idx = inner_idx + 1
 
                         loss_cpu = raw_loss.item()
                         inner_losses.append(loss_cpu)
@@ -580,6 +601,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                             elif self.global_step in extra_ckpt_steps:
                                 # off-cadence checkpoint; does NOT move the cadence anchor
                                 self._save(cfg, advance_anchor=False)
+                            elif latest_every and self.global_step % latest_every == 0:
+                                self._save_latest()
 
                         inner_idx += 1
                     if self.global_step >= max_steps:
@@ -661,6 +684,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                     wandb_run.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
                 self.epoch += 1
+                self.next_inner_idx = 0
                 # the eval blocks above leave the model in eval(); restore train mode so
                 # the next outer step does not train with dropout silently disabled
                 self.model.train()
@@ -701,6 +725,12 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             self.output_dir, 'checkpoints', f'step_{self.global_step:07d}.ckpt')
         os.makedirs(os.path.dirname(step_ckpt_path), exist_ok=True)
         self.save_checkpoint(path=step_ckpt_path)
+        self.model = model_ddp
+
+    def _save_latest(self):
+        model_ddp = self.model
+        self.model = self.accelerator.unwrap_model(self.model)
+        self.save_checkpoint()
         self.model = model_ddp
 
     def _sample_log(self, eval_policy, policy, collector, batch, device):

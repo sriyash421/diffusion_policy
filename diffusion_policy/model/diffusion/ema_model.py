@@ -83,6 +83,12 @@ class EMAModel:
                     ema_param.mul_(self.decay)
                     ema_param.add_(param.data.to(dtype=ema_param.dtype), alpha=1 - self.decay)
 
+            # Running statistics are already estimates; copy rather than average.
+            # Includes observation-noise calibration and discrete initialization flags.
+            for name, buffer in module.named_buffers(recurse=False):
+                target = ema_module.get_buffer(name)
+                target.copy_(buffer.to(device=target.device, dtype=target.dtype))
+
         # verify that iterating over module and then parameters is identical to parameters recursively.
         # assert old_all_dataptrs == all_dataptrs
         self.optimization_step += 1

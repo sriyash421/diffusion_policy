@@ -39,9 +39,9 @@ CKPT_EVERY="${CKPT_EVERY:-$(( EXTRA_STEPS / 2 > 0 ? EXTRA_STEPS / 2 : 1 ))}"
 
 set +u
 source /gscratch/robotics/harine/miniconda3/etc/profile.d/conda.sh
-conda activate robodiff
+conda activate "${DP_CONDA_ENV:-robodiff}"
 set -u
-cd /mmfs1/home/harine/diffusion_policy_standalone
+cd "${REPO:-/mmfs1/home/harine/diffusion_policy_standalone}"
 
 rm -rf "$DST"
 mkdir -p "$DST/checkpoints"

@@ -9,6 +9,22 @@ from omegaconf import OmegaConf
 import dill
 import torch
 import threading
+import random
+import numpy as np
+
+
+def capture_rng_state():
+    return dict(python=random.getstate(), numpy=np.random.get_state(),
+                torch=torch.get_rng_state(),
+                cuda=torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else [])
+
+
+def restore_rng_state(state):
+    random.setstate(state['python'])
+    np.random.set_state(state['numpy'])
+    torch.set_rng_state(state['torch'].cpu())
+    if state['cuda']:
+        torch.cuda.set_rng_state_all([s.cpu() for s in state['cuda']])
 
 
 def clone_policy(policy):
@@ -74,6 +90,7 @@ class BaseWorkspace:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             'cfg': self.cfg,
+            'rng_state': capture_rng_state(),
             'state_dicts': dict(),
             'pickles': dict()
         } 
@@ -271,6 +288,15 @@ class BaseWorkspace:
         for key in include_keys:
             if key in payload['pickles']:
                 self.__dict__[key] = dill.loads(payload['pickles'][key])
+        # Defer restoration until training setup is complete. Evaluation loading must
+        # not overwrite its explicitly chosen sampling seeds.
+        self._resume_rng_state = payload.get('rng_state')
+
+    def restore_training_rng(self):
+        state = getattr(self, '_resume_rng_state', None)
+        if state is not None:
+            restore_rng_state(state)
+            self._resume_rng_state = None
     
     def load_checkpoint(self, path=None, tag='latest',
             exclude_keys=None, 
@@ -284,6 +310,8 @@ class BaseWorkspace:
         self.load_payload(payload,
             exclude_keys=exclude_keys,
             include_keys=include_keys)
+        if payload.get('rng_state') is not None:
+            restore_rng_state(payload['rng_state'])
         return payload
 
     def assert_ema_payload(self, payload, path):
