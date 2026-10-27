@@ -164,3 +164,13 @@ attention_analysis/outputs
 
 # Rendered mode/dispersion panels, 82M of PNG regenerable from mode_analysis/
 modes24/
+
+# Symlinks into gscratch (videos, pilots, live result CSVs)
+/bc_vs_st_videos
+/simpler_verifier_pilot
+/simpler_veritas_videos
+/docs/reports/summaries/bon_results.csv
+/docs/reports/summaries/evaluation_results.csv
+/docs/reports/summaries/full_results.csv
+/docs/reports/summaries/pusht_simpler_corrected_verifier_results.csv
+/docs/reports/summaries/tgn_vs_bc.csv
