@@ -280,7 +280,9 @@ def main(checkpoint, output_dir, device, n_samples, n_resets, n_envs, max_steps,
     workspace.load_payload(payload, exclude_keys=None, include_keys=None)
 
     policy = workspace.model
-    if cfg.training.use_ema:
+    # TrainOnlineSearchWorkspace never steps its EMA: under pusht_base's use_ema its saved
+    # ema_model is an untrained init clone, so the live weights are the trained ones.
+    if cfg.training.use_ema and not str(cfg._target_).endswith('TrainOnlineSearchWorkspace'):
         policy = workspace.ema_model
     policy.to(torch.device(device))
     policy.eval()

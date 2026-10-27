@@ -7,9 +7,13 @@ deterministic PushT sim and scores the result with the *same feedback signal the
 search policy uses*: ``feedback_util.compute_feedback_from_pose`` (goal-vs-achieved T
 keypoint displacement).
 
-``get_value(obs_dict, action) -> (B,)`` returns a scalar, in pixels, at the state reached
-after executing the candidate action sequence from the obs state. Higher == better, and
-the value is <= 0 always. WHICH scalar is chosen by ``value_fn``, one of ``VALUE_FNS``:
+``get_value(obs_dict, action) -> (B,)`` returns a selection score after simulating the
+candidate from the obs state, stopping at first success. Success scores 2; otherwise
+the selected heuristic applies (negative costs or waypoint progress in [0, 1]).
+``rollout`` separately exposes the raw heuristic for model feedback and an optional
+success mask. This corrected behavior is opt-in via ``terminal_scoring=True``;
+the default preserves the original full-chunk heuristic for ongoing comparisons.
+The base cost is chosen by ``value_fn``, one of ``VALUE_FNS``:
 
 * ``'armTn'`` -- ``-(d_T->goal/13.6 + d_arm->T/52.1)``, both terms normalized by their
   within-step candidate spread; see ``value_arm_t_norm``. **DEPRECATED as of 2026-08-28**:
@@ -101,12 +105,33 @@ from diffusion_policy.env.pusht.feedback_util import (
     compute_feedback_from_pose, block_pose_from_feedback, keypoints_at_pose,
     t_goal_distance, arm_to_t_distance,
     T_VERTS, GOAL_POSE, GOAL_KEYPOINTS, N_KEYPOINTS)
+from diffusion_policy.env.pusht.veritas.tracker import agent_px_from_pos, t_kps_px_from_pose
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv, force_close
 from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 
 
 class _DillEnv(gym.Wrapper):
     """Adds run_dill_function/get_attr so the vector env can set per-env reset states."""
+
+    def __init__(self, env, terminal_scoring=False):
+        super().__init__(env)
+        self.terminal_scoring = terminal_scoring
+
+    def reset(self, **kwargs):
+        self._terminal_transition = None
+        return self.env.reset(**kwargs)
+
+    def step(self, action):
+        if not self.terminal_scoring:
+            return self.env.step(action)
+        # Match MultiStepWrapper: a chunk ends at the first successful step.
+        # Other vector lanes may still be running, so keep this lane absorbing.
+        if self._terminal_transition is None:
+            transition = self.env.step(action)
+            if transition[2]:
+                self._terminal_transition = transition
+            return transition
+        return self._terminal_transition
 
     def get_attr(self, name):
         return getattr(self, name)
@@ -123,7 +148,7 @@ class _DillEnv(gym.Wrapper):
         return self.env._render_frame(mode='rgb_array')
 
 
-def _make_verifier_env(legacy, render_size):
+def _make_verifier_env(legacy, render_size, terminal_scoring=False):
     """Picklable thunk building a PushTEnv for the verifier pool.
 
     ``render_action=False`` is REQUIRED, not cosmetic: PushTEnv defaults it to True, which
@@ -134,7 +159,8 @@ def _make_verifier_env(legacy, render_size):
     """
     def _fn():
         return _DillEnv(PushTEnv(
-            legacy=legacy, render_action=False, render_size=render_size))
+            legacy=legacy, render_action=False, render_size=render_size),
+            terminal_scoring=terminal_scoring)
     return _fn
 
 
@@ -312,6 +338,19 @@ def value_arm_t_dyn(terms, eps: float = ARM_TD_EPS_PX):
     return (-z.sum(dim=-1)).to(terms.dtype)                           # (B, n)
 
 
+def value_t_goal_wp_la_dyn(terms, eps: float = ARM_TD_EPS_PX):
+    """``-(z(d_T->goal) + z(pin cost))``, z ACROSS THE N CANDIDATES of one step -> (B, n).
+
+    armTd's rule (``value_arm_t_dyn``, same float64 and eps floor) with the arm term swapped
+    for the Veritas lookahead pin cost. ``terms`` is (B, n, 3) ``[d_T->goal, d_arm->T,
+    pin cost]`` in raw pixels -- the third column is appended by
+    ``PushTSearchMixin._score_candidates`` for a LOOKAHEAD_VALUES value.
+    """
+    assert terms.shape[-1] == 3, \
+        f'expected [d_T->goal, d_arm->T, pin cost] terms, got K={terms.shape[-1]}'
+    return value_arm_t_dyn(terms[..., [0, 2]], eps)
+
+
 # Every value the verifier can score with, keyed by the string that also names the run
 # (`verifier_tag` in the configs), so the directory name and the scoring rule cannot drift
 # apart. Signature: (agent_pos (n, 2), feedback (n, 16)) -> (n,), <= 0, higher is better.
@@ -328,6 +367,11 @@ VALUE_FNS = {
 # exactly who should.
 DEFAULT_VALUE_FN = 't_goal'
 
+# Simulation heuristics are negative costs or waypoint progress in [0, 1].
+# This finite, selection-only score outranks both without changing ST feedback.
+# Cross-candidate fusion must reapply priority after computing its unbounded z-scores.
+TERMINAL_SUCCESS_SCORE = 2.0
+
 # Values that need the WHOLE candidate set and so cannot be a VALUE_FNS entry: those are
 # called with (agent_pos (B,2), feedback (B,16)) where B is the parallel-EPISODE batch, one
 # candidate at a time -- SearchProcedureMixin.search_candidates generates candidates in a
@@ -335,6 +379,7 @@ DEFAULT_VALUE_FN = 't_goal'
 # therefore different: (terms (B, n, K)) -> (B, n), applied by the policy at the stack.
 CROSS_CANDIDATE_VALUES = {
     'armTd': value_arm_t_dyn,
+    'wp_v3_la_tgd': value_t_goal_wp_la_dyn,
 }
 
 # The per-candidate scalar a cross-candidate value falls back to wherever fusion does NOT
@@ -348,6 +393,10 @@ BASE_VALUE_FN = {
     'armTd': 'armTn',
     'wp_v5': 'd_t_goal',
     'wp_v3': 'd_t_goal',
+    'wp_v3_la': 'd_t_goal',
+    'wp_v5_la': 'd_t_goal',
+    'wp_v3_la_tgd': 'd_t_goal',
+    'wp_v3_la_tgn': 'd_t_goal',
 }
 
 # VLM-waypoint values, scored by PushTWaypointVerifier: the Veritas tracker score
@@ -356,12 +405,47 @@ BASE_VALUE_FN = {
 # plans of that kind and the run directory cannot lie about which signal ranked it:
 #   wp_v5 -- v5_pusher_and_t dual plans, both tracks (0..1 each) averaged;
 #   wp_v3 -- v3_end_outside pusher-only plans, the agent track alone.
+#   wp_v3_la -- the same v3 plans, scored the way Veritas upstream ranks candidates
+#       (select_best_action_chunk, src/agent/eval_verifier_utils.py) instead of by the
+#       tracker score: decayed distance from the chunk's END pusher pixel to the next
+#       LOOKAHEAD_K waypoints. The endpoint is the simulated one (physics kept), not
+#       upstream's open-loop integration of the action deltas.
+#   wp_v5_la -- the v5 dual plans under that same cost, applied per track and averaged
+#       (as wp_v5 averages its tracker scores): pusher endpoint vs pusher waypoints, end
+#       T keypoints vs T poses, each in the tracker's mean per-keypoint distance.
+#   wp_v3_la_tgd -- t_goal + the wp_v3_la cost, each z-scored across the n candidates of
+#       the step and summed 1:1 (value_t_goal_wp_la_dyn); also a CROSS_CANDIDATE_VALUES
+#       entry, so BC-only. The sim scores the wp_v3_la cost; the policy fuses at the stack.
+#   wp_v3_la_tgn -- the same two terms at FIXED scales, -(d_T->goal/TGN_T_GOAL_SPREAD +
+#       pin cost/TGN_PIN_SPREAD): a per-candidate value, so trainable (context =
+#       value / TGN_CONTEXT_SCALE, see WAYPOINT_CONTEXT_SCALE).
 # The tracker score is 0..1 by construction and _score_candidates feeds it to the model
-# raw, so every waypoint value carries training semantics (verifier_tag / search
-# context); the workspace supplies per-sample trackers from a demo-replay snapshot store
-# (veritas.tracker.TrackerSnapshotStore).
-WAYPOINT_VALUES = ('wp_v5', 'wp_v3')
-TRAINABLE_WAYPOINT_VALUES = WAYPOINT_VALUES
+# raw, so wp_v5 / wp_v3 carry training semantics (verifier_tag / search context); the
+# workspace supplies per-sample trackers from a demo-replay snapshot store
+# (veritas.tracker.TrackerSnapshotStore). The *_la values are negated pixel costs, not
+# 0..1, so they have no context semantics and are EVAL-ONLY.
+WAYPOINT_VALUES = ('wp_v5', 'wp_v3', 'wp_v3_la', 'wp_v5_la', 'wp_v3_la_tgd', 'wp_v3_la_tgn')
+TRAINABLE_WAYPOINT_VALUES = ('wp_v5', 'wp_v3', 'wp_v3_la_tgn')
+LOOKAHEAD_VALUES = ('wp_v3_la', 'wp_v5_la', 'wp_v3_la_tgd')
+# Upstream's defaults (src/agent/eval.py: lookahead_k, lookahead_alpha).
+LOOKAHEAD_K = 3
+LOOKAHEAD_ALPHA = 0.5
+
+# wp_v3_la_tgn's scales, in pixels: each term's std across the 16 candidates of one decision,
+# pooled over 1024 training windows of four ST k16 arms (t_goal 100k and wp_v3 40k/30k, on
+# blq137 and brd100), each steered by its own value with the pin cost scored by a shadow
+# verifier -- scripts/measure_pin_spread.py --steer native, output
+# /gscratch/robotics/harine/analysis/pin_spread_st.json. Measured on the SAME decisions, so
+# their ratio (0.93) is the 1:1 weighting; T_GOAL_SPREAD (13.6) is not reused because no
+# generator measured here exceeds 2.6 px for d_T->goal. The context scale is the value's mean
+# magnitude over those candidates, 82.57/0.82 + 29.38/0.88, so the context averages ~-1 (the
+# role ARM_TN_CONTEXT_SCALE plays for armTn).
+TGN_T_GOAL_SPREAD = 0.82
+TGN_PIN_SPREAD = 0.88
+TGN_CONTEXT_SCALE = 134.1
+# Divisor applied to a waypoint value's score to form its search context. The tracker scores
+# (wp_v5 / wp_v3) are 0..1 already, hence 1.0; a value absent here has no context semantics.
+WAYPOINT_CONTEXT_SCALE = {'wp_v5': 1.0, 'wp_v3': 1.0, 'wp_v3_la_tgn': TGN_CONTEXT_SCALE}
 
 # LEARNED values: a trained SAC chunk-Q, scored by `sac.score.PushTQVerifier`. Not a
 # VALUE_FNS entry, and the reason is structural rather than bookkeeping -- a VALUE_FNS entry
@@ -535,7 +619,7 @@ class PushTVerifier:
 
     def __init__(self, n_envs: int = 32, legacy: bool = False, use_async: bool = True,
                  verifier_steps: int = None, render_size: int = 96,
-                 value_fn: str = DEFAULT_VALUE_FN, **kwargs):
+                 value_fn: str = DEFAULT_VALUE_FN, terminal_scoring: bool = False, **kwargs):
         """
         Args:
             n_envs: size of the persistent vectorized PushT sim pool; candidates are
@@ -562,6 +646,8 @@ class PushTVerifier:
         self.use_async = use_async
         self.verifier_steps = verifier_steps
         self.render_size = render_size
+        # Default legacy behavior preserves ongoing checkpoint comparisons.
+        self.terminal_scoring = bool(terminal_scoring)
         # Lazily built vectorized pool, reused across get_value calls: the workers are
         # only forked on the first rollout (i.e. inside the first compute_loss), which
         # is why _get_vec uses a forkserver context -- by then the parent has CUDA
@@ -609,7 +695,7 @@ class PushTVerifier:
 
     def _get_vec(self):
         if self._vec is None:
-            env_fns = [_make_verifier_env(self.legacy, self.render_size)
+            env_fns = [_make_verifier_env(self.legacy, self.render_size, self.terminal_scoring)
                        for _ in range(self.n_envs)]
             if self.use_async:
                 # forkserver: workers are forked from a clean server process, NOT from the
@@ -619,6 +705,13 @@ class PushTVerifier:
             else:
                 self._vec = SyncVectorEnv(env_fns)
         return self._vec
+
+    def set_terminal_scoring(self, enabled):
+        """Switch versions, rebuilding an existing pool so worker semantics agree."""
+        enabled = bool(enabled)
+        if enabled != self.terminal_scoring:
+            self.close()
+            self.terminal_scoring = enabled
 
     def _set_reset_states(self, vec, states):
         def _make_setter(state):
@@ -654,14 +747,15 @@ class PushTVerifier:
                   action: torch.Tensor) -> torch.Tensor:
         """Scalar score of a candidate action sequence per batch element.
 
-        Thin wrapper over ``rollout`` keeping the original scalar-only interface (the
-        interface the maze ``MazeVerifier`` also exposes).
+        Keeps the scalar-only interface and prioritizes simulated success over the
+        heuristic. Use ``rollout`` for raw feedback and the separate success mask.
         """
-        return self.rollout(obs_dict, action)[0]
+        value, _, success = self.rollout(obs_dict, action, return_success=True)
+        return value.masked_fill(success, TERMINAL_SUCCESS_SCORE)
 
     @torch.no_grad()
     def rollout(self, obs_dict: Dict[str, torch.Tensor],
-                action: torch.Tensor, render: bool = False):
+                action: torch.Tensor, render: bool = False, return_success: bool = False):
         """Simulate a candidate action sequence per batch element.
 
         Each candidate is simulated in a deterministic PushT sim (reset to the obs state)
@@ -678,6 +772,11 @@ class PushTVerifier:
             action: (B, horizon, 2) UNNORMALIZED agent-target positions (pixel coords).
             render: also return the subgoal frame. Costs ONE render per chunk (not per
                 step), taken after the last step; leave False when unused.
+            return_success: append a boolean (B,) mask of simulated successes.
+                Values remain the raw heuristic for model feedback; selection should
+                prioritize this mask. With terminal_scoring enabled, state and image
+                stop at first success. Legacy mode returns all False and the original
+                full-chunk state/value, ignoring intermediate done flags.
         Returns:
             ``(value, state)``, or ``(value, state, image)`` when ``render``:
             ``value`` (B,); ``state`` (B, STATE_DIM) laid out as
@@ -692,6 +791,7 @@ class PushTVerifier:
 
         vec = self._get_vec()
         values = np.empty(B, dtype=np.float32)
+        successes = np.zeros(B, dtype=bool)
         end_states = np.empty((B, self.STATE_DIM), dtype=np.float32)
         images = np.empty(
             (B, 3, self.render_size, self.render_size), dtype=np.float32) \
@@ -715,8 +815,13 @@ class PushTVerifier:
             # PATH rather than the reached state (the waypoint trackers advance per step).
             path = (np.empty((self.n_envs, n_steps, 5), dtype=np.float64)
                     if self._collect_path else None)
+            done = np.zeros(self.n_envs, dtype=bool)
+            path_lengths = np.zeros(self.n_envs, dtype=np.int64)
             for t in range(n_steps):
-                obs, _, _, _ = vec.step(chunk_actions[:, t])    # obs (n_envs, 5)
+                path_lengths += ~done
+                obs, _, step_done, _ = vec.step(chunk_actions[:, t])
+                if self.terminal_scoring:
+                    done |= np.asarray(step_done, dtype=bool)
                 if path is not None:
                     path[:, t] = obs
             obs = np.asarray(obs)
@@ -724,7 +829,8 @@ class PushTVerifier:
             block_pose = obs[:, 2:5]                            # (n_envs, 3): x, y, angle
             feedback = compute_feedback_from_pose(block_pose)   # (n_envs, 16)
             values[start:end] = self._chunk_values(
-                agent_pos, feedback, path, start, m)
+                agent_pos, feedback, path, start, m, path_lengths=path_lengths)
+            successes[start:end] = done[:m]
             end_states[start:end] = np.concatenate(
                 [agent_pos[:m], feedback[:m]], axis=-1).astype(np.float32)
 
@@ -741,9 +847,11 @@ class PushTVerifier:
         if render:
             out = out + (
                 torch.as_tensor(images, dtype=action.dtype, device=action.device),)
+        if return_success:
+            out = out + (torch.as_tensor(successes, device=action.device),)
         return out
 
-    def _chunk_values(self, agent_pos, feedback, path, start, m):
+    def _chunk_values(self, agent_pos, feedback, path, start, m, path_lengths=None):
         """(m,) float32 scores for one sim chunk.
 
         `agent_pos` (n_envs, 2) / `feedback` (n_envs, 16) are the REACHED state; `path`
@@ -796,16 +904,62 @@ class PushTWaypointVerifier(PushTVerifier):
         """The live per-episode DualTrackers, parallel to the next rollout's batch."""
         self._trackers = list(trackers)
 
-    def _chunk_values(self, agent_pos, feedback, path, start, m):
+    def _chunk_values(self, agent_pos, feedback, path, start, m, path_lengths=None):
         assert self._trackers is not None, \
             'set_trackers was never called: the waypoint score is defined against the ' \
             'live episode trackers, which the eval loop must hand in before each decision.'
         assert start + m <= len(self._trackers), \
             f'rollout batch row {start + m - 1} has no tracker (got {len(self._trackers)})'
         scores = np.empty(m, dtype=np.float32)
+        if self.value_fn == 'wp_v3_la_tgn':
+            d_t = t_goal_distance(feedback[:m])                              # (m,) px
+            for j in range(m):
+                pin = lookahead_cost(self._trackers[start + j].pusher,
+                                     agent_px_from_pos(path[j, -1, :2]))
+                scores[j] = -(d_t[j] / TGN_T_GOAL_SPREAD + pin / TGN_PIN_SPREAD)
+            return scores
+        if self.value_fn in LOOKAHEAD_VALUES:
+            for j in range(m):
+                tracker = self._trackers[start + j]
+                costs = [lookahead_cost(tracker.pusher, agent_px_from_pos(path[j, -1, :2]))]
+                if tracker.t is not None:       # v5 plans only
+                    costs.append(lookahead_cost(tracker.t, t_kps_px_from_pose(path[j, -1, 2:5])))
+                scores[j] = -float(np.mean(costs))
+            return scores
         for j in range(m):
             tracker = self._trackers[start + j].copy()
-            for t in range(path.shape[1]):
+            length = path.shape[1] if path_lengths is None else path_lengths[j]
+            for t in range(length):
                 tracker.update(path[j, t, :2], path[j, t, 2:5])
             scores[j] = tracker.score
         return scores
+
+
+def lookahead_cost(tracker, endpoint_px, k: int = LOOKAHEAD_K,
+                   alpha: float = LOOKAHEAD_ALPHA) -> float:
+    """Upstream Veritas's chunk cost (lower is better) for one candidate.
+
+    Port of the Veritas-px branch of ``select_best_action_chunk``: take the live tracker's
+    active waypoint and the next ``k - 1``; drop the leading ones the endpoint is already
+    within the ACTIVE waypoint's ``tol_px`` of (upstream applies that one tol to all of
+    them); cost is the alpha-decayed sum of distances to the rest, 0 if none remain. The
+    tracker is read, never advanced. Once the plan is done every candidate costs 0 --
+    upstream stops Veritas scoring there, so argmax keeps the first candidate.
+
+    ``tracker`` is a ``WaypointTracker`` with K keypoints per waypoint (1 for the pusher,
+    8 for the T); ``endpoint_px`` is its (K, 2) pixels. Distance is the tracker's own
+    mean per-keypoint distance, which at K=1 is upstream's Euclidean one.
+    """
+    endpoint_px = np.asarray(endpoint_px, dtype=np.float64)
+    # A (2,) pusher point would broadcast silently against the waypoints and mis-score.
+    assert endpoint_px.shape == tracker.waypoints.shape[1:], \
+        f'endpoint_px must be {tracker.waypoints.shape[1:]}, got {endpoint_px.shape}'
+    if tracker.done:
+        return 0.0
+    upcoming = tracker.waypoints[tracker.i:tracker.i + k]       # (<=k, K, 2)
+    tol = float(tracker.tol_px[tracker.i])
+    d = np.linalg.norm(upcoming - endpoint_px, axis=-1).mean(axis=-1)
+    first = 0
+    while first < len(d) and d[first] < tol:
+        first += 1
+    return float(sum(dk * alpha ** p for p, dk in enumerate(d[first:])))

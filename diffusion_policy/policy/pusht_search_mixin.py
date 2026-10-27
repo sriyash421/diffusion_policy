@@ -26,7 +26,7 @@ three things differ, so the maze path is left untouched:
    steps (the subgoal modes add one render + one encoder pass per candidate). Candidate
    *ranking* uses the scalar verifier value in every mode -- but
    ranking is only what ``selection: argmax`` does with it. Under ``selection:
-   final_pass`` the executed action is a further sample conditioned on all n scored
+   final_pass`` the executed action is the nth sample conditioned on n-1 scored
    candidates and no ranking happens at all, so the scalar reaches the model only through
    the context above. `selection` is defined on the base class; the two are orthogonal,
    and the arm labels name the pair:
@@ -48,7 +48,8 @@ from diffusion_policy.policy.diffusion_transformer_search_policy import (
     DiffusionTransformerSearchPolicy)
 from diffusion_policy.env.pusht.pusht_verifier import (
     PushTVerifier, PushTWaypointVerifier, VALUE_FNS, DEFAULT_VALUE_FN, VERIFIER_VALUES,
-    CROSS_CANDIDATE_VALUES, WAYPOINT_VALUES, base_value_fn, value_terms_from_state,
+    CROSS_CANDIDATE_VALUES, WAYPOINT_VALUES, LOOKAHEAD_VALUES, WAYPOINT_CONTEXT_SCALE,
+    base_value_fn, value_terms_from_state, TERMINAL_SUCCESS_SCORE,
     T_GOAL_SPREAD, ARM_T_SPREAD, ARM_TN_CONTEXT_SCALE,
     is_q_value, is_waypoint_value, q_verifier_spec)
 from diffusion_policy.env.pusht.feedback_util import GOAL_KEYPOINTS, N_KEYPOINTS
@@ -214,7 +215,12 @@ class PushTSearchMixin:
         # re-checked here, not only at construction: eval_search_pusht.py's
         # --verifier-value override swaps the value on an ALREADY-BUILT policy.
         self._check_cross_candidate_value(mode)
-        return CROSS_CANDIDATE_VALUES[mode](terms)
+        fused = CROSS_CANDIDATE_VALUES[mode](terms)
+        success = scores == TERMINAL_SUCCESS_SCORE
+        # Fusion can produce positive scores: reapply terminal priority on the
+        # complete candidate set, including n > max_actions rolling searches.
+        terminal_score = fused.amax(dim=1, keepdim=True).clamp_min(1.0) + 1.0
+        return torch.where(success, terminal_score, fused)
 
     def _build_verifier(self, **kwargs):
         mode = self._verifier_value_mode(kwargs)
@@ -237,6 +243,7 @@ class PushTSearchMixin:
             legacy=kwargs.get('verifier_legacy', False),
             use_async=kwargs.get('verifier_use_async', True),
             verifier_steps=kwargs.get('verifier_steps', None),
+            terminal_scoring=kwargs.get('verifier_terminal_scoring', False),
             value_fn=mode,
         )
 
@@ -536,8 +543,8 @@ class PushTSearchMixin:
     def _score_candidates(self, verifier, obs_dict, action, want_subgoals: bool = False):
         """Simulate the candidate chunk once; build the context per ``search_context``.
 
-        Ranking always uses the scalar verifier value, so ``predict_action_best`` picks
-        the same way in every mode -- only what the *next* candidate gets to see changes.
+        Ranking prioritizes simulated success, then the scalar verifier value. The
+        next candidate sees the raw heuristic at the reached (possibly terminal) state.
 
         ``want_subgoals`` forces the render even in modes that would not otherwise need
         it, so a `value`-mode run can still log subgoal panels comparable to the others.
@@ -559,25 +566,29 @@ class PushTSearchMixin:
             # -- the same split as every other value here (see _normalize_value).
             return self._normalize_q(value), value, None, None
 
-        # always rollout, never get_value: the two cost the same (get_value is literally
-        # rollout(...)[0]) and rollout also returns the reached state, which every mode
-        # now needs -- the context scalar is rescaled from it (see _normalize_value).
-        out = verifier.rollout(now, exec_action, render=render)
+        # Rollout gives raw feedback, reached state, and success separately. Keep the
+        # terminal selection score out of the context scalar and decomposed costs.
+        out = verifier.rollout(now, exec_action, render=render, return_success=True)
         value, state = out[0], out[1]                # (B,), (B, STATE_DIM)
         image = out[2] if render else None           # (B, 3, 96, 96)
+        score = value.masked_fill(out[-1], TERMINAL_SUCCESS_SCORE)
 
         if is_waypoint_value(self._verifier_value_mode(self.search_kwargs)):
-            # The tracker score IS the context: bounded 0..1 by construction
-            # (0.7*progress + 0.3*exp(-d/sigma), averaged over 0..1 tracks), deterministic,
-            # and identical at train and eval -- so unlike Q there is no scale to normalize
-            # away (no buffers, no sync_value_norm_from) and unlike the pixel values there
-            # is no _normalize_value mirror to keep in step: context == score, a monotone
-            # identity with what argmax ranks on. `terms` is still derived from the reached
-            # state -- the walk analysis and _fuse_scores plumbing read it, and it is ~free.
+            # Waypoint feedback is tracker progress or a lookahead cost, rescaled by
+            # its configured constant. It excludes terminal selection priority.
+            # Decomposed terms also stay raw for analysis and cross-candidate fusion.
+            mode = self._verifier_value_mode(self.search_kwargs)
             subgoal = {'image': image, 'value': value} if want_subgoals else None
-            return value, value, subgoal, value_terms_from_state(state)
+            terms = value_terms_from_state(state)
+            if mode in LOOKAHEAD_VALUES:
+                # the pin cost as a third raw-px term, for a cross-candidate fusion
+                terms = torch.cat([terms, -value.unsqueeze(-1).to(terms)], dim=-1)
+            # A positive constant preserves the raw heuristic's ordering and scale;
+            # .get keeps eval-only values usable for selection (BC consumes no context)
+            context = value / WAYPOINT_CONTEXT_SCALE.get(mode, 1.0)
+            return context, score, subgoal, terms
 
-        # context gets the rescaled scalar; `value` stays raw and is returned as the score.
+        # Context gets the rescaled heuristic; selection separately prioritizes success.
         nvalue = self._normalize_value(state)        # (B,)
 
         if mode == 'value':
@@ -597,7 +608,7 @@ class PushTSearchMixin:
         # rollout already sliced to the real rows, so the sim pool's tail-chunk padding can
         # never reach a statistic taken across candidates. Costs ~20 flops per candidate.
         terms = value_terms_from_state(state)        # (B, 2) raw px
-        return context, value, subgoal, terms
+        return context, score, subgoal, terms
 
     def _encode_obs_features(self, obs_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Encode only the keys shape_meta declares.

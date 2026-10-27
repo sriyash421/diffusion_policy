@@ -295,6 +295,10 @@ class DualTracker:
 WAYPOINT_PLAN_DIRS = {
     'wp_v5': 'media/veritas_pusht/v5_pusher_and_t',
     'wp_v3': 'media/veritas_pusht/v3_end_outside',
+    'wp_v3_la': 'media/veritas_pusht/v3_end_outside',
+    'wp_v5_la': 'media/veritas_pusht/v5_pusher_and_t',
+    'wp_v3_la_tgd': 'media/veritas_pusht/v3_end_outside',
+    'wp_v3_la_tgn': 'media/veritas_pusht/v3_end_outside',
 }
 
 

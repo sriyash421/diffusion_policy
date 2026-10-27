@@ -43,6 +43,7 @@ class PushTUNetSearchPolicy(PushTSearchMixin, CropScopeMixin, SearchProcedureMix
         search_kwargs = {k: kwargs.pop(k) for k in (
             'selection', 'selection_temperature', 'selection_seed', 'search_context',
             'verifier_n_envs', 'verifier_legacy', 'verifier_use_async', 'verifier_steps',
+            'verifier_terminal_scoring',
             'verifier_value',
         ) if k in kwargs}
         # Popped BEFORE super(): DiffusionUnetImagePolicy forwards every unrecognised kwarg

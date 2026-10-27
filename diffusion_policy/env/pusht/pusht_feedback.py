@@ -42,11 +42,19 @@ class PushTFeedbackWrapper(gym.ObservationWrapper):
 
 
 def make_env_fn(n_obs_steps=1, n_action_steps=1, max_episode_steps=300,
-                legacy=True, render_size=96):
-    """Thunk building ``MultiStepWrapper(PushTFeedbackWrapper(PushTImageEnv))``."""
+                legacy=True, render_size=96, tracker=False):
+    """Thunk building ``MultiStepWrapper(PushTFeedbackWrapper(PushTImageEnv))``.
+
+    ``tracker`` inserts ``VeritasTrackerWrapper`` inside the MultiStepWrapper (as
+    eval_search_pusht.build_envs does) so a per-step waypoint tracker is available via
+    ``env.tracker``; it stays inert until ``set_veritas_plans`` hands it a plan.
+    """
     def _fn():
         env = PushTImageEnv(legacy=legacy, render_size=render_size)
         env = PushTFeedbackWrapper(env)
+        if tracker:
+            from diffusion_policy.env.pusht.veritas.tracker import VeritasTrackerWrapper
+            env = VeritasTrackerWrapper(env)
         env = MultiStepWrapper(
             env,
             n_obs_steps=n_obs_steps,
@@ -80,4 +88,21 @@ def set_reset_states(vec_env, states):
         return _fn
 
     args_list = [(dill.dumps(_make_setter(s)),) for s in states]
+    vec_env.call_each('run_dill_function', args_list=args_list)
+
+
+def set_veritas_plans(vec_env, plans):
+    """Set per-env waypoint plans (called before ``vec_env.reset()``); ``None`` clears.
+
+    Mirrors ``set_reset_states``: envs are reused across episodes, so every reset must
+    re-set the plan or a stale tracker keeps following an episode it does not belong to.
+    """
+    import dill
+
+    def _make_setter(plan):
+        def _fn(env):
+            env.set_veritas_plan(plan)
+        return _fn
+
+    args_list = [(dill.dumps(_make_setter(p)),) for p in plans]
     vec_env.call_each('run_dill_function', args_list=args_list)
