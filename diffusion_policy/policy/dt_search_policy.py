@@ -8,6 +8,9 @@ Bernoulli stop flag d_t. Attempts have whatever length they have: one ends when 
 token of an attempt carries the previous attempt's last action / feedback / d=1; zeros at the start
 of the stream. Beyond max_actions attempts the stream keeps the last max_actions-1 (train == eval);
 max_actions=1 is best-of-N (every attempt starts an empty stream).
+kv_cache=True: rollout steps (`_step`) keep each layer's keys/values per row and encode only the new
+token (a full prefill after a new stream or `_slide`); same outputs as re-encoding the stream. The
+training forward in compute_loss is unchanged.
 
 reward_mode  traj: fb = [0, -BFS(final)] on the boundary token only
              step: fb = [-BFS(cell after a_{t-1}), .] at every token, plus -BFS(final) at the boundary
@@ -59,6 +62,7 @@ class DTSearchPolicy(BaseImagePolicy):
             log_std_init: float = -1.0,
             log_std_min: float = -2.0,
             snap_cardinal: bool = True,
+            kv_cache: bool = False,
             **kwargs):
         super().__init__()
         action_shape = shape_meta['action']['shape']
@@ -74,6 +78,7 @@ class DTSearchPolicy(BaseImagePolicy):
         self.reward_mode = reward_mode
         self.stop_radius = stop_radius
         self.snap_cardinal = bool(snap_cardinal)
+        self.kv_cache = bool(kv_cache)
         self.n_emb = n_emb
         self.obs_feature_dim = obs_encoder.output_shape()[0]
         self.normalizer = LinearNormalizer()
@@ -135,6 +140,73 @@ class DTSearchPolicy(BaseImagePolicy):
         pad = torch.arange(L, device=x.device)[None] >= S['len'][:, None]
         return self.ln_f(self.encoder(x, mask=causal, src_key_padding_mask=pad))
 
+    # ------------------------------------------------------------------ KV cache (rollouts only)
+    def _embed_at(self, S, pos):
+        """`_embed` of the tokens at stream indices pos (B, l) -> (B, l, n_emb)."""
+        g = {k: torch.gather(S[k], 1, _expand_idx(pos, S[k])) for k in TOKEN_KEYS}
+        x = (self.obs_proj(g['feat']) + self.act_emb(g['prev_a']) + self.fb_emb(g['fb'])
+             + self.done_emb(g['prev_d']))
+        x = x + self.step_proj(self.pe(g['step'].reshape(-1).float()).reshape(*pos.shape, -1))
+        x = x + self.pos_proj(self.pe(pos.reshape(-1).float()).reshape(*pos.shape, -1))
+        return self.drop(x)
+
+    @staticmethod
+    def _layer_qkv(layer, x):
+        """norm1 + in-projection of a pre-norm encoder layer: (B, l, E) -> q, k, v (B, H, l, d)."""
+        a = layer.self_attn
+        q, k, v = F.linear(layer.norm1(x), a.in_proj_weight, a.in_proj_bias).chunk(3, dim=-1)
+        heads = lambda t: t.reshape(t.shape[0], t.shape[1], a.num_heads, -1).transpose(1, 2)
+        return heads(q), heads(k), heads(v)
+
+    @staticmethod
+    def _layer_out(layer, x, att):
+        """Attention output projection + residual, then the feed-forward block + residual."""
+        x = x + layer.dropout1(layer.self_attn.out_proj(att.transpose(1, 2).reshape(x.shape)))
+        return x + layer._ff_block(layer.norm2(x))
+
+    def _hidden_last_cached(self, S, rows):
+        """Hidden state at each row's last token (B, n_emb), as `_hidden(S)[b, len-1]`.
+
+        S['kv'] holds per-layer (K, V) of shape (B, H, cap, d) for stream positions < len. With no cache
+        (new stream, or after `_slide`) the whole stream is encoded once and cached; otherwise only the
+        token just appended for `rows` is encoded and its keys/values written at len-1.
+        """
+        assert type(self)._hidden is DTSearchPolicy._hidden, 'kv_cache mirrors the nn.TransformerEncoder trunk'
+        B = S['len'].shape[0]
+        device = S['len'].device
+        last = (S['len'] - 1).clamp_min(0)
+        layers = self.encoder.layers
+        if S.get('kv') is None:
+            L = S['step'].shape[1]
+            pos = torch.arange(L, device=device)[None].expand(B, -1)
+            x = self._embed_at(S, pos)
+            causal = torch.ones((L, L), dtype=torch.bool, device=device).tril()
+            valid = causal[None] & (pos < S['len'][:, None])[:, None]          # (B, Lq, Lk)
+            kv = []
+            for layer in layers:
+                q, k, v = self._layer_qkv(layer, x)
+                att = F.scaled_dot_product_attention(q, k, v, attn_mask=valid[:, None])
+                x = self._layer_out(layer, x, att)
+                kv.append((k, v))
+            S['kv'] = kv
+            return self.ln_f(x)[torch.arange(B, device=device), last]
+        cap = S['kv'][0][0].shape[2]
+        need = int(S['len'].max())
+        if need > cap:   # grow by doubling so appends are amortised O(1)
+            new = max(2 * cap, need, 64)
+            S['kv'] = [tuple(F.pad(t, (0, 0, 0, new - cap)) for t in kv) for kv in S['kv']]
+        x = self._embed_at(S, last[:, None])                                     # (B, 1, E)
+        keys = torch.arange(S['kv'][0][0].shape[2], device=device)
+        valid = (keys[None] < S['len'][:, None])[:, None, None]                 # (B, 1, 1, cap)
+        b = rows.nonzero()[:, 0]
+        for layer, (K, V) in zip(layers, S['kv']):
+            q, k, v = self._layer_qkv(layer, x)
+            K[b, :, last[b]] = k[b, :, 0]
+            V[b, :, last[b]] = v[b, :, 0]
+            att = F.scaled_dot_product_attention(q, K, V, attn_mask=valid)
+            x = self._layer_out(layer, x, att)
+        return self.ln_f(x)[:, 0]
+
     def _heads(self, h):
         return Normal(self.mean_head(h), self._std()), self.stop_head(h)[..., 0]
 
@@ -176,6 +248,7 @@ class DTSearchPolicy(BaseImagePolicy):
         for k in ('prev_a', 'fb', 'prev_d'):
             S[k][:, 0] = 0
         S['len'] = S['len'] - shift
+        S.pop('kv', None)   # positions moved: the next step re-encodes the stream
         S['att_starts'] = [a - shift for a in S['att_starts'][drop:]]
         keep = int(S['len'].max())   # drop the now-stale padding columns, or the stream grows for ever
         for k in TOKEN_KEYS:
@@ -247,7 +320,10 @@ class DTSearchPolicy(BaseImagePolicy):
             tok = {'prev_a': realized, 'fb': torch.stack([bfs, torch.zeros_like(bfs)], dim=-1), 'prev_d': zeros}
         tok.update(feat=feat, fb=self._mask_fb(tok['fb']), step=S['t'])
         self._append(S, active, tok)
-        h = self._hidden(S)[torch.arange(B, device=device), (S['len'] - 1).clamp_min(0)]
+        if self.kv_cache:
+            h = self._hidden_last_cached(S, active)
+        else:
+            h = self._hidden(S)[torch.arange(B, device=device), (S['len'] - 1).clamp_min(0)]
         dist, stop_logit = self._heads(h)
         action = self.normalizer['action'].unnormalize(dist.sample())
         if self.snap_cardinal:
@@ -312,8 +388,27 @@ class DTSearchPolicy(BaseImagePolicy):
                 'snaps': snaps, 'stream': {k: S[k] for k in TOKEN_KEYS}, 'n_in_stream': len(S['att_starts'])}
 
     # ------------------------------------------------------------------ training
-    def compute_loss(self, batch):
-        """NLL of the expert's actions + BCE of its stop flag, for every prefix of 0..K context attempts."""
+    def context_candidates(self, batch):
+        """The K = max_actions-1 context attempts compute_loss conditions on, for a whole batch at once (rollout cost
+        is per env step, so one rollout of B rows beats B/micro rollouts); slice rows with `slice_candidates`."""
+        obs = batch['obs']
+        self.eval()
+        cands = self.rollout_candidates_torch(obs['image'][:, 0, 0] < 0.5, obs['agent_pos'][:, 0], obs['goal_pos'][:, 0],
+                                              self.max_actions - 1)
+        assert cands['n_in_stream'] == self.max_actions - 1, 'the context window slid during training'
+        return cands
+
+    @staticmethod
+    def slice_candidates(cands, rows):
+        """`context_candidates` output restricted to rows (a slice), as compute_loss(cands=...) takes it."""
+        return {'snaps': [{k: v[rows] for k, v in s.items()} for s in cands['snaps']],
+                'stream': {k: v[rows] for k, v in cands['stream'].items()}, 'n_in_stream': cands['n_in_stream']}
+
+    def compute_loss(self, batch, cands=None):
+        """NLL of the expert's actions + BCE of its stop flag, for every prefix of 0..K context attempts.
+
+        cands: precomputed context attempts for these rows (`context_candidates` + `slice_candidates`); default: roll
+        them out here."""
         obs = batch['obs']
         nactions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = nactions.shape
@@ -336,7 +431,7 @@ class DTSearchPolicy(BaseImagePolicy):
         stop_target = mask & ~torch.cat([mask[:, 1:], torch.zeros_like(mask[:, :1])], dim=1)
 
         K = self.max_actions - 1
-        if K > 0:
+        if K > 0 and cands is None:
             self.eval()
             cands = self.rollout_candidates_torch(free, start, goal, K)
             assert cands['n_in_stream'] == K, 'the context window slid during training'
