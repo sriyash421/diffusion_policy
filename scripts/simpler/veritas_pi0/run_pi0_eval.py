@@ -208,7 +208,7 @@ class LoggedEvalAgent(EvalAgent):
                 "n_done": len(done),
             }, step=cnt)
             print(f"[{self.arm}] ep {cnt}/{self.n_eval_episode} success={success} "
-                  f"steps={row['steps']} running SR={k/len(done):.3f} ({k}/{len(done)})")
+                  f"steps={row['steps']} running SR={k/len(done):.3f} ({k}/{len(done)})", flush=True)
         self._finish()
 
     def _finish(self):
@@ -220,7 +220,8 @@ class LoggedEvalAgent(EvalAgent):
         summary = dict(arm=self.arm, task=self.cfg.env.task, n_episodes=n, n_success=k,
                        success_rate=k / n if n else float("nan"), ci95_low=lo, ci95_high=hi,
                        mean_steps=float(np.mean([self.rows[i]["steps"] for i in done])) if n else None,
-                       n_empty_plan=sum(1 for i in done if self.rows[i].get("n_waypoints", -1) == 0),
+                       n_empty_plan=(sum(1 for i in done if self.rows[i].get("n_waypoints", -1) == 0)
+                                     if self.use_veritas_verifier else None),
                        verifier=bool(self.use_veritas_verifier), n_samples=int(self.verifier_samples))
         with open(os.path.join(self.log_dir, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2)
