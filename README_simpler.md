@@ -19,6 +19,7 @@ git data is the bare repo `/mmfs1/home/harine/diffusion_policy.git` (moved out o
 | `SimplerEnv/` | submodule, **upstream** `simpler-env/SimplerEnv` @ `4ab7178` (ManiSkill2_real2sim @ `ef7a4d4`) |
 | `dqc/` | submodule, `sriyash421/dqc` branch `harine-simpler` (DQC chunk-critic verifier) |
 | `scripts/simpler/` | the old `RoboMonkey/scriptsv2` pipeline, same subdir names ([README](scripts/simpler/README.md), [Veritas](scripts/simpler/veritas/README.md)) |
+| `scripts/simpler/veritas_pi0/` | pi0 (open-pi-zero) + official Veritas verifier evals via `/gscratch/robotics/harine/veritas` ([README](scripts/simpler/veritas_pi0/README.md)) |
 | `tests/simpler/`, `unit_tests/test_veritas_*` | Simpler / Veritas tests |
 | `docs/simpler/` | reports, `README_L2S.md`, `results_notes.md`, run/config lists from RoboMonkey |
 | `data/`, `wandb`, `simpler_veritas_videos` | symlinks into gscratch (below); not tracked |
