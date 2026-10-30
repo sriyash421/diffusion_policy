@@ -36,6 +36,7 @@ GATE_TOL = 1e-3   # metres, per the 2026-07 seed gate (xyz reproduces to <1 mm)
 TASKS = {
     'eggplant': ('widowx_put_eggplant_in_basket', 'strict_distance_success', 'eggplant'),
     'stack': ('widowx_stack_cube', 'stack_cube_strict', 'stack_cube'),
+    'carrot': ('widowx_carrot_on_plate', 'carrot_on_plate_strict', 'carrot'),
 }
 
 

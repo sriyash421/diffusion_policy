@@ -66,6 +66,10 @@ TASKS = {
                   dataset_dir=strict_dir('stack_cube_strict'), seed_task='stack_cube',
                   train_sizes={'random': (200, 100, 50), 'quadrant': (50,)},
                   quadrant=dict(y_min=0.0)),
+    # success-filtered (scripts/simpler/data/filter_success_episodes.py), random rule only
+    'carrot': dict(env_task='widowx_carrot_on_plate',
+                   dataset_dir=strict_dir('carrot_on_plate_strict'), seed_task='carrot',
+                   train_sizes={'random': (100,)}),
 }
 N_TEST, N_VAL = 50, 20
 

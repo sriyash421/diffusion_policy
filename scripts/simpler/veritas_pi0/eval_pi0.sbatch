@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=pi0_veritas
 #SBATCH --account=ckpt-robotics
-#SBATCH --partition=ckpt
+#SBATCH --partition=ckpt,ckpt-all
 #SBATCH --qos=ckpt-gpu
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=a40|l40s|l40|a100
+#SBATCH --constraint=a40|l40s|l40|a100|h200
 #SBATCH --requeue
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=48G
@@ -83,7 +83,9 @@ print("compile check:", float(f(torch.ones(8, device="cuda"))))'
 SEED_ARG=""
 if [ -n "${EVAL_SEEDS:-}" ]; then SEED_ARG="+eval_seeds=$(realpath "$EVAL_SEEDS")"; fi
 
-"$VERITAS_ROOT/.venv/bin/python" "$DP_ROOT/scripts/simpler/veritas_pi0/run_pi0_eval.py" \
+EVAL_SCRIPT="${EVAL_SCRIPT:-run_pi0_eval.py}"
+export GEMINI_CACHE_DIR="${GEMINI_CACHE_DIR:-}"
+"$VERITAS_ROOT/.venv/bin/python" "$DP_ROOT/scripts/simpler/veritas_pi0/$EVAL_SCRIPT" \
   env.task="$TASK" \
   checkpoint_path="$CKPT" \
   log_dir="$OUT_DIR" \

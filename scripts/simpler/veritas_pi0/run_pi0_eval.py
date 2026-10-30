@@ -72,7 +72,47 @@ def _generate_with_backoff(self, parts, generation_config, _orig=_orig_generate,
             delay = min(delay * 2, 120.0)
 
 
-_gemini_client.GeminiClient._generate = _generate_with_backoff
+
+# Content-addressed cache of Gemini responses (GEMINI_CACHE_DIR): the seeded protocol resets
+# to identical first frames, so every arm gets identical object lists and plans. Only
+# JSON-parseable responses are stored, so a bad reply is retried live, never replayed.
+_GEMINI_CACHE_DIR = os.environ.get("GEMINI_CACHE_DIR")
+
+
+class _CachedResponse:
+    def __init__(self, text):
+        self.text = text
+
+
+def _generate_cached(self, parts, generation_config):
+    if not _GEMINI_CACHE_DIR:
+        return _generate_with_backoff(self, parts, generation_config)
+    h = hashlib.sha1(str(self.model_name).encode())
+    for p in parts:
+        if isinstance(p, str):
+            h.update(p.encode())
+        else:  # PIL image
+            h.update(np.asarray(p).tobytes())
+    h.update(json.dumps(generation_config, sort_keys=True, default=str).encode())
+    path = os.path.join(_GEMINI_CACHE_DIR, h.hexdigest()[:24] + ".json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return _CachedResponse(json.load(f)["text"])
+    resp = _generate_with_backoff(self, parts, generation_config)
+    try:
+        json.loads(resp.text)
+    except Exception:
+        return resp
+    os.makedirs(_GEMINI_CACHE_DIR, exist_ok=True)
+    tmp = path + f".{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(dict(model=str(self.model_name), text=resp.text,
+                       prompt=[p for p in parts if isinstance(p, str)]), f)
+    os.replace(tmp, path)
+    return resp
+
+
+_gemini_client.GeminiClient._generate = _generate_cached
 
 
 def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -98,10 +138,15 @@ class LoggedEvalAgent(EvalAgent):
         super().__init__(cfg)
         self.cfg = cfg
         self.eval_seeds = None
+        self.seed_split = {}
         seeds_file = cfg.get("eval_seeds", None)
         if seeds_file:
             with open(seeds_file) as f:
-                self.eval_seeds = [int(s) for s in json.load(f)]
+                seeds = json.load(f)
+            if isinstance(seeds, dict):   # {"test": [...], "train20": [...]}
+                self.seed_split = {int(s): name for name, lst in seeds.items() for s in lst}
+                seeds = [s for lst in seeds.values() for s in lst]
+            self.eval_seeds = [int(s) for s in seeds]
             self.n_eval_episode = len(self.eval_seeds)
         kind = "veritas" if self.use_veritas_verifier else "raw"
         self.arm = cfg.get("arm", None) or f"{kind}_n{self.verifier_samples}"
@@ -177,6 +222,7 @@ class LoggedEvalAgent(EvalAgent):
                 self._seeded_reset(seed)
             t0 = time.time()
             success = bool(self._run_episode(cnt))
+            self._after_episode(cnt, seed, success)
             # plan actually used (the verifier keeps it until the next episode starts);
             # 0 waypoints on a verifier run means Gemini fell back to an empty plan.
             plan = getattr(getattr(self, "veritas_verifier", None), "plan", None)
@@ -194,8 +240,10 @@ class LoggedEvalAgent(EvalAgent):
                 verifier=bool(self.use_veritas_verifier),
                 n_samples=int(self.verifier_samples),
                 n_waypoints=n_waypoints,
+                split=self.seed_split.get(seed) if seed is not None else None,
                 time=_dt.datetime.now().isoformat(timespec="seconds"),
             )
+            row.update(self._extra_row_fields())
             self._append_row(row)
             done = sorted(self.rows)
             k = sum(self.rows[i]["success"] for i in done)
@@ -211,6 +259,13 @@ class LoggedEvalAgent(EvalAgent):
                   f"steps={row['steps']} running SR={k/len(done):.3f} ({k}/{len(done)})", flush=True)
         self._finish()
 
+    def _extra_row_fields(self) -> dict:
+        """Subclasses add per-episode fields here (called once per finished episode)."""
+        return {}
+
+    def _after_episode(self, cnt: int, seed, success: bool) -> None:
+        """Hook right after an episode, before its row is written (extra attempts, dumps)."""
+
     def _finish(self):
         import wandb
         done = sorted(self.rows)
@@ -223,6 +278,12 @@ class LoggedEvalAgent(EvalAgent):
                        n_empty_plan=(sum(1 for i in done if self.rows[i].get("n_waypoints", -1) == 0)
                                      if self.use_veritas_verifier else None),
                        verifier=bool(self.use_veritas_verifier), n_samples=int(self.verifier_samples))
+        if self.seed_split:
+            for name in sorted(set(self.seed_split.values())):
+                sub = [i for i in done if self.rows[i].get("split") == name]
+                ks = sum(self.rows[i]["success"] for i in sub)
+                summary[f"{name}_n"] = len(sub)
+                summary[f"{name}_success_rate"] = ks / len(sub) if sub else None
         with open(os.path.join(self.log_dir, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2)
         for key, val in summary.items():
@@ -241,8 +302,9 @@ class LoggedEvalAgent(EvalAgent):
         self.wandb.finish()
 
 
-def main(argv=None):
+def main(argv=None, agent_cls=None):
     from hydra import compose, initialize_config_dir
+    agent_cls = agent_cls or LoggedEvalAgent
     argv = sys.argv[1:] if argv is None else argv
     OmegaConf.register_new_resolver("eval", eval, replace=True)
     OmegaConf.register_new_resolver("round_up", math.ceil, replace=True)
@@ -261,7 +323,7 @@ def main(argv=None):
     os.makedirs(cfg.log_dir, exist_ok=True)
     with open(os.path.join(cfg.log_dir, "resolved_config.yaml"), "w") as f:
         f.write(OmegaConf.to_yaml(cfg))
-    agent = LoggedEvalAgent(cfg)
+    agent = agent_cls(cfg)
     agent.run()
 
 

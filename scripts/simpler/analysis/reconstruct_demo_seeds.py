@@ -43,6 +43,8 @@ START_INDEX = {
     "eggplant": {"state0.zarr": 0, "state1.zarr": 1472},
     "spoon": {"state0.zarr": 0, "state1.zarr": 1000},
     "stack_cube": {"state0.zarr": 0, "state1.zarr": 1000},
+    # data/carrot_on_plate/COLLECTION_MANIFEST.md
+    "carrot": {"state0.zarr": 0, "state1.zarr": 628, "state2.zarr": 2000, "state3.zarr": 3000},
 }
 # task -> (env task name, train dataset dir, test dataset dir)
 TASKS = {
