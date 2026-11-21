@@ -1,0 +1,57 @@
+{
+ "step": 7000,
+ "rule": "max train_heldout success at n=1 (ties: later step)",
+ "run": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_interp_20261105/runs/interp30/bc_unet__clean/seed_0",
+ "by_step": {
+  "1000": {
+   "validation": 0.26582278481012656,
+   "eval": 0.17,
+   "train_heldout": 0.29
+  },
+  "2000": {
+   "validation": 0.810126582278481,
+   "eval": 0.33,
+   "train_heldout": 0.84
+  },
+  "3000": {
+   "validation": 0.930379746835443,
+   "eval": 0.38,
+   "train_heldout": 0.91
+  },
+  "4000": {
+   "validation": 0.9113924050632911,
+   "eval": 0.38,
+   "train_heldout": 0.95
+  },
+  "5000": {
+   "validation": 0.9430379746835443,
+   "eval": 0.36,
+   "train_heldout": 0.94
+  },
+  "6000": {
+   "validation": 0.9556962025316456,
+   "eval": 0.41,
+   "train_heldout": 0.94
+  },
+  "7000": {
+   "validation": 0.9683544303797469,
+   "eval": 0.4,
+   "train_heldout": 0.95
+  },
+  "8000": {
+   "validation": 0.9620253164556962,
+   "eval": 0.39,
+   "train_heldout": 0.94
+  },
+  "9000": {
+   "validation": 0.9683544303797469,
+   "eval": 0.39,
+   "train_heldout": 0.94
+  },
+  "10000": {
+   "validation": 0.9683544303797469,
+   "eval": 0.39,
+   "train_heldout": 0.94
+  }
+ }
+}

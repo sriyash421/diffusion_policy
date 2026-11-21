@@ -1,0 +1,118 @@
+{
+ "rows": [
+  {
+   "name": "BC, 64-step chunk, open loop (the BC everywhere above)",
+   "train": 1.0,
+   "test": 0.0,
+   "control": 0.965,
+   "all": 0.432,
+   "all_bcfail": 0.015,
+   "all_bcok": 0.981,
+   "note": "all-pairs columns: the scan (3 seeds)"
+  },
+  {
+   "name": "BC 64-step chunk, re-planned every step",
+   "train": 1.0,
+   "test": 0.028,
+   "control": 0.9,
+   "all": 0.446,
+   "all_bcfail": 0.105,
+   "all_bcok": 0.893
+  },
+  {
+   "name": "BC horizon 4, re-planned every step",
+   "train": 1.0,
+   "test": 0.06,
+   "control": 0.863,
+   "all": 0.459,
+   "all_bcfail": 0.138,
+   "all_bcok": 0.882
+  },
+  {
+   "name": "BC 64-step chunk on the DAgger data, open loop",
+   "train": 1.0,
+   "test": 0.01,
+   "control": 0.863,
+   "all": 0.427,
+   "all_bcfail": 0.06,
+   "all_bcok": 0.911
+  },
+  {
+   "name": "BC 64-step chunk on the DAgger data, re-planned",
+   "train": 1.0,
+   "test": 0.135,
+   "control": 0.785,
+   "all": 0.448,
+   "all_bcfail": 0.147,
+   "all_bcok": 0.844
+  },
+  {
+   "name": "BC horizon 4 on the DAgger data, re-planned",
+   "train": 1.0,
+   "test": 0.03,
+   "control": 0.812,
+   "all": 0.398,
+   "all_bcfail": 0.074,
+   "all_bcok": 0.825
+  },
+  {
+   "name": "STk0, A* demo target, closed-loop obs (STk = after round k)",
+   "train": 0.9,
+   "test": 0.393,
+   "control": 0.93,
+   "all": 0.676,
+   "all_bcfail": 0.499,
+   "all_bcok": 0.91
+  },
+  {
+   "name": "STk7, A* demo target, closed-loop obs (STk = after round k)",
+   "train": 0.994,
+   "test": 0.595,
+   "control": 0.98,
+   "all": 0.764,
+   "all_bcfail": 0.664,
+   "all_bcok": 0.896
+  },
+  {
+   "name": "STk0, A* demo target, open-loop obs (start cell)",
+   "train": 0.555,
+   "test": 0.16,
+   "control": 0.585,
+   "all": 0.357,
+   "all_bcfail": 0.219,
+   "all_bcok": 0.538
+  },
+  {
+   "name": "STk7, A* demo target, open-loop obs (start cell)",
+   "train": 0.953,
+   "test": 0.315,
+   "control": 0.855,
+   "all": 0.602,
+   "all_bcfail": 0.404,
+   "all_bcok": 0.862
+  },
+  {
+   "name": "STk0, DAgger: BFS expert labels own attempt",
+   "train": 0.902,
+   "test": 0.398,
+   "control": 0.938,
+   "all": 0.697,
+   "all_bcfail": 0.527,
+   "all_bcok": 0.922
+  },
+  {
+   "name": "STk7, DAgger: BFS expert labels own attempt",
+   "train": 1.0,
+   "test": 0.6,
+   "control": 0.983,
+   "all": 0.821,
+   "all_bcfail": 0.688,
+   "all_bcok": 0.995
+  }
+ ],
+ "n_pairs": {
+  "all": 2870,
+  "all_bcfail": 1631,
+  "all_bcok": 1239
+ }
+}

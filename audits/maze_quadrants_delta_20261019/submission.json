@@ -1,0 +1,560 @@
+{
+  "submitted_utc": "2026-10-19T21:40:28.852692+00:00",
+  "smoke_job": "42048175",
+  "train_job": "42048176",
+  "eval_jobs": [
+    {
+      "job": "42048186",
+      "train_task": 0,
+      "task": [
+        "11tr",
+        "bc_unet",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048189",
+      "train_task": 1,
+      "task": [
+        "11tr",
+        "dt_bon",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048191",
+      "train_task": 2,
+      "task": [
+        "11tr",
+        "dt_st_traj",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048194",
+      "train_task": 3,
+      "task": [
+        "11tr",
+        "dt_st_step",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048195",
+      "train_task": 4,
+      "task": [
+        "11tr",
+        "dt_st_traj",
+        0,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048201",
+      "train_task": 5,
+      "task": [
+        "11tr",
+        "dt_st_step",
+        0,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048204",
+      "train_task": 6,
+      "task": [
+        "11bl",
+        "bc_unet",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048205",
+      "train_task": 7,
+      "task": [
+        "11bl",
+        "dt_bon",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048207",
+      "train_task": 8,
+      "task": [
+        "11bl",
+        "dt_st_traj",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048210",
+      "train_task": 9,
+      "task": [
+        "11bl",
+        "dt_st_step",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048212",
+      "train_task": 10,
+      "task": [
+        "11bl",
+        "dt_st_traj",
+        0,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048214",
+      "train_task": 11,
+      "task": [
+        "11bl",
+        "dt_st_step",
+        0,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048217",
+      "train_task": 12,
+      "task": [
+        "11br",
+        "dt_st_traj",
+        3,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048219",
+      "train_task": 13,
+      "task": [
+        "11br",
+        "dt_st_step",
+        3,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048222",
+      "train_task": 14,
+      "task": [
+        "11tl",
+        "dt_st_traj",
+        3,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048224",
+      "train_task": 15,
+      "task": [
+        "11tl",
+        "dt_st_step",
+        3,
+        "noisy"
+      ]
+    },
+    {
+      "job": "42048227",
+      "train_task": 16,
+      "task": [
+        "11br",
+        "bc_unet",
+        3,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048230",
+      "train_task": 17,
+      "task": [
+        "11br",
+        "dt_bon",
+        3,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048232",
+      "train_task": 18,
+      "task": [
+        "11br",
+        "dt_st_traj",
+        3,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048235",
+      "train_task": 19,
+      "task": [
+        "11br",
+        "dt_st_step",
+        3,
+        "clean"
+      ]
+    },
+    {
+      "job": "42048237",
+      "train_task": 20,
+      "task": [
+        "11tl",
+        "dt_st_traj",
+        0,
+        "delta"
+      ]
+    },
+    {
+      "job": "42048239",
+      "train_task": 21,
+      "task": [
+        "11tl",
+        "dt_st_step",
+        0,
+        "delta"
+      ]
+    },
+    {
+      "job": "42048241",
+      "train_task": 22,
+      "task": [
+        "11br",
+        "dt_st_traj",
+        0,
+        "delta"
+      ]
+    },
+    {
+      "job": "42048243",
+      "train_task": 23,
+      "task": [
+        "11br",
+        "dt_st_step",
+        0,
+        "delta"
+      ]
+    },
+    {
+      "job": "42128898",
+      "train_task": 24,
+      "task": [
+        "11tl",
+        "dt_st_traj",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42128899",
+      "train_task": 25,
+      "task": [
+        "11tl",
+        "dt_st_step",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42128900",
+      "train_task": 26,
+      "task": [
+        "11br",
+        "dt_st_traj",
+        0,
+        "clean"
+      ]
+    },
+    {
+      "job": "42128901",
+      "train_task": 27,
+      "task": [
+        "11br",
+        "dt_st_step",
+        0,
+        "clean"
+      ]
+    }
+  ],
+  "train_tasks": [
+    [
+      "11tr",
+      "bc_unet",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_bon",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_traj",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_step",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_traj",
+      0,
+      "noisy"
+    ],
+    [
+      "11tr",
+      "dt_st_step",
+      0,
+      "noisy"
+    ],
+    [
+      "11bl",
+      "bc_unet",
+      0,
+      "clean"
+    ],
+    [
+      "11bl",
+      "dt_bon",
+      0,
+      "clean"
+    ],
+    [
+      "11bl",
+      "dt_st_traj",
+      0,
+      "clean"
+    ],
+    [
+      "11bl",
+      "dt_st_step",
+      0,
+      "clean"
+    ],
+    [
+      "11bl",
+      "dt_st_traj",
+      0,
+      "noisy"
+    ],
+    [
+      "11bl",
+      "dt_st_step",
+      0,
+      "noisy"
+    ],
+    [
+      "11br",
+      "dt_st_traj",
+      3,
+      "noisy"
+    ],
+    [
+      "11br",
+      "dt_st_step",
+      3,
+      "noisy"
+    ],
+    [
+      "11tl",
+      "dt_st_traj",
+      3,
+      "noisy"
+    ],
+    [
+      "11tl",
+      "dt_st_step",
+      3,
+      "noisy"
+    ],
+    [
+      "11br",
+      "bc_unet",
+      3,
+      "clean"
+    ],
+    [
+      "11br",
+      "dt_bon",
+      3,
+      "clean"
+    ],
+    [
+      "11br",
+      "dt_st_traj",
+      3,
+      "clean"
+    ],
+    [
+      "11br",
+      "dt_st_step",
+      3,
+      "clean"
+    ],
+    [
+      "11tl",
+      "dt_st_traj",
+      0,
+      "delta"
+    ],
+    [
+      "11tl",
+      "dt_st_step",
+      0,
+      "delta"
+    ],
+    [
+      "11br",
+      "dt_st_traj",
+      0,
+      "delta"
+    ],
+    [
+      "11br",
+      "dt_st_step",
+      0,
+      "delta"
+    ],
+    [
+      "11tl",
+      "dt_st_traj",
+      0,
+      "clean"
+    ],
+    [
+      "11tl",
+      "dt_st_step",
+      0,
+      "clean"
+    ],
+    [
+      "11br",
+      "dt_st_traj",
+      0,
+      "clean"
+    ],
+    [
+      "11br",
+      "dt_st_step",
+      0,
+      "clean"
+    ]
+  ],
+  "smoke_tasks": [
+    [
+      "11tr",
+      "bc_unet",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_bon",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_traj",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_step",
+      0,
+      "clean"
+    ],
+    [
+      "11tr",
+      "dt_st_traj",
+      0,
+      "noisy"
+    ],
+    [
+      "11tr",
+      "dt_st_step",
+      0,
+      "noisy"
+    ],
+    [
+      "11bl",
+      "bc_unet",
+      0,
+      "clean"
+    ],
+    [
+      "11tl",
+      "dt_st_traj",
+      0,
+      "delta"
+    ],
+    [
+      "11tl",
+      "dt_st_step",
+      0,
+      "delta"
+    ],
+    [
+      "11br",
+      "dt_st_traj",
+      0,
+      "delta"
+    ],
+    [
+      "11br",
+      "dt_st_step",
+      0,
+      "delta"
+    ]
+  ],
+  "planned_checkpoints": 280,
+  "partition": "ckpt-all",
+  "n_values": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64
+  ],
+  "strategies": [
+    "last",
+    "max"
+  ],
+  "splits": [
+    "eval",
+    "train_heldout",
+    "validation"
+  ],
+  "smoke_cancelled": "2026-10-19: smoke array cancelled by request; train dependency cleared",
+  "moved_train": {
+    "4": "42112112_4",
+    "18": "42112113_18",
+    "19": "42112114_19",
+    "20": "42128894_20",
+    "21": "42128894_21",
+    "22": "42128894_22",
+    "23": "42128894_23",
+    "24": "42128894_24",
+    "25": "42128895_25",
+    "26": "42128895_26",
+    "27": "42128896_27"
+  },
+  "delta_baselines_added": "2026-10-21: tasks 24-27 (11tl/11br dt_st_* clean seed 0) added as matched BFS baselines for the delta arm; tasks 20-27 run under job name maze_delta_train so maze_pause_20261021/pause_watch.py ignores them"
+}

@@ -1,0 +1,82 @@
+{
+  "11br": {
+    "train_episodes": 637,
+    "validation_episodes": 163,
+    "train_pairs": 570,
+    "validation_pairs": 142,
+    "train_goal_cells": 49,
+    "test_goal_cells": 17,
+    "eval_unique_pairs": 92,
+    "train_heldout_unique_pairs": 99
+  },
+  "11tl": {
+    "train_episodes": 643,
+    "validation_episodes": 157,
+    "train_pairs": 575,
+    "validation_pairs": 144,
+    "train_goal_cells": 50,
+    "test_goal_cells": 16,
+    "eval_unique_pairs": 89,
+    "train_heldout_unique_pairs": 96
+  },
+  "11tr": {
+    "train_episodes": 638,
+    "validation_episodes": 162,
+    "train_pairs": 575,
+    "validation_pairs": 144,
+    "train_goal_cells": 50,
+    "test_goal_cells": 16,
+    "eval_unique_pairs": 89,
+    "train_heldout_unique_pairs": 96
+  },
+  "11bl": {
+    "train_episodes": 646,
+    "validation_episodes": 154,
+    "train_pairs": 570,
+    "validation_pairs": 142,
+    "train_goal_cells": 49,
+    "test_goal_cells": 17,
+    "eval_unique_pairs": 92,
+    "train_heldout_unique_pairs": 99
+  },
+  "17br": {
+    "train_episodes": 642,
+    "validation_episodes": 158,
+    "train_pairs": 627,
+    "validation_pairs": 157,
+    "train_goal_cells": 101,
+    "test_goal_cells": 35,
+    "eval_unique_pairs": 98,
+    "train_heldout_unique_pairs": 100
+  },
+  "17tl": {
+    "train_episodes": 639,
+    "validation_episodes": 161,
+    "train_pairs": 626,
+    "validation_pairs": 157,
+    "train_goal_cells": 102,
+    "test_goal_cells": 34,
+    "eval_unique_pairs": 98,
+    "train_heldout_unique_pairs": 99
+  },
+  "17tr": {
+    "train_episodes": 639,
+    "validation_episodes": 161,
+    "train_pairs": 630,
+    "validation_pairs": 157,
+    "train_goal_cells": 104,
+    "test_goal_cells": 32,
+    "eval_unique_pairs": 98,
+    "train_heldout_unique_pairs": 99
+  },
+  "17bl": {
+    "train_episodes": 642,
+    "validation_episodes": 158,
+    "train_pairs": 627,
+    "validation_pairs": 157,
+    "train_goal_cells": 101,
+    "test_goal_cells": 35,
+    "eval_unique_pairs": 98,
+    "train_heldout_unique_pairs": 100
+  }
+}

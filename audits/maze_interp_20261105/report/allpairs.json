@@ -1,0 +1,143 @@
+{
+ "all": {
+  "bc": 0.432,
+  "bc64_closed": 0.446,
+  "bc_h4_closed": 0.459,
+  "int_s30_bfsdir": {
+   "attempt_k1": [
+    0.676,
+    0.707,
+    0.76,
+    0.765,
+    0.827,
+    0.761,
+    0.833,
+    0.764
+   ],
+   "attempt1": [
+    0.676,
+    0.722,
+    0.779,
+    0.828,
+    0.865,
+    0.796,
+    0.829,
+    0.805
+   ]
+  },
+  "int_k0long": {
+   "k": 0,
+   "attempt_k1": 0.815,
+   "attempt1": 0.815
+  },
+  "int_k0long_nofb": {
+   "k": 0,
+   "attempt_k1": 0.619,
+   "attempt1": 0.619
+  },
+  "int_k1long": {
+   "k": 1,
+   "attempt_k1": 0.787,
+   "attempt1": 0.844
+  },
+  "int_k2long": {
+   "k": 2,
+   "attempt_k1": 0.795,
+   "attempt1": 0.812
+  }
+ },
+ "bcfail": {
+  "bc": 0.015,
+  "bc64_closed": 0.105,
+  "bc_h4_closed": 0.138,
+  "int_s30_bfsdir": {
+   "attempt_k1": [
+    0.499,
+    0.533,
+    0.623,
+    0.635,
+    0.715,
+    0.663,
+    0.73,
+    0.664
+   ],
+   "attempt1": [
+    0.499,
+    0.549,
+    0.633,
+    0.725,
+    0.77,
+    0.71,
+    0.725,
+    0.715
+   ]
+  },
+  "int_k0long": {
+   "k": 0,
+   "attempt_k1": 0.717,
+   "attempt1": 0.717
+  },
+  "int_k0long_nofb": {
+   "k": 0,
+   "attempt_k1": 0.428,
+   "attempt1": 0.428
+  },
+  "int_k1long": {
+   "k": 1,
+   "attempt_k1": 0.677,
+   "attempt1": 0.749
+  },
+  "int_k2long": {
+   "k": 2,
+   "attempt_k1": 0.68,
+   "attempt1": 0.681
+  }
+ },
+ "bcok": {
+  "bc": 0.981,
+  "bc64_closed": 0.893,
+  "bc_h4_closed": 0.882,
+  "int_s30_bfsdir": {
+   "attempt_k1": [
+    0.91,
+    0.937,
+    0.942,
+    0.936,
+    0.975,
+    0.889,
+    0.969,
+    0.896
+   ],
+   "attempt1": [
+    0.91,
+    0.948,
+    0.972,
+    0.964,
+    0.989,
+    0.909,
+    0.965,
+    0.923
+   ]
+  },
+  "int_k0long": {
+   "k": 0,
+   "attempt_k1": 0.944,
+   "attempt1": 0.944
+  },
+  "int_k0long_nofb": {
+   "k": 0,
+   "attempt_k1": 0.87,
+   "attempt1": 0.87
+  },
+  "int_k1long": {
+   "k": 1,
+   "attempt_k1": 0.931,
+   "attempt1": 0.97
+  },
+  "int_k2long": {
+   "k": 2,
+   "attempt_k1": 0.948,
+   "attempt1": 0.985
+  }
+ }
+}

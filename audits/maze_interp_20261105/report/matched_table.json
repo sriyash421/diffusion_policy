@@ -1,0 +1,91 @@
+{
+ "rows": [
+  {
+   "name": "BC, 64-step chunk, open loop (the BC everywhere above)",
+   "train": 1.0,
+   "test": 0.0,
+   "control": 0.965,
+   "all": 0.432,
+   "all_bcfail": 0.015,
+   "all_bcok": 0.981,
+   "note": "all-pairs columns: the scan (3 seeds)"
+  },
+  {
+   "name": "BC 64-step chunk, re-planned every step",
+   "train": 1.0,
+   "test": 0.028,
+   "control": 0.9,
+   "all": 0.446,
+   "all_bcfail": 0.105,
+   "all_bcok": 0.893
+  },
+  {
+   "name": "BC horizon 4, re-planned every step",
+   "train": 1.0,
+   "test": 0.06,
+   "control": 0.863,
+   "all": 0.459,
+   "all_bcfail": 0.138,
+   "all_bcok": 0.882
+  },
+  {
+   "name": "STk0, 900 steps (8-round run, round 0)",
+   "train": 0.9,
+   "test": 0.393,
+   "control": 0.93,
+   "all": 0.676,
+   "all_bcfail": 0.499,
+   "all_bcok": 0.91
+  },
+  {
+   "name": "STk7, 7200 steps total (8 rounds \u00d7 900)",
+   "train": 0.994,
+   "test": 0.595,
+   "control": 0.98,
+   "all": 0.764,
+   "all_bcfail": 0.664,
+   "all_bcok": 0.896
+  },
+  {
+   "name": "STk0, 7200 steps",
+   "train": 0.996,
+   "test": 0.79,
+   "control": 0.96,
+   "all": 0.815,
+   "all_bcfail": 0.717,
+   "all_bcok": 0.944
+  },
+  {
+   "name": "STk0, 7200 steps, NO feedback (all channels zero)",
+   "train": 0.999,
+   "test": 0.383,
+   "control": 0.92,
+   "all": 0.619,
+   "all_bcfail": 0.428,
+   "all_bcok": 0.87
+  },
+  {
+   "name": "STk1, 7200 steps total (2 rounds \u00d7 3600)",
+   "train": 1.0,
+   "test": 0.557,
+   "control": 0.917,
+   "all": 0.787,
+   "all_bcfail": 0.677,
+   "all_bcok": 0.931
+  },
+  {
+   "name": "STk2, 7200 steps total (3 rounds \u00d7 2400)",
+   "train": 1.0,
+   "test": 0.593,
+   "control": 0.998,
+   "all": 0.795,
+   "all_bcfail": 0.68,
+   "all_bcok": 0.948
+  }
+ ],
+ "n_pairs": {
+  "all": 2870,
+  "all_bcfail": 1631,
+  "all_bcok": 1239
+ }
+}

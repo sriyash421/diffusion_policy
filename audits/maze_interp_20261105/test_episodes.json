@@ -1,0 +1,606 @@
+{
+ "rule": "all (start, held-out goal) pairs sorted by BC successes out of 3 (ascending), random tie-break seed 0, first 50; bc_fail = at most 1 success of 3",
+ "bc_step": 7000,
+ "episodes": [
+  {
+   "start": [
+    0,
+    9
+   ],
+   "goal": [
+    2,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    3,
+    4
+   ],
+   "goal": [
+    2,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    10
+   ],
+   "goal": [
+    10,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    0,
+    10
+   ],
+   "goal": [
+    0,
+    1
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    4
+   ],
+   "goal": [
+    6,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    8
+   ],
+   "goal": [
+    10,
+    3
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    5,
+    2
+   ],
+   "goal": [
+    10,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    0
+   ],
+   "goal": [
+    10,
+    2
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    4,
+    2
+   ],
+   "goal": [
+    0,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    4
+   ],
+   "goal": [
+    0,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    3
+   ],
+   "goal": [
+    0,
+    3
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    4
+   ],
+   "goal": [
+    6,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    7
+   ],
+   "goal": [
+    1,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    9
+   ],
+   "goal": [
+    9,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    2,
+    0
+   ],
+   "goal": [
+    3,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    2,
+    10
+   ],
+   "goal": [
+    0,
+    3
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    5,
+    2
+   ],
+   "goal": [
+    6,
+    1
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    4,
+    10
+   ],
+   "goal": [
+    0,
+    9
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    6
+   ],
+   "goal": [
+    2,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    3,
+    8
+   ],
+   "goal": [
+    9,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    0
+   ],
+   "goal": [
+    1,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    10
+   ],
+   "goal": [
+    0,
+    2
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    2,
+    8
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    0
+   ],
+   "goal": [
+    2,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    4
+   ],
+   "goal": [
+    10,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    8
+   ],
+   "goal": [
+    9,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    9,
+    0
+   ],
+   "goal": [
+    6,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    0
+   ],
+   "goal": [
+    2,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    5
+   ],
+   "goal": [
+    0,
+    2
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    9,
+    0
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    0,
+    1
+   ],
+   "goal": [
+    10,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    9,
+    6
+   ],
+   "goal": [
+    8,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    10
+   ],
+   "goal": [
+    10,
+    3
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    5
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    1
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    7
+   ],
+   "goal": [
+    0,
+    1
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    4,
+    4
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    1,
+    10
+   ],
+   "goal": [
+    0,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    4
+   ],
+   "goal": [
+    7,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    6,
+    6
+   ],
+   "goal": [
+    0,
+    3
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    4,
+    1
+   ],
+   "goal": [
+    2,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    2,
+    8
+   ],
+   "goal": [
+    0,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    4
+   ],
+   "goal": [
+    1,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    7,
+    10
+   ],
+   "goal": [
+    7,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    4,
+    6
+   ],
+   "goal": [
+    1,
+    2
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    0,
+    1
+   ],
+   "goal": [
+    2,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    1,
+    2
+   ],
+   "goal": [
+    1,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    8,
+    10
+   ],
+   "goal": [
+    4,
+    0
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    10,
+    8
+   ],
+   "goal": [
+    6,
+    6
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  },
+  {
+   "start": [
+    1,
+    10
+   ],
+   "goal": [
+    8,
+    4
+   ],
+   "bc_scan_successes": 0,
+   "bc_fail": true
+  }
+ ]
+}

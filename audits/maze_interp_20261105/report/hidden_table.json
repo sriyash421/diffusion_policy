@@ -1,0 +1,91 @@
+{
+ "rows": [
+  {
+   "name": "BC, 64-step chunk, open loop (the BC everywhere above)",
+   "train": 1.0,
+   "test": 0.0,
+   "control": 0.965,
+   "all": 0.432,
+   "all_bcfail": 0.015,
+   "all_bcok": 0.981,
+   "note": "all-pairs columns: the scan (3 seeds)"
+  },
+  {
+   "name": "STk0, hidden goal, ASTEROID (repo)",
+   "train": 0.36,
+   "test": 0.075,
+   "control": 0.61,
+   "all": 0.288,
+   "all_bcfail": 0.092,
+   "all_bcok": 0.545
+  },
+  {
+   "name": "STk7, hidden goal, ASTEROID (repo)",
+   "train": 0.569,
+   "test": 0.06,
+   "control": 0.655,
+   "all": 0.343,
+   "all_bcfail": 0.124,
+   "all_bcok": 0.632
+  },
+  {
+   "name": "STk0, hidden goal, DAgger",
+   "train": 0.325,
+   "test": 0.058,
+   "control": 0.547,
+   "all": 0.274,
+   "all_bcfail": 0.085,
+   "all_bcok": 0.523
+  },
+  {
+   "name": "STk7, hidden goal, DAgger",
+   "train": 0.408,
+   "test": 0.052,
+   "control": 0.603,
+   "all": 0.303,
+   "all_bcfail": 0.081,
+   "all_bcok": 0.597
+  },
+  {
+   "name": "STk0, goal visible, BFS + dx, dy, A* demo target (= ASTEROID scheme)",
+   "train": 0.9,
+   "test": 0.393,
+   "control": 0.93,
+   "all": 0.676,
+   "all_bcfail": 0.499,
+   "all_bcok": 0.91
+  },
+  {
+   "name": "STk7, goal visible, BFS + dx, dy, A* demo target (= ASTEROID scheme)",
+   "train": 0.994,
+   "test": 0.595,
+   "control": 0.98,
+   "all": 0.764,
+   "all_bcfail": 0.664,
+   "all_bcok": 0.896
+  },
+  {
+   "name": "STk0, goal visible, BFS + dx, dy, DAgger",
+   "train": 0.902,
+   "test": 0.398,
+   "control": 0.938,
+   "all": 0.697,
+   "all_bcfail": 0.527,
+   "all_bcok": 0.922
+  },
+  {
+   "name": "STk7, goal visible, BFS + dx, dy, DAgger",
+   "train": 1.0,
+   "test": 0.6,
+   "control": 0.983,
+   "all": 0.821,
+   "all_bcfail": 0.688,
+   "all_bcok": 0.995
+  }
+ ],
+ "n_pairs": {
+  "all": 2870,
+  "all_bcfail": 1631,
+  "all_bcok": 1239
+ }
+}

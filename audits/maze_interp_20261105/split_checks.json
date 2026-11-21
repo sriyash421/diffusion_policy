@@ -1,0 +1,11 @@
+{
+ "train_goal_cells": 30,
+ "test_goal_cells": 41,
+ "episodes": 800,
+ "unique_pairs": 666,
+ "train_episodes": 642,
+ "validation_episodes": 158,
+ "train_goals_used": 30,
+ "expert_len_mean": 11.57875,
+ "expert_len_max": 29
+}

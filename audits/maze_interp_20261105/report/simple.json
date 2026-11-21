@@ -1,0 +1,1081 @@
+{
+ "grid": {
+  "n_fail": 1552,
+  "stk": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "STk0": {
+    "train": {
+     "perf1": 0.9,
+     "perf16": 0.306,
+     "best16": 0.96
+    },
+    "all": {
+     "perf1": 0.676,
+     "perf16": 0.274,
+     "best16": 0.856
+    },
+    "fail": {
+     "perf1": 0.498,
+     "perf16": 0.171,
+     "best16": 0.761
+    },
+    "update": 900
+   },
+   "STk1": {
+    "train": {
+     "perf1": 0.971,
+     "perf16": 0.774,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.792,
+     "perf16": 0.571,
+     "best16": 0.953
+    },
+    "fail": {
+     "perf1": 0.659,
+     "perf16": 0.414,
+     "best16": 0.92
+    },
+    "update": 720
+   },
+   "STk2": {
+    "train": {
+     "perf1": 0.982,
+     "perf16": 0.911,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.815,
+     "perf16": 0.658,
+     "best16": 0.95
+    },
+    "fail": {
+     "perf1": 0.685,
+     "perf16": 0.501,
+     "best16": 0.91
+    },
+    "update": 660
+   },
+   "STk3": {
+    "train": {
+     "perf1": 0.986,
+     "perf16": 0.961,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.821,
+     "perf16": 0.721,
+     "best16": 0.947
+    },
+    "fail": {
+     "perf1": 0.71,
+     "perf16": 0.56,
+     "best16": 0.914
+    },
+    "update": 180
+   },
+   "STk4": {
+    "train": {
+     "perf1": 0.985,
+     "perf16": 0.983,
+     "best16": 0.999
+    },
+    "all": {
+     "perf1": 0.835,
+     "perf16": 0.746,
+     "best16": 0.934
+    },
+    "fail": {
+     "perf1": 0.716,
+     "perf16": 0.572,
+     "best16": 0.885
+    },
+    "update": 720
+   },
+   "STk5": {
+    "train": {
+     "perf1": 0.993,
+     "perf16": 0.988,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.865,
+     "perf16": 0.784,
+     "best16": 0.956
+    },
+    "fail": {
+     "perf1": 0.764,
+     "perf16": 0.639,
+     "best16": 0.922
+    },
+    "update": 240
+   },
+   "STk6": {
+    "train": {
+     "perf1": 0.995,
+     "perf16": 0.995,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.857,
+     "perf16": 0.792,
+     "best16": 0.907
+    },
+    "fail": {
+     "perf1": 0.749,
+     "perf16": 0.643,
+     "best16": 0.831
+    },
+    "update": 720
+   },
+   "STk7": {
+    "train": {
+     "perf1": 0.997,
+     "perf16": 0.997,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.867,
+     "perf16": 0.868,
+     "best16": 0.958
+    },
+    "fail": {
+     "perf1": 0.768,
+     "perf16": 0.764,
+     "best16": 0.926
+    },
+    "update": 240
+   }
+  },
+  "steps": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "STk0, 7200 steps (one round)": {
+    "train": {
+     "perf1": 0.999,
+     "perf16": 0.999,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.847,
+     "perf16": 0.846,
+     "best16": 0.886
+    },
+    "fail": {
+     "perf1": 0.738,
+     "perf16": 0.736,
+     "best16": 0.807
+    }
+   },
+   "STk7, 8 rounds \u00d7 900 = 7200 steps": {
+    "train": {
+     "perf1": 0.997,
+     "perf16": 0.997,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.867,
+     "perf16": 0.868,
+     "best16": 0.958
+    },
+    "fail": {
+     "perf1": 0.768,
+     "perf16": 0.764,
+     "best16": 0.926
+    }
+   }
+  },
+  "fb": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "STk0 with feedback (BFS + dx, dy)": {
+    "train": {
+     "perf1": 0.999,
+     "perf16": 0.999,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.847,
+     "perf16": 0.846,
+     "best16": 0.886
+    },
+    "fail": {
+     "perf1": 0.738,
+     "perf16": 0.736,
+     "best16": 0.807
+    }
+   },
+   "STk0 without feedback": {
+    "train": {
+     "perf1": 0.998,
+     "perf16": 0.998,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.598,
+     "perf16": 0.598,
+     "best16": 0.625
+    },
+    "fail": {
+     "perf1": 0.332,
+     "perf16": 0.331,
+     "best16": 0.372
+    }
+   }
+  },
+  "k7fb": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "STk7, 8 rounds \u00d7 900 steps (with feedback)": {
+    "train": {
+     "perf1": 0.997,
+     "perf16": 0.997,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.867,
+     "perf16": 0.868,
+     "best16": 0.958
+    },
+    "fail": {
+     "perf1": 0.768,
+     "perf16": 0.764,
+     "best16": 0.926
+    }
+   },
+   "STk0, 7200 steps, with feedback (BFS + dx, dy)": {
+    "train": {
+     "perf1": 0.999,
+     "perf16": 0.999,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.847,
+     "perf16": 0.846,
+     "best16": 0.886
+    },
+    "fail": {
+     "perf1": 0.738,
+     "perf16": 0.736,
+     "best16": 0.807
+    }
+   },
+   "STk0, 7200 steps, without feedback": {
+    "train": {
+     "perf1": 0.998,
+     "perf16": 0.998,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.598,
+     "perf16": 0.598,
+     "best16": 0.625
+    },
+    "fail": {
+     "perf1": 0.332,
+     "perf16": 0.331,
+     "best16": 0.372
+    }
+   }
+  }
+ },
+ "cont": {
+  "n_fail": 1691,
+  "stk": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.396,
+     "best16": 0.464
+    },
+    "fail": {
+     "perf1": 0.028,
+     "perf16": 0.029,
+     "best16": 0.105
+    }
+   },
+   "STk0": {
+    "train": {
+     "perf1": 0.848,
+     "perf16": 0.275,
+     "best16": 0.941
+    },
+    "all": {
+     "perf1": 0.654,
+     "perf16": 0.231,
+     "best16": 0.852
+    },
+    "fail": {
+     "perf1": 0.522,
+     "perf16": 0.191,
+     "best16": 0.783
+    },
+    "update": 900
+   },
+   "STk1": {
+    "train": {
+     "perf1": 0.901,
+     "perf16": 0.645,
+     "best16": 0.996
+    },
+    "all": {
+     "perf1": 0.684,
+     "perf16": 0.484,
+     "best16": 0.887
+    },
+    "fail": {
+     "perf1": 0.539,
+     "perf16": 0.35,
+     "best16": 0.812
+    },
+    "update": 900
+   },
+   "STk2": {
+    "train": {
+     "perf1": 0.895,
+     "perf16": 0.694,
+     "best16": 0.997
+    },
+    "all": {
+     "perf1": 0.638,
+     "perf16": 0.474,
+     "best16": 0.852
+    },
+    "fail": {
+     "perf1": 0.511,
+     "perf16": 0.348,
+     "best16": 0.762
+    },
+    "update": 240
+   },
+   "STk3": {
+    "train": {
+     "perf1": 0.928,
+     "perf16": 0.81,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.718,
+     "perf16": 0.591,
+     "best16": 0.904
+    },
+    "fail": {
+     "perf1": 0.594,
+     "perf16": 0.453,
+     "best16": 0.843
+    },
+    "update": 180
+   },
+   "STk4": {
+    "train": {
+     "perf1": 0.945,
+     "perf16": 0.869,
+     "best16": 0.998
+    },
+    "all": {
+     "perf1": 0.681,
+     "perf16": 0.591,
+     "best16": 0.919
+    },
+    "fail": {
+     "perf1": 0.554,
+     "perf16": 0.476,
+     "best16": 0.875
+    },
+    "update": 180
+   },
+   "STk5": {
+    "train": {
+     "perf1": 0.941,
+     "perf16": 0.901,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.641,
+     "perf16": 0.634,
+     "best16": 0.912
+    },
+    "fail": {
+     "perf1": 0.487,
+     "perf16": 0.5,
+     "best16": 0.86
+    },
+    "update": 300
+   },
+   "STk6": {
+    "train": {
+     "perf1": 0.961,
+     "perf16": 0.932,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.696,
+     "perf16": 0.656,
+     "best16": 0.922
+    },
+    "fail": {
+     "perf1": 0.576,
+     "perf16": 0.522,
+     "best16": 0.881
+    },
+    "update": 300
+   },
+   "STk7": {
+    "train": {
+     "perf1": 0.967,
+     "perf16": 0.936,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.704,
+     "perf16": 0.686,
+     "best16": 0.947
+    },
+    "fail": {
+     "perf1": 0.586,
+     "perf16": 0.568,
+     "best16": 0.917
+    },
+    "update": 720
+   }
+  },
+  "steps": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.396,
+     "best16": 0.464
+    },
+    "fail": {
+     "perf1": 0.028,
+     "perf16": 0.029,
+     "best16": 0.105
+    }
+   },
+   "STk0, 7200 steps (one round)": {
+    "train": {
+     "perf1": 0.964,
+     "perf16": 0.965,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.694,
+     "perf16": 0.688,
+     "best16": 0.925
+    },
+    "fail": {
+     "perf1": 0.581,
+     "perf16": 0.573,
+     "best16": 0.883
+    }
+   },
+   "STk7, 8 rounds \u00d7 900 = 7200 steps": {
+    "train": {
+     "perf1": 0.967,
+     "perf16": 0.936,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.704,
+     "perf16": 0.686,
+     "best16": 0.947
+    },
+    "fail": {
+     "perf1": 0.586,
+     "perf16": 0.568,
+     "best16": 0.917
+    }
+   }
+  },
+  "fb": {
+   "BC (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.396,
+     "best16": 0.464
+    },
+    "fail": {
+     "perf1": 0.028,
+     "perf16": 0.029,
+     "best16": 0.105
+    }
+   },
+   "STk0 with feedback (BFS + dx, dy)": {
+    "train": {
+     "perf1": 0.964,
+     "perf16": 0.965,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.694,
+     "perf16": 0.688,
+     "best16": 0.925
+    },
+    "fail": {
+     "perf1": 0.581,
+     "perf16": 0.573,
+     "best16": 0.883
+    }
+   },
+   "STk0 without feedback": {
+    "train": {
+     "perf1": 0.935,
+     "perf16": 0.939,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.521,
+     "perf16": 0.52,
+     "best16": 0.751
+    },
+    "fail": {
+     "perf1": 0.331,
+     "perf16": 0.333,
+     "best16": 0.592
+    }
+   }
+  }
+ },
+ "online": {
+  "n_fail": 1552,
+  "stk": {
+   "BC on demos (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "BC on the DAgger data (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.399,
+     "best16": 0.467
+    },
+    "fail": {
+     "perf1": 0.056,
+     "perf16": 0.057,
+     "best16": 0.102
+    }
+   },
+   "STk0": {
+    "train": {
+     "perf1": 0.903,
+     "perf16": 0.331,
+     "best16": 0.966
+    },
+    "all": {
+     "perf1": 0.697,
+     "perf16": 0.292,
+     "best16": 0.865
+    },
+    "fail": {
+     "perf1": 0.531,
+     "perf16": 0.185,
+     "best16": 0.774
+    },
+    "update": 900
+   },
+   "STk1": {
+    "train": {
+     "perf1": 0.989,
+     "perf16": 0.938,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.763,
+     "perf16": 0.692,
+     "best16": 0.856
+    },
+    "fail": {
+     "perf1": 0.602,
+     "perf16": 0.486,
+     "best16": 0.734
+    },
+    "update": 840
+   },
+   "STk2": {
+    "train": {
+     "perf1": 0.99,
+     "perf16": 0.989,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.795,
+     "perf16": 0.779,
+     "best16": 0.872
+    },
+    "fail": {
+     "perf1": 0.659,
+     "perf16": 0.622,
+     "best16": 0.764
+    },
+    "update": 900
+   },
+   "STk3": {
+    "train": {
+     "perf1": 0.99,
+     "perf16": 0.99,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.758,
+     "perf16": 0.758,
+     "best16": 0.853
+    },
+    "fail": {
+     "perf1": 0.57,
+     "perf16": 0.579,
+     "best16": 0.728
+    },
+    "update": 420
+   },
+   "STk4": {
+    "train": {
+     "perf1": 0.992,
+     "perf16": 0.946,
+     "best16": 0.999
+    },
+    "all": {
+     "perf1": 0.768,
+     "perf16": 0.759,
+     "best16": 0.871
+    },
+    "fail": {
+     "perf1": 0.609,
+     "perf16": 0.596,
+     "best16": 0.765
+    },
+    "update": 780
+   },
+   "STk5": {
+    "train": {
+     "perf1": 0.991,
+     "perf16": 0.989,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.753,
+     "perf16": 0.791,
+     "best16": 0.872
+    },
+    "fail": {
+     "perf1": 0.579,
+     "perf16": 0.618,
+     "best16": 0.762
+    },
+    "update": 180
+   },
+   "STk6": {
+    "train": {
+     "perf1": 0.977,
+     "perf16": 0.998,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.772,
+     "perf16": 0.812,
+     "best16": 0.897
+    },
+    "fail": {
+     "perf1": 0.619,
+     "perf16": 0.658,
+     "best16": 0.812
+    },
+    "update": 120
+   },
+   "STk7": {
+    "train": {
+     "perf1": 0.992,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.741,
+     "perf16": 0.812,
+     "best16": 0.896
+    },
+    "fail": {
+     "perf1": 0.563,
+     "perf16": 0.657,
+     "best16": 0.81
+    },
+    "update": 300
+   }
+  },
+  "steps": {
+   "BC on demos (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "BC on the DAgger data (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.399,
+     "best16": 0.467
+    },
+    "fail": {
+     "perf1": 0.056,
+     "perf16": 0.057,
+     "best16": 0.102
+    }
+   },
+   "STk0, 7200 steps (one round)": {
+    "train": {
+     "perf1": 0.994,
+     "perf16": 0.994,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.843,
+     "perf16": 0.844,
+     "best16": 0.92
+    },
+    "fail": {
+     "perf1": 0.733,
+     "perf16": 0.734,
+     "best16": 0.865
+    }
+   },
+   "STk7, 8 rounds \u00d7 900 = 7200 steps": {
+    "train": {
+     "perf1": 0.992,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.741,
+     "perf16": 0.812,
+     "best16": 0.896
+    },
+    "fail": {
+     "perf1": 0.563,
+     "perf16": 0.657,
+     "best16": 0.81
+    }
+   }
+  },
+  "fb": {
+   "BC on demos (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "BC on the DAgger data (closed loop)": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.397,
+     "perf16": 0.399,
+     "best16": 0.467
+    },
+    "fail": {
+     "perf1": 0.056,
+     "perf16": 0.057,
+     "best16": 0.102
+    }
+   },
+   "STk0 with feedback (BFS + dx, dy)": {
+    "train": {
+     "perf1": 0.994,
+     "perf16": 0.994,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.843,
+     "perf16": 0.844,
+     "best16": 0.92
+    },
+    "fail": {
+     "perf1": 0.733,
+     "perf16": 0.734,
+     "best16": 0.865
+    }
+   },
+   "STk0 without feedback": {
+    "train": {
+     "perf1": 0.999,
+     "perf16": 0.999,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.627,
+     "perf16": 0.626,
+     "best16": 0.67
+    },
+    "fail": {
+     "perf1": 0.412,
+     "perf16": 0.412,
+     "best16": 0.482
+    }
+   }
+  }
+ },
+ "noise": {
+  "flat": {
+   "STk7, clean eval": {
+    "train": {
+     "perf1": 0.902,
+     "perf16": 0.946,
+     "best16": 0.999
+    },
+    "all": {
+     "perf1": 0.669,
+     "perf16": 0.719,
+     "best16": 0.846
+    },
+    "fail": {
+     "perf1": 0.474,
+     "perf16": 0.537,
+     "best16": 0.722
+    }
+   },
+   "STk7, noised eval (its training noise)": {
+    "train": {
+     "perf1": 0.753,
+     "perf16": 0.966,
+     "best16": 0.999
+    },
+    "all": {
+     "perf1": 0.597,
+     "perf16": 0.734,
+     "best16": 0.908
+    },
+    "fail": {
+     "perf1": 0.457,
+     "perf16": 0.564,
+     "best16": 0.833
+    }
+   },
+   "BC (closed loop), clean eval": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "BC (closed loop), noised eval (same t as ST's candidate n)": {
+    "train": {
+     "perf1": 0.445,
+     "perf16": 0.454,
+     "best16": 0.797
+    },
+    "all": {
+     "perf1": 0.408,
+     "perf16": 0.41,
+     "best16": 0.675
+    },
+    "fail": {
+     "perf1": 0.159,
+     "perf16": 0.16,
+     "best16": 0.454
+    }
+   }
+  },
+  "ramp": {
+   "STk7, clean eval": {
+    "train": {
+     "perf1": 0.439,
+     "perf16": 0.927,
+     "best16": 0.996
+    },
+    "all": {
+     "perf1": 0.343,
+     "perf16": 0.715,
+     "best16": 0.888
+    },
+    "fail": {
+     "perf1": 0.196,
+     "perf16": 0.557,
+     "best16": 0.808
+    }
+   },
+   "STk7, noised eval (its training noise)": {
+    "train": {
+     "perf1": 0.376,
+     "perf16": 0.953,
+     "best16": 0.995
+    },
+    "all": {
+     "perf1": 0.323,
+     "perf16": 0.733,
+     "best16": 0.909
+    },
+    "fail": {
+     "perf1": 0.243,
+     "perf16": 0.578,
+     "best16": 0.849
+    }
+   },
+   "BC (closed loop), clean eval": {
+    "train": {
+     "perf1": 1.0,
+     "perf16": 1.0,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.459,
+     "perf16": 0.459,
+     "best16": 0.471
+    },
+    "fail": {
+     "perf1": 0.004,
+     "perf16": 0.003,
+     "best16": 0.023
+    }
+   },
+   "BC (closed loop), noised eval (same t as ST's candidate n)": {
+    "train": {
+     "perf1": 0.161,
+     "perf16": 0.925,
+     "best16": 1.0
+    },
+    "all": {
+     "perf1": 0.162,
+     "perf16": 0.571,
+     "best16": 0.739
+    },
+    "fail": {
+     "perf1": 0.079,
+     "perf16": 0.225,
+     "best16": 0.517
+    }
+   }
+  }
+ }
+}

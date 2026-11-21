@@ -1,0 +1,166 @@
+{
+ "11br": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/gscratch/robotics/harine/L2S/data/procgen_maze_expert_quadrant_unpadded/data.zarr",
+  "goal_split": "quadrant",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 32,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "11tl": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_expand_20261008/datasets/11tl/data.zarr",
+  "goal_split": "quadrant_tl",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 31,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "17br": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes_17pad/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_expand_20261008/datasets/17br/data.zarr",
+  "goal_split": "quadrant",
+  "shape": [
+   25,
+   25
+  ],
+  "horizon": 112,
+  "expert_max": 55,
+  "diameter": 58,
+  "free_cells": 161,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "11tr": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_quadrants_delta_20261019/datasets/11tr/data.zarr",
+  "goal_split": "quadrant_tr",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 32,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "11bl": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_quadrants_delta_20261019/datasets/11bl/data.zarr",
+  "goal_split": "quadrant_bl",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 32,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "17tl": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes_17pad/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_quadrants_vnoise_20261023/datasets/17tl/data.zarr",
+  "goal_split": "quadrant_tl",
+  "shape": [
+   25,
+   25
+  ],
+  "horizon": 112,
+  "expert_max": 58,
+  "diameter": 58,
+  "free_cells": 161,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "17tr": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes_17pad/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_quadrants_vnoise_20261023/datasets/17tr/data.zarr",
+  "goal_split": "quadrant_tr",
+  "shape": [
+   25,
+   25
+  ],
+  "horizon": 112,
+  "expert_max": 58,
+  "diameter": 58,
+  "free_cells": 161,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "17bl": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes_17pad/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_quadrants_vnoise_20261023/datasets/17bl/data.zarr",
+  "goal_split": "quadrant_bl",
+  "shape": [
+   25,
+   25
+  ],
+  "horizon": 112,
+  "expert_max": 57,
+  "diameter": 58,
+  "free_cells": 161,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "interp30": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_interp_20261105/datasets/interp30/data.zarr",
+  "goal_split": "random30",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 29,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800
+ },
+ "interp30c": {
+  "layouts": "/gscratch/robotics/harine/L2S/data/procgen_mazes/layouts.npz",
+  "dataset": "/mmfs1/gscratch/robotics/harine/codex_audits/maze_interp_20261105/datasets/interp30c/data.zarr",
+  "goal_split": "random30",
+  "shape": [
+   11,
+   11
+  ],
+  "horizon": 64,
+  "expert_max": 30,
+  "diameter": 32,
+  "free_cells": 71,
+  "dataset_seed": 0,
+  "split_seed": 0,
+  "episodes": 800,
+  "continuous": true,
+  "jitter": 0.3,
+  "max_step": 1.0,
+  "demo_clearance": 0.1
+ }
+}

@@ -1,0 +1,11 @@
+[
+ "- **ASTEROID (repo) learns to use its context when the goal is hidden.** This is the first run in this study where later attempts beat earlier ones.",
+ "  - On training starts, STk7 goes from 0.45 on attempt 1 to 0.57 on attempt 8, and STk on attempt k+1 rises from 0.36 to 0.57.",
+ "  - On all 2870 held-out pairs, attempt k+1 beats attempt 1 from k = 4 on: 0.34 vs 0.28 at k = 7, and 0.40 vs 0.32 at k = 6.",
+ "  - The round-0 policy has no context training, and its success drops after attempt 1 (0.36 \u2192 0.25 on training starts). So the gain comes from training with its own attempts in context.",
+ "- **DAgger stays flat.** STk7 on training starts is 0.40 \u2192 0.41 over attempts, and on all held-out pairs attempt k+1 \u2248 attempt 1 (about 0.30). Its best of 8 on training starts is 0.53, against 0.74 for ASTEROID.",
+ "  - A likely reason (not tested): DAgger's labels sit on the policy's wandering cells, where the right move depends on a goal the policy cannot see. ASTEROID trains on clean expert paths that start right after the context.",
+ "- **Held-out goals barely benefit.** On the 50 BC-fail test pairs both runs stay near 0.06; best of 8 reaches only 0.17 / 0.15. On the all-pairs BC-fail subset, ASTEROID STk7 scores 0.12 (0.09 on attempt 1) and DAgger 0.08.",
+ "  - The policy only ever learned to head for the 30 training goals. Locating an unseen goal from a 0/1 flag would need a search over cells it was never trained to go to.",
+ "- **Goal visible vs hidden:** 0.76\u20130.82 on all held-out pairs and 0.60 on the BC-fail test pairs when the goal is visible, vs 0.30\u20130.34 and 0.06 hidden. The 0.6 on control pairs and 0.3 on all pairs come partly from coverage: an attempt counts as a success if it passes within 1 of the goal."
+]
