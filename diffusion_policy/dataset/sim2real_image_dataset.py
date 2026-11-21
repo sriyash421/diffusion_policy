@@ -218,8 +218,12 @@ class Sim2RealImageDataset(BaseImageDataset):
             cache_hash = hashlib.md5(
                 cache_fingerprint_json.encode('utf-8')).hexdigest()
 
+            # Outside the dataset dir: writing inside it changes the dataset mtime in the
+            # fingerprint, so every run missed the cache and wrote a new ~1 GB copy.
+            cache_dir = os.path.join(os.path.dirname(os.path.abspath(dataset_path)), '_dataloader_cache')
+            os.makedirs(cache_dir, exist_ok=True)
             cache_zarr_path = os.path.join(
-                dataset_path, cache_hash + '.zarr.zip')
+                cache_dir, os.path.basename(os.path.normpath(dataset_path)) + '.' + cache_hash + '.zarr.zip')
             cache_lock_path = cache_zarr_path + '.lock'
 
             print(f'Acquiring lock on cache: {cache_zarr_path}')
