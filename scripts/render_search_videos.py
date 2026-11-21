@@ -60,7 +60,7 @@ from diffusion_policy.env.pusht.veritas.draw import draw_waypoints_rgb
 from diffusion_policy.env.pusht.veritas.schemas import VeritasDualPlan
 from diffusion_policy.env.pusht.veritas.tracker import load_split_plans
 from eval_search_pusht import (
-    _WAYPOINT_PLAN_DIRS, build_envs, get_test_states, load_policy, override_verifier_value,
+    _WAYPOINT_PLAN_DIRS, build_envs, get_split_states, load_policy, override_verifier_value,
     SUCCESS_REWARD, _episode_seed, override_terminal_scoring)
 
 
@@ -578,7 +578,13 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
     decision = 0
     done = False
     pbar = tqdm.tqdm(total=max_steps // Ta + 1, desc=f'{label} n={n_actions} step{step}')
+    episode_sample_seeds = getattr(policy, '_sample_seeds', None)
     while not done:
+        if episode_sample_seeds is not None:
+            # eval's per-decision stream restart (rollout_max_rewards, candidate_rng
+            # paired_decision_v3); without it the videos are not eval's rollouts
+            policy.set_sample_seeds([(s + decision * 1_000_000_007) % (2 ** 63 - 1)
+                                     for s in episode_sample_seeds])
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
         if plans is not None:
             # the live trackers, advanced by every executed step -- read fresh each
@@ -886,10 +892,17 @@ def render_one(policy, cfg, env, states, episode_idxs, experts, n_actions, out, 
                    'per-step jsonl and the caption. A shadow wp_* value tracks its own '
                    "plan on the real trajectory (ShadowTrackerWrapper); t_goal comes free "
                    'from the reached state.')
+@click.option('--split', default='test', type=click.Choice(['test', 'val']),
+              help="which held-out split's episodes to roll (eval_search_pusht --split)")
+@click.option('--split-file', default=None,
+              help='take --split from this manifest (eval_search_pusht --split-file)')
+@click.option('--tile/--no-tile', default=False,
+              help='also write ep<NN>_tiled_step<STEP>_<label>.mp4: every --n of one episode side '
+                   'by side, the shorter ones holding their last frame')
 def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, hold, seed,
          subgoals, max_fan, zoom_px, zoom_q, skip_blind, blind_eps, execute,
          temperature, closeup, value_strip, highlight_slots, verifier_value, plan_dir,
-         episodes, shadow_values, terminal_scoring):
+         episodes, shadow_values, terminal_scoring, split, split_file, tile):
     out = pathlib.Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     step = int(''.join(ch for ch in pathlib.Path(checkpoint).stem if ch.isdigit()) or 0)
@@ -920,7 +933,7 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
     override_terminal_scoring(policy, terminal_scoring)
     if seed is None:
         seed = int(cfg.training.get('seed', 42))
-    states, episode_idxs = get_test_states(cfg)
+    states, episode_idxs = get_split_states(cfg, split, split_file=split_file)
     states, episode_idxs = states[:n_seeds], episode_idxs[:n_seeds]
     experts = expert_trajectories(cfg, episode_idxs)
     To, Ta = policy.n_obs_steps, policy.n_action_steps
@@ -943,7 +956,7 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
     plans = None
     if is_waypoint_value(vv):
         pd = plan_dir or _WAYPOINT_PLAN_DIRS[vv]
-        plans = load_split_plans(pd, episode_idxs, 'test', vv)
+        plans = load_split_plans(pd, episode_idxs, split, vv)
         print(f'waypoint plans: {pd} ({len(plans)} episodes)')
     shadow_plans = {}
     shadow_verifiers = {}
@@ -952,7 +965,7 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
             raise SystemExit(f'--shadow-values {sv} is the steering value itself')
         if is_waypoint_value(sv):
             pd = _WAYPOINT_PLAN_DIRS[sv]
-            shadow_plans[sv] = load_split_plans(pd, episode_idxs, 'test', sv)
+            shadow_plans[sv] = load_split_plans(pd, episode_idxs, split, sv)
             # a second path-walking verifier on its own sim pool; the steering one keeps
             # the policy's trackers and must not be re-pointed between candidates
             shadow_verifiers[sv] = policy._build_verifier(
@@ -991,6 +1004,26 @@ def main(checkpoint, label, n_list, out_dir, n_seeds, device, max_steps, fps, ho
                 close()
             except Exception as e:
                 print(f'warning: verifier close failed: {e}')
+    if tile:
+        tile_widths(out, label, step, n_list, n_seeds, fps)
+
+
+def tile_widths(out, label, step, n_list, n_seeds, fps):
+    """One video per episode with every search width side by side, in --n order."""
+    for i in range(n_seeds):
+        clips = []
+        for n in n_list:
+            found = sorted(out.glob(f'seed{i:02d}_n{n}_step{step}_{label}_*.mp4'))
+            if found:
+                clips.append(list(imageio.mimread(str(found[0]), memtest=False)))
+        if len(clips) != len(n_list):
+            continue
+        h = max(c[0].shape[0] for c in clips)
+        clips = [[np.pad(f, ((0, h - f.shape[0]), (0, 0), (0, 0))) for f in c] for c in clips]
+        length = max(len(c) for c in clips)
+        frames = [np.concatenate([c[min(t, len(c) - 1)] for c in clips], axis=1) for t in range(length)]
+        imageio.mimwrite(str(out / f'ep{i:02d}_tiled_step{step}_{label}.mp4'), frames, fps=fps,
+                         codec='libx264', quality=8, macro_block_size=1)
 
 
 if __name__ == '__main__':

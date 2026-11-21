@@ -59,7 +59,7 @@ EXCL_FLAG=""; [ -n "$EXCLUDE_NODES" ] && EXCL_FLAG="--exclude=$EXCLUDE_NODES"
 DATASETS=(
   "_split-blq|$SPL/pusht_blockquad_bottomleft_train137.json|137|50|19"
   "_split-blq50|$SPL/pusht_blockquad_bottomleft_train50_seed42.json|50|50|19"
-  "_split-blq50far|$SPL/pusht_blockquad_bottomleft_train50_far.json|50|50|19"
+  "_split-blq50far|$SPL/pusht_blockquad_bottomleft_train50_far_valpool50.json|50|50|50"
   "_split-brd100|$SPL/pusht_blockborder_train100_core50.json|100|50|0"
 )
 DATASET_TAGS="${DATASET_TAGS:-}"   # optional filter, space-separated tags

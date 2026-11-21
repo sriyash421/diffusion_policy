@@ -66,8 +66,12 @@ QUAD_SUBSET_BUDGETS = {'bottomleft': (50,)}
 # region is too small to spare a val set (topleft: 46 episodes) and, for a like-for-like
 # second held-out quadrant, bottomright. Test stays the parent's test; the parent's
 # in-region val (bottomright: 8 episodes) is UNUSED here, not merged into anything.
-# {quadrant: (k_train, n_val)}
-QUAD_FAR_POOLVAL = {'topleft': (50, 19), 'bottomright': (50, 19)}
+# n_val = 50 (2026-10-29) is the held-out TRAINING-REGION set every far-50 run validates and
+# selects checkpoints on; bottomleft's family-3 val sits inside the held-out quadrant. Same
+# seeded permutation, so valpool50 contains valpool19.
+# {quadrant: (k_train, (n_val, ...))}
+QUAD_FAR_POOLVAL = {'bottomleft': (50, (50,)), 'topleft': (50, (19, 50)),
+                    'bottomright': (50, (19, 50))}
 
 
 def quadrant_distance(qname, xy):
@@ -92,7 +96,8 @@ def wall_distance(xy):
     return np.minimum.reduce([x, y, WS - x, WS - y])
 
 
-def finish(name, method, extra, train, val, test, ends, zarr_path):
+def finish(name, method, extra, train, val, test, ends, zarr_path,
+           generated_by='scripts/make_geometric_splits.py'):
     """Assemble, self-check and write one manifest."""
     idxs = {'train': sorted(int(i) for i in train),
             'val': sorted(int(i) for i in val),
@@ -103,7 +108,7 @@ def finish(name, method, extra, train, val, test, ends, zarr_path):
         f'{name}: test set shrank below {CORE_TEST}'
 
     out = {
-        'generated_by': 'scripts/make_geometric_splits.py',
+        'generated_by': generated_by,
         'zarr_path': str(zarr_path),
         'n_episodes': int(len(ends)),
         'episode_ends_checksum': episode_ends_checksum(ends),
@@ -181,23 +186,24 @@ def main():
 
         # --- family 4: far-k subset, val drawn from the leftover train pool -----------
         if qname in QUAD_FAR_POOLVAL:
-            k, n_val = QUAD_FAR_POOLVAL[qname]
+            k, n_vals = QUAD_FAR_POOLVAL[qname]
             far = train[np.argsort(-dq[train], kind='stable')[:k]]
             pool = np.setdiff1d(train, far)
-            pool_val = np.random.default_rng(SEED).permutation(pool)[:n_val]
-            finish(
-                f'pusht_blockquad_{qname}_train{k}_far_valpool{n_val}',
-                f'train = the {k} episodes of {parent} train whose T starts farthest from '
-                f'the {qname} quadrant (distance to the region, descending, ties by '
-                f'episode index); val = {n_val} episodes drawn by a seed-{SEED} permutation '
-                f'of the {len(pool)} {parent} train episodes NOT in that far-{k} set; '
-                f'test copied verbatim. The parent\'s {len(val)} in-region val episodes are '
-                f'unused.',
-                {'quadrant': qname, 'parent': parent, 'n_train': k, 'n_val': n_val,
-                 'val_source': 'train_pool', 'val_seed': SEED, 'n_pool': int(len(pool)),
-                 'train_quad_dist_min_px': round(float(dq[far].min()), 3),
-                 'n_region_unused': int(len(val))},
-                far, pool_val, test, ends, args.zarr)
+            for n_val in n_vals:
+                pool_val = np.random.default_rng(SEED).permutation(pool)[:n_val]
+                finish(
+                    f'pusht_blockquad_{qname}_train{k}_far_valpool{n_val}',
+                    f'train = the {k} episodes of {parent} train whose T starts farthest from '
+                    f'the {qname} quadrant (distance to the region, descending, ties by '
+                    f'episode index); val = {n_val} episodes drawn by a seed-{SEED} permutation '
+                    f'of the {len(pool)} {parent} train episodes NOT in that far-{k} set; '
+                    f'test copied verbatim. The parent\'s {len(val)} in-region val episodes are '
+                    f'unused.',
+                    {'quadrant': qname, 'parent': parent, 'n_train': k, 'n_val': n_val,
+                     'val_source': 'train_pool', 'val_seed': SEED, 'n_pool': int(len(pool)),
+                     'train_quad_dist_min_px': round(float(dq[far].min()), 3),
+                     'n_region_unused': int(len(val))},
+                    far, pool_val, test, ends, args.zarr)
 
     # --- family 2: border band -----------------------------------------------------
     core = order[n - CORE_TEST:]                  # largest d -> interior

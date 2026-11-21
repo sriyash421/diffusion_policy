@@ -1,4 +1,11 @@
-"""Redo a frozen list of invalid noisy-EMA readouts, resuming completed N cells."""
+"""Run one cell of a frozen eval manifest (array task = row), resuming completed N cells.
+
+Written for the noisy-EMA redo; also runs the valpool50 held-out-train evals
+(scripts/launch_valpool50_evals.py): `split`/`split_file` pass through to
+eval_search_pusht.py; a row with `evaluator: dt` runs eval_dt_pusht.py instead, and one with
+`evaluator: cand` scripts/candidate_rmse_pusht.py, and one with `evaluator: video`
+scripts/render_search_videos.py (widths tiled side by side).
+"""
 import json
 import os
 from pathlib import Path
@@ -7,7 +14,34 @@ import sys
 
 audit = Path(sys.argv[1])
 index = int(os.environ['SLURM_ARRAY_TASK_ID'])
-row = json.loads((audit / 'redo_manifest.json').read_text())[index]
+row = json.loads((audit / os.environ.get('MANIFEST', 'redo_manifest.json')).read_text())[index]
+if row.get('evaluator') == 'dt':
+    for entry in row['entries']:
+        if not (Path(row['output']) / entry['step'] / 'metrics.csv').exists():
+            subprocess.run([sys.executable, 'eval_dt_pusht.py', entry['checkpoint'],
+                            '--output-dir', str(Path(row['output']) / entry['step']),
+                            '--split', entry['split'], '--split-file', entry['split_file'],
+                            '--n', str(entry['n']), '--n-envs', str(entry['n_envs']),
+                            '--seed', str(entry['seed'])], check=True)
+    sys.exit(0)
+if row.get('evaluator') == 'cand':
+    entry = row['entries'][0]
+    command = [sys.executable, 'scripts/candidate_rmse_pusht.py', '-c', entry['checkpoint'],
+               '--split', entry['split'], '--out', row['output']]
+    if entry.get('split_file'):
+        command += ['--split-file', entry['split_file']]
+    subprocess.run(command, check=True)
+    sys.exit(0)
+if row.get('evaluator') == 'video':
+    entry = row['entries'][0]
+    command = [sys.executable, 'scripts/render_search_videos.py', '-c', entry['checkpoint'],
+               '--label', entry['label'], '--out-dir', row['output'], '--n-seeds', str(entry['n_seeds']),
+               '--seed', str(entry['seed']), '--split', entry['split'], '--terminal-scoring', '--tile']
+    command += [a for n in entry['n'] for a in ('--n', str(n))]
+    if entry.get('split_file'):
+        command += ['--split-file', entry['split_file']]
+    subprocess.run(command, check=True)
+    sys.exit(0)
 for entry in row['entries']:
     remaining_n = list(entry['n'])
     destination = Path(row['output']) / entry['step'] / 'success_curve.json'
@@ -36,6 +70,10 @@ for entry in row['entries']:
         command += ['--plan-dir', entry['plan_dir']]
     if entry.get('store_scores'):
         command += ['--store-scores']
+    if entry.get('split'):
+        command += ['--split', entry['split']]
+    if entry.get('split_file'):
+        command += ['--split-file', entry['split_file']]
     # Explicit so a manifest may point at a directory other than the one _bon_subdir
     # derives (e.g. candidate-stream dumps kept apart from the report's curves).
     command += ['--output_dir', row['output']]

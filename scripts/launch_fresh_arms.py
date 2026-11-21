@@ -10,8 +10,8 @@ scripts/watch_ema_restarts.py and scripts/select_pusht_sweep.py run on it unchan
 
     python scripts/launch_fresh_arms.py --audit pusht_tlq50far_20261006 \
         --split-tag _split-tlq50far \
-        --split-file diffusion_policy/config/splits/pusht_blockquad_topleft_train50_far_valpool19.json \
-        --n-test 46 --n-val 19 --seeds 42 43 44                 # dry run: resolves names
+        --split-file diffusion_policy/config/splits/pusht_blockquad_topleft_train50_far_valpool50.json \
+        --n-test 46 --n-val 50 --seeds 42 43 44                 # dry run: resolves names
     python scripts/launch_fresh_arms.py ... --submit            # sbatch + watcher
 
 Every run_name is checked against what hydra resolves for the same overrides, so a
