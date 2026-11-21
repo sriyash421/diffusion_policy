@@ -1,0 +1,840 @@
+{
+ "manifest": "pusht_rand50_train50_bccov30_25x25.json",
+ "bc_run": "/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search_imgonly/unet_bc/unetbc-full300_ver-t_goal_enc-resnet18_demos-50_split-rand50-50k_seed-42",
+ "bc_step": 50000,
+ "fail_rule": "coverage < 0.3",
+ "min_fail": 2,
+ "eval_seeds": [
+  0,
+  1,
+  2
+ ],
+ "bc_fail_held_out": [
+  1,
+  2,
+  3,
+  4,
+  7,
+  9,
+  10,
+  12,
+  13,
+  20,
+  21,
+  26,
+  29,
+  32,
+  37,
+  38,
+  39,
+  40,
+  42,
+  45,
+  48,
+  50,
+  51,
+  52,
+  54,
+  55,
+  59,
+  65,
+  66,
+  67,
+  68,
+  69,
+  70,
+  73,
+  75,
+  76,
+  80,
+  81,
+  83,
+  86,
+  88,
+  89,
+  91,
+  92,
+  98,
+  100,
+  101,
+  103,
+  104,
+  107,
+  112,
+  114,
+  116,
+  117,
+  118,
+  119,
+  121,
+  125,
+  126,
+  127,
+  130,
+  131,
+  133,
+  135,
+  138,
+  143,
+  146,
+  147,
+  148,
+  149,
+  150,
+  151,
+  152,
+  153,
+  154,
+  156,
+  157,
+  162,
+  168,
+  169,
+  174,
+  178,
+  179,
+  180,
+  184,
+  187,
+  191,
+  192,
+  195,
+  197,
+  198,
+  199,
+  200,
+  201,
+  202,
+  203,
+  204
+ ],
+ "bc_fail_test": [
+  3,
+  7,
+  12,
+  42,
+  50,
+  54,
+  55,
+  65,
+  66,
+  73,
+  81,
+  86,
+  88,
+  112,
+  114,
+  125,
+  127,
+  149,
+  157,
+  168,
+  191,
+  199,
+  202,
+  203,
+  204
+ ],
+ "per_start": {
+  "3": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.2283,
+    0.2054,
+    0.1212
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "7": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.02,
+    0.0002,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "12": {
+   "bc_fail": true,
+   "n_seeds_failed": 2,
+   "cov": [
+    0.286,
+    0.3701,
+    0.0097
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "42": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "50": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "54": {
+   "bc_fail": true,
+   "n_seeds_failed": 2,
+   "cov": [
+    0.0,
+    0.4272,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "55": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "65": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0577,
+    0.0204,
+    0.0848
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "66": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0953,
+    0.0953,
+    0.0953
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "73": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "81": {
+   "bc_fail": true,
+   "n_seeds_failed": 2,
+   "cov": [
+    0.2383,
+    0.1779,
+    0.3238
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "86": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "88": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.2128,
+    0.2128,
+    0.2128
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "112": {
+   "bc_fail": true,
+   "n_seeds_failed": 2,
+   "cov": [
+    0.2036,
+    0.0842,
+    0.362
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "114": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "125": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "127": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.1084,
+    0.1293,
+    0.1738
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "149": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "157": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "168": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.1681
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "191": {
+   "bc_fail": true,
+   "n_seeds_failed": 2,
+   "cov": [
+    0.1837,
+    0.293,
+    0.4049
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "199": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.1712,
+    0.1857,
+    0.2188
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "202": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.1286,
+    0.1343,
+    0.1413
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "203": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.1145
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "204": {
+   "bc_fail": true,
+   "n_seeds_failed": 3,
+   "cov": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "8": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.6283,
+    0.8945,
+    0.9109
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "17": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.481,
+    0.4764,
+    0.5295
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "18": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.3823,
+    0.9461,
+    0.9258
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "25": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.8246,
+    0.5865,
+    0.602
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "27": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.9371,
+    0.7939,
+    0.7816
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "28": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.5454,
+    0.5028,
+    0.5509
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "71": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.437,
+    0.3289,
+    0.5076
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "72": {
+   "bc_fail": false,
+   "n_seeds_failed": 1,
+   "cov": [
+    0.347,
+    0.113,
+    0.3367
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "82": {
+   "bc_fail": false,
+   "n_seeds_failed": 1,
+   "cov": [
+    0.2261,
+    0.3332,
+    0.4512
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "93": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.6019,
+    0.5596,
+    0.7117
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "105": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.5678,
+    0.9062,
+    0.7789
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "106": {
+   "bc_fail": false,
+   "n_seeds_failed": 1,
+   "cov": [
+    0.2537,
+    0.4316,
+    0.307
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "108": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.3208,
+    0.744,
+    0.3632
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "111": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.7383,
+    0.7881,
+    0.7796
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "123": {
+   "bc_fail": false,
+   "n_seeds_failed": 1,
+   "cov": [
+    0.5446,
+    0.2137,
+    0.4055
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "124": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.4414,
+    0.3595,
+    0.455
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "129": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.4321,
+    0.366,
+    0.3686
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "134": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.3537,
+    0.3498,
+    0.3477
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "144": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.4878,
+    0.317,
+    0.5839
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "155": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.6484,
+    0.5249,
+    0.5194
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "158": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.4075,
+    0.4358,
+    0.4522
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "170": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.4452,
+    0.3565,
+    0.4908
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "171": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.3765,
+    0.3961,
+    0.4014
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "185": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.8501,
+    0.8371,
+    0.8946
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  },
+  "205": {
+   "bc_fail": false,
+   "n_seeds_failed": 0,
+   "cov": [
+    0.9398,
+    0.9436,
+    0.8911
+   ],
+   "success": [
+    false,
+    false,
+    false
+   ]
+  }
+ }
+}
