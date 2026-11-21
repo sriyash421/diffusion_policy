@@ -18,7 +18,8 @@
 # Optional: TASK (widowx_put_eggplant_in_basket), VERIFIER (0|1, default 0), N (1; candidates
 #   per decision), COLLECT_DEMOS (0|1, default = VERIFIER), N_EPISODES (240), ARM (raw_n1 /
 #   veritas_n5), EVAL_SEEDS (json list -> seeded protocol), CKPT (bridge_uniform), USE_BF16 (False),
-#   GEMINI_MODEL (gemini-3.8-flash), GEMINI_KEY_FILE, VERITAS_ROOT, WANDB_MODE (online),
+#   GEMINI_MODEL (gemini-3.8-flash), PLAN_PROMPT (official; plan_prompts.py), GEMINI_KEY_FILE,
+#   VERITAS_ROOT, WANDB_MODE (online),
 #   EXTRA (further hydra overrides, space separated).
 set -euo pipefail
 VERITAS_ROOT="${VERITAS_ROOT:-/gscratch/robotics/harine/veritas}"
@@ -71,7 +72,7 @@ export WANDB_CACHE_DIR="$CACHE/wandb" WANDB_DATA_DIR="$CACHE/wandb" WANDB_DIR="$
 export PYTHONWARNINGS="ignore:pkg_resources is deprecated:UserWarning,ignore::FutureWarning:google.api_core._python_version_support,ignore:TensorFloat32 tensor cores:UserWarning"
 
 echo "arm=$ARM task=$TASK verifier=$VERIFIER_BOOL N=$N collect=$COLLECT_BOOL episodes=$N_EPISODES out=$OUT_DIR"
-echo "veritas @ $(git -C "$VERITAS_ROOT" rev-parse --short HEAD)  gemini=$GEMINI_MODEL  node=$(hostname -s)"
+echo "veritas @ $(git -C "$VERITAS_ROOT" rev-parse --short HEAD)  gemini=$GEMINI_MODEL prompt=${PLAN_PROMPT:-official}  node=$(hostname -s)"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader || true
 
 # tiny compile check so a toolchain problem shows up before the model loads

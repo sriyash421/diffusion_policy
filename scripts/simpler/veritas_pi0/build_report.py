@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Build or refresh the W&B report of the Veritas-on-pi0 campaign: plots only, three sections
+"""Build or refresh the W&B report of the Veritas-on-pi0 campaign: plots only, four sections
 (Veritas reproduction; success on train and test tasks with checkpoint choice; action RMSE of the
-context fine-tune). Every plot is redrawn from the result files, so rerunning updates the report
-in place (its URL is kept in $STEP2/report/report_url.txt).
+context fine-tune; expert and verifier checks). Every plot is redrawn from the result files, except
+section 4's, which are the PNGs written by expert_vs_pi0.py and astar_vs_verifier.py; rerunning
+updates the report in place (its URL is kept in $STEP2/report/report_url.txt).
 
     <vae_pushT_l2s env>/python scripts/simpler/veritas_pi0/build_report.py
     python scripts/simpler/veritas_pi0/build_report.py --select    # print best-train / best-test steps
@@ -162,6 +163,10 @@ def make_figures(sel):
     p = f"{STEP2}/action_rmse/action_rmse.png"
     if os.path.exists(p):
         figs["rmse/curves"] = p
+    for key, name in (("expert/success", "expert_vs_pi0"), ("expert/astar", "astar_vs_verifier")):
+        p = f"{STEP2}/expert_analysis/{name}.png"
+        if os.path.exists(p):
+            figs[key] = p
     return figs
 
 
@@ -226,6 +231,24 @@ def blocks(rid, figs, sel):
         out.append(media("rmse/curves", "RMSE vs training step", h=8))
     else:
         out.append(M(text="*RMSE curves pending.*"))
+    if "expert/success" in figs:
+        out += [
+            M(text="# 4 · Expert and verifier checks"),
+            M(text="## The expert vs pi0\nThe collected datasets come from OpenVLA (one sample executed, no "
+              "verifier). Its rate is over every collected episode (eggplant: its separate validation "
+              "collection, since the main raw collection was deleted). The pi0 arms use the 50 eval seeds and "
+              "the 300 collection seeds. Below each task: raw pi0 rerun on 200 of OpenVLA's own seeds, paired "
+              "with OpenVLA's outcome on each seed."),
+            media("expert/success", "OpenVLA vs pi0 success", h=9),
+        ]
+    if "expert/astar" in figs:
+        out += [
+            M(text="## Does the verifier rank like the expert?\nOn each demo frame, A* = the expert's next 4 "
+              "actions. Blue: the verifier's top pick among pi0's 4 candidates is the one whose endpoint is "
+              "closest to A*'s. Orange: the verifier scores A* above all 4 candidates. Frames where all 4 "
+              "candidates tie are excluded. Dashed and dotted lines are chance."),
+            media("expert/astar", "verifier agreement with A*", h=8),
+        ]
     return out
 
 
@@ -245,7 +268,8 @@ def main():
     report = wr.Report.from_url(open(url_f).read().strip()) if os.path.exists(url_f) else \
         wr.Report(entity=ENTITY, project=PROJECT)
     report.title = "Veritas on pi0 in SimplerEnv"
-    report.description = "Reproduction; success on train and test tasks; action RMSE of the context fine-tune."
+    report.description = ("Reproduction; success on train and test tasks; action RMSE of the context fine-tune; "
+                          "expert and verifier checks.")
     report.width = "fixed"
     report.blocks = blocks(rid, figs, sel)
     report.save()

@@ -22,6 +22,11 @@ rolled out from their seeds; they may still train.
 
     python scripts/simpler/splits/make_simpler_splits.py --task eggplant
     python scripts/simpler/splits/make_simpler_splits.py --task stack
+
+Recorded pi0 demos (``veritas_pi0/record_pi0_demos.py``): ``--demo-dir <dir>`` writes
+``<dir>/split_strict.json`` over the strict-passing demos (``strict_kept.json`` from
+``veritas_pi0/strict_stats.py``): val 20, train up to 100, no test. Seeds come from the
+recorder's ``manifest.jsonl``; the gate holds by construction (the demo was recorded from it).
 """
 from __future__ import annotations
 
@@ -70,6 +75,9 @@ TASKS = {
     'carrot': dict(env_task='widowx_carrot_on_plate',
                    dataset_dir=strict_dir('carrot_on_plate_strict'), seed_task='carrot',
                    train_sizes={'random': (100,)}),
+    'spoon': dict(env_task='widowx_spoon_on_towel',
+                  dataset_dir=strict_dir('spoon_on_towel_strict'), seed_task='spoon',
+                  train_sizes={'random': (100,)}),
 }
 N_TEST, N_VAL = 50, 20
 
@@ -182,12 +190,37 @@ def build(task, rule, seed):
     return out
 
 
+def build_demo(task, demo_dir: Path, seed, n_train=100):
+    zpath = demo_dir / 'demos.zarr'
+    ends = zarr.open(str(zpath), 'r')['meta/episode_ends'][:]
+    man = [json.loads(l) for l in (demo_dir / 'manifest.jsonl').read_text().splitlines() if l.strip()]
+    assert len(man) == len(ends), (len(man), len(ends))
+    kept = json.loads((demo_dir / 'strict_kept.json').read_text())['kept']
+    order = [int(i) for i in np.random.default_rng(seed).permutation(sorted(kept))]
+    val, train = sorted(order[:N_VAL]), sorted(order[N_VAL:N_VAL + n_train])
+    rows = {str(r['demo']): dict(src_shard='demos.zarr', src_episode=r['demo'], seed=int(r['seed']),
+                                 seed_gate=True) for r in man}
+    return dict(task=task, env_task=TASKS[task]['env_task'], dataset_dir=str(demo_dir),
+                zarr_path=str(zpath), n_episodes=int(len(ends)), episode_ends_checksum=episode_ends_checksum(ends),
+                train=train, val=val, test=[], checksum=split_checksum(train, val, []),
+                derivation=dict(rule='demo_strict', seed=int(seed), n_val=N_VAL, n_train=len(train),
+                                n_strict_kept=len(kept)),
+                episodes=rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('--task', required=True, choices=sorted(TASKS))
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out-dir', default=None)
+    ap.add_argument('--demo-dir', default=None, help='recorded pi0 demos (see module docstring)')
     a = ap.parse_args()
+    if a.demo_dir:
+        m = build_demo(a.task, Path(a.demo_dir), a.seed)
+        (Path(a.demo_dir) / 'split_strict.json').write_text(json.dumps(m, indent=1))
+        print(f'[split] {a.task} demos: train {len(m["train"])} val {len(m["val"])} '
+              f'(of {m["derivation"]["n_strict_kept"]} strict-passing)')
+        return
     out_dir = Path(a.out_dir) if a.out_dir else SPLIT_ROOT / a.task
     out_dir.mkdir(parents=True, exist_ok=True)
     for rule in TASKS[a.task]['train_sizes']:

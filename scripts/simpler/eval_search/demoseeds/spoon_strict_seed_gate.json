@@ -1,0 +1,7662 @@
+{
+ "task": "spoon",
+ "env_task": "widowx_spoon_on_towel",
+ "dataset_dir": "/gscratch/robotics/harine/data/spoon_on_towel_strict",
+ "zarr": "/gscratch/robotics/harine/data/spoon_on_towel_strict/spoon_strict.zarr",
+ "tol": 0.001,
+ "rule": "seed = 100000 + START_INDEX[shard] + src_episode",
+ "episodes": {
+  "0": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100010,
+   "src_shard": "state0.zarr",
+   "src_episode": 10
+  },
+  "1": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100012,
+   "src_shard": "state0.zarr",
+   "src_episode": 12
+  },
+  "2": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100014,
+   "src_shard": "state0.zarr",
+   "src_episode": 14
+  },
+  "3": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100021,
+   "src_shard": "state0.zarr",
+   "src_episode": 21
+  },
+  "4": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100023,
+   "src_shard": "state0.zarr",
+   "src_episode": 23
+  },
+  "5": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100027,
+   "src_shard": "state0.zarr",
+   "src_episode": 27
+  },
+  "6": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100028,
+   "src_shard": "state0.zarr",
+   "src_episode": 28
+  },
+  "7": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100031,
+   "src_shard": "state0.zarr",
+   "src_episode": 31
+  },
+  "8": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100048,
+   "src_shard": "state0.zarr",
+   "src_episode": 48
+  },
+  "9": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100049,
+   "src_shard": "state0.zarr",
+   "src_episode": 49
+  },
+  "10": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100050,
+   "src_shard": "state0.zarr",
+   "src_episode": 50
+  },
+  "11": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100051,
+   "src_shard": "state0.zarr",
+   "src_episode": 51
+  },
+  "12": {
+   "ee": 0.0,
+   "source": 2.0617117115762085e-06,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100054,
+   "src_shard": "state0.zarr",
+   "src_episode": 54
+  },
+  "13": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100060,
+   "src_shard": "state0.zarr",
+   "src_episode": 60
+  },
+  "14": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100062,
+   "src_shard": "state0.zarr",
+   "src_episode": 62
+  },
+  "15": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100063,
+   "src_shard": "state0.zarr",
+   "src_episode": 63
+  },
+  "16": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.937229042909166e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100067,
+   "src_shard": "state0.zarr",
+   "src_episode": 67
+  },
+  "17": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100068,
+   "src_shard": "state0.zarr",
+   "src_episode": 68
+  },
+  "18": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100070,
+   "src_shard": "state0.zarr",
+   "src_episode": 70
+  },
+  "19": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100076,
+   "src_shard": "state0.zarr",
+   "src_episode": 76
+  },
+  "20": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100077,
+   "src_shard": "state0.zarr",
+   "src_episode": 77
+  },
+  "21": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100083,
+   "src_shard": "state0.zarr",
+   "src_episode": 83
+  },
+  "22": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100086,
+   "src_shard": "state0.zarr",
+   "src_episode": 86
+  },
+  "23": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100089,
+   "src_shard": "state0.zarr",
+   "src_episode": 89
+  },
+  "24": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100092,
+   "src_shard": "state0.zarr",
+   "src_episode": 92
+  },
+  "25": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100095,
+   "src_shard": "state0.zarr",
+   "src_episode": 95
+  },
+  "26": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100097,
+   "src_shard": "state0.zarr",
+   "src_episode": 97
+  },
+  "27": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100103,
+   "src_shard": "state0.zarr",
+   "src_episode": 103
+  },
+  "28": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100104,
+   "src_shard": "state0.zarr",
+   "src_episode": 104
+  },
+  "29": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100105,
+   "src_shard": "state0.zarr",
+   "src_episode": 105
+  },
+  "30": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100108,
+   "src_shard": "state0.zarr",
+   "src_episode": 108
+  },
+  "31": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100113,
+   "src_shard": "state0.zarr",
+   "src_episode": 113
+  },
+  "32": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100117,
+   "src_shard": "state0.zarr",
+   "src_episode": 117
+  },
+  "33": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100122,
+   "src_shard": "state0.zarr",
+   "src_episode": 122
+  },
+  "34": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100123,
+   "src_shard": "state0.zarr",
+   "src_episode": 123
+  },
+  "35": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100127,
+   "src_shard": "state0.zarr",
+   "src_episode": 127
+  },
+  "36": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100129,
+   "src_shard": "state0.zarr",
+   "src_episode": 129
+  },
+  "37": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100130,
+   "src_shard": "state0.zarr",
+   "src_episode": 130
+  },
+  "38": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100135,
+   "src_shard": "state0.zarr",
+   "src_episode": 135
+  },
+  "39": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100137,
+   "src_shard": "state0.zarr",
+   "src_episode": 137
+  },
+  "40": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100141,
+   "src_shard": "state0.zarr",
+   "src_episode": 141
+  },
+  "41": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100142,
+   "src_shard": "state0.zarr",
+   "src_episode": 142
+  },
+  "42": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100157,
+   "src_shard": "state0.zarr",
+   "src_episode": 157
+  },
+  "43": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100160,
+   "src_shard": "state0.zarr",
+   "src_episode": 160
+  },
+  "44": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100166,
+   "src_shard": "state0.zarr",
+   "src_episode": 166
+  },
+  "45": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100181,
+   "src_shard": "state0.zarr",
+   "src_episode": 181
+  },
+  "46": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100191,
+   "src_shard": "state0.zarr",
+   "src_episode": 191
+  },
+  "47": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100195,
+   "src_shard": "state0.zarr",
+   "src_episode": 195
+  },
+  "48": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100197,
+   "src_shard": "state0.zarr",
+   "src_episode": 197
+  },
+  "49": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100200,
+   "src_shard": "state0.zarr",
+   "src_episode": 200
+  },
+  "50": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100204,
+   "src_shard": "state0.zarr",
+   "src_episode": 204
+  },
+  "51": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100205,
+   "src_shard": "state0.zarr",
+   "src_episode": 205
+  },
+  "52": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100212,
+   "src_shard": "state0.zarr",
+   "src_episode": 212
+  },
+  "53": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100220,
+   "src_shard": "state0.zarr",
+   "src_episode": 220
+  },
+  "54": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100224,
+   "src_shard": "state0.zarr",
+   "src_episode": 224
+  },
+  "55": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100226,
+   "src_shard": "state0.zarr",
+   "src_episode": 226
+  },
+  "56": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100227,
+   "src_shard": "state0.zarr",
+   "src_episode": 227
+  },
+  "57": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100236,
+   "src_shard": "state0.zarr",
+   "src_episode": 236
+  },
+  "58": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100240,
+   "src_shard": "state0.zarr",
+   "src_episode": 240
+  },
+  "59": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100247,
+   "src_shard": "state0.zarr",
+   "src_episode": 247
+  },
+  "60": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100248,
+   "src_shard": "state0.zarr",
+   "src_episode": 248
+  },
+  "61": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100250,
+   "src_shard": "state0.zarr",
+   "src_episode": 250
+  },
+  "62": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100252,
+   "src_shard": "state0.zarr",
+   "src_episode": 252
+  },
+  "63": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100259,
+   "src_shard": "state0.zarr",
+   "src_episode": 259
+  },
+  "64": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100261,
+   "src_shard": "state0.zarr",
+   "src_episode": 261
+  },
+  "65": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100268,
+   "src_shard": "state0.zarr",
+   "src_episode": 268
+  },
+  "66": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100272,
+   "src_shard": "state0.zarr",
+   "src_episode": 272
+  },
+  "67": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100278,
+   "src_shard": "state0.zarr",
+   "src_episode": 278
+  },
+  "68": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100281,
+   "src_shard": "state0.zarr",
+   "src_episode": 281
+  },
+  "69": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100287,
+   "src_shard": "state0.zarr",
+   "src_episode": 287
+  },
+  "70": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100288,
+   "src_shard": "state0.zarr",
+   "src_episode": 288
+  },
+  "71": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100290,
+   "src_shard": "state0.zarr",
+   "src_episode": 290
+  },
+  "72": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100293,
+   "src_shard": "state0.zarr",
+   "src_episode": 293
+  },
+  "73": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100298,
+   "src_shard": "state0.zarr",
+   "src_episode": 298
+  },
+  "74": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100306,
+   "src_shard": "state0.zarr",
+   "src_episode": 306
+  },
+  "75": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100307,
+   "src_shard": "state0.zarr",
+   "src_episode": 307
+  },
+  "76": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100308,
+   "src_shard": "state0.zarr",
+   "src_episode": 308
+  },
+  "77": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100309,
+   "src_shard": "state0.zarr",
+   "src_episode": 309
+  },
+  "78": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100313,
+   "src_shard": "state0.zarr",
+   "src_episode": 313
+  },
+  "79": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100316,
+   "src_shard": "state0.zarr",
+   "src_episode": 316
+  },
+  "80": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100323,
+   "src_shard": "state0.zarr",
+   "src_episode": 323
+  },
+  "81": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100327,
+   "src_shard": "state0.zarr",
+   "src_episode": 327
+  },
+  "82": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100332,
+   "src_shard": "state0.zarr",
+   "src_episode": 332
+  },
+  "83": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100336,
+   "src_shard": "state0.zarr",
+   "src_episode": 336
+  },
+  "84": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100338,
+   "src_shard": "state0.zarr",
+   "src_episode": 338
+  },
+  "85": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100350,
+   "src_shard": "state0.zarr",
+   "src_episode": 350
+  },
+  "86": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100351,
+   "src_shard": "state0.zarr",
+   "src_episode": 351
+  },
+  "87": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100359,
+   "src_shard": "state0.zarr",
+   "src_episode": 359
+  },
+  "88": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100363,
+   "src_shard": "state0.zarr",
+   "src_episode": 363
+  },
+  "89": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100366,
+   "src_shard": "state0.zarr",
+   "src_episode": 366
+  },
+  "90": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100371,
+   "src_shard": "state0.zarr",
+   "src_episode": 371
+  },
+  "91": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100373,
+   "src_shard": "state0.zarr",
+   "src_episode": 373
+  },
+  "92": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100378,
+   "src_shard": "state0.zarr",
+   "src_episode": 378
+  },
+  "93": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100381,
+   "src_shard": "state0.zarr",
+   "src_episode": 381
+  },
+  "94": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100382,
+   "src_shard": "state0.zarr",
+   "src_episode": 382
+  },
+  "95": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100383,
+   "src_shard": "state0.zarr",
+   "src_episode": 383
+  },
+  "96": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100384,
+   "src_shard": "state0.zarr",
+   "src_episode": 384
+  },
+  "97": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100387,
+   "src_shard": "state0.zarr",
+   "src_episode": 387
+  },
+  "98": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100395,
+   "src_shard": "state0.zarr",
+   "src_episode": 395
+  },
+  "99": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100401,
+   "src_shard": "state0.zarr",
+   "src_episode": 401
+  },
+  "100": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100408,
+   "src_shard": "state0.zarr",
+   "src_episode": 408
+  },
+  "101": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100412,
+   "src_shard": "state0.zarr",
+   "src_episode": 412
+  },
+  "102": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100414,
+   "src_shard": "state0.zarr",
+   "src_episode": 414
+  },
+  "103": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100415,
+   "src_shard": "state0.zarr",
+   "src_episode": 415
+  },
+  "104": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100416,
+   "src_shard": "state0.zarr",
+   "src_episode": 416
+  },
+  "105": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100417,
+   "src_shard": "state0.zarr",
+   "src_episode": 417
+  },
+  "106": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100421,
+   "src_shard": "state0.zarr",
+   "src_episode": 421
+  },
+  "107": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100423,
+   "src_shard": "state0.zarr",
+   "src_episode": 423
+  },
+  "108": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100427,
+   "src_shard": "state0.zarr",
+   "src_episode": 427
+  },
+  "109": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100429,
+   "src_shard": "state0.zarr",
+   "src_episode": 429
+  },
+  "110": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100436,
+   "src_shard": "state0.zarr",
+   "src_episode": 436
+  },
+  "111": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100444,
+   "src_shard": "state0.zarr",
+   "src_episode": 444
+  },
+  "112": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100445,
+   "src_shard": "state0.zarr",
+   "src_episode": 445
+  },
+  "113": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100449,
+   "src_shard": "state0.zarr",
+   "src_episode": 449
+  },
+  "114": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100450,
+   "src_shard": "state0.zarr",
+   "src_episode": 450
+  },
+  "115": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100453,
+   "src_shard": "state0.zarr",
+   "src_episode": 453
+  },
+  "116": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.058370339203975e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100456,
+   "src_shard": "state0.zarr",
+   "src_episode": 456
+  },
+  "117": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100462,
+   "src_shard": "state0.zarr",
+   "src_episode": 462
+  },
+  "118": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100472,
+   "src_shard": "state0.zarr",
+   "src_episode": 472
+  },
+  "119": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100473,
+   "src_shard": "state0.zarr",
+   "src_episode": 473
+  },
+  "120": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100475,
+   "src_shard": "state0.zarr",
+   "src_episode": 475
+  },
+  "121": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100476,
+   "src_shard": "state0.zarr",
+   "src_episode": 476
+  },
+  "122": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100480,
+   "src_shard": "state0.zarr",
+   "src_episode": 480
+  },
+  "123": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100482,
+   "src_shard": "state0.zarr",
+   "src_episode": 482
+  },
+  "124": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100484,
+   "src_shard": "state0.zarr",
+   "src_episode": 484
+  },
+  "125": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100488,
+   "src_shard": "state0.zarr",
+   "src_episode": 488
+  },
+  "126": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100489,
+   "src_shard": "state0.zarr",
+   "src_episode": 489
+  },
+  "127": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100491,
+   "src_shard": "state0.zarr",
+   "src_episode": 491
+  },
+  "128": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.058370339203975e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100494,
+   "src_shard": "state0.zarr",
+   "src_episode": 494
+  },
+  "129": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100502,
+   "src_shard": "state0.zarr",
+   "src_episode": 502
+  },
+  "130": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100504,
+   "src_shard": "state0.zarr",
+   "src_episode": 504
+  },
+  "131": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100505,
+   "src_shard": "state0.zarr",
+   "src_episode": 505
+  },
+  "132": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100506,
+   "src_shard": "state0.zarr",
+   "src_episode": 506
+  },
+  "133": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100510,
+   "src_shard": "state0.zarr",
+   "src_episode": 510
+  },
+  "134": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100525,
+   "src_shard": "state0.zarr",
+   "src_episode": 525
+  },
+  "135": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100527,
+   "src_shard": "state0.zarr",
+   "src_episode": 527
+  },
+  "136": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100528,
+   "src_shard": "state0.zarr",
+   "src_episode": 528
+  },
+  "137": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100531,
+   "src_shard": "state0.zarr",
+   "src_episode": 531
+  },
+  "138": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100532,
+   "src_shard": "state0.zarr",
+   "src_episode": 532
+  },
+  "139": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100535,
+   "src_shard": "state0.zarr",
+   "src_episode": 535
+  },
+  "140": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100538,
+   "src_shard": "state0.zarr",
+   "src_episode": 538
+  },
+  "141": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100542,
+   "src_shard": "state0.zarr",
+   "src_episode": 542
+  },
+  "142": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100544,
+   "src_shard": "state0.zarr",
+   "src_episode": 544
+  },
+  "143": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100545,
+   "src_shard": "state0.zarr",
+   "src_episode": 545
+  },
+  "144": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100546,
+   "src_shard": "state0.zarr",
+   "src_episode": 546
+  },
+  "145": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100547,
+   "src_shard": "state0.zarr",
+   "src_episode": 547
+  },
+  "146": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100548,
+   "src_shard": "state0.zarr",
+   "src_episode": 548
+  },
+  "147": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100551,
+   "src_shard": "state0.zarr",
+   "src_episode": 551
+  },
+  "148": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100555,
+   "src_shard": "state0.zarr",
+   "src_episode": 555
+  },
+  "149": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100561,
+   "src_shard": "state0.zarr",
+   "src_episode": 561
+  },
+  "150": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100567,
+   "src_shard": "state0.zarr",
+   "src_episode": 567
+  },
+  "151": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100568,
+   "src_shard": "state0.zarr",
+   "src_episode": 568
+  },
+  "152": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100573,
+   "src_shard": "state0.zarr",
+   "src_episode": 573
+  },
+  "153": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100575,
+   "src_shard": "state0.zarr",
+   "src_episode": 575
+  },
+  "154": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100578,
+   "src_shard": "state0.zarr",
+   "src_episode": 578
+  },
+  "155": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100580,
+   "src_shard": "state0.zarr",
+   "src_episode": 580
+  },
+  "156": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100591,
+   "src_shard": "state0.zarr",
+   "src_episode": 591
+  },
+  "157": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100592,
+   "src_shard": "state0.zarr",
+   "src_episode": 592
+  },
+  "158": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100594,
+   "src_shard": "state0.zarr",
+   "src_episode": 594
+  },
+  "159": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100595,
+   "src_shard": "state0.zarr",
+   "src_episode": 595
+  },
+  "160": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100607,
+   "src_shard": "state0.zarr",
+   "src_episode": 607
+  },
+  "161": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100617,
+   "src_shard": "state0.zarr",
+   "src_episode": 617
+  },
+  "162": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.4694842320750467e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100626,
+   "src_shard": "state0.zarr",
+   "src_episode": 626
+  },
+  "163": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100629,
+   "src_shard": "state0.zarr",
+   "src_episode": 629
+  },
+  "164": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100630,
+   "src_shard": "state0.zarr",
+   "src_episode": 630
+  },
+  "165": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100634,
+   "src_shard": "state0.zarr",
+   "src_episode": 634
+  },
+  "166": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100636,
+   "src_shard": "state0.zarr",
+   "src_episode": 636
+  },
+  "167": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100641,
+   "src_shard": "state0.zarr",
+   "src_episode": 641
+  },
+  "168": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100644,
+   "src_shard": "state0.zarr",
+   "src_episode": 644
+  },
+  "169": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100653,
+   "src_shard": "state0.zarr",
+   "src_episode": 653
+  },
+  "170": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100655,
+   "src_shard": "state0.zarr",
+   "src_episode": 655
+  },
+  "171": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100656,
+   "src_shard": "state0.zarr",
+   "src_episode": 656
+  },
+  "172": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100657,
+   "src_shard": "state0.zarr",
+   "src_episode": 657
+  },
+  "173": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100661,
+   "src_shard": "state0.zarr",
+   "src_episode": 661
+  },
+  "174": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100681,
+   "src_shard": "state0.zarr",
+   "src_episode": 681
+  },
+  "175": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100685,
+   "src_shard": "state0.zarr",
+   "src_episode": 685
+  },
+  "176": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100689,
+   "src_shard": "state0.zarr",
+   "src_episode": 689
+  },
+  "177": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100690,
+   "src_shard": "state0.zarr",
+   "src_episode": 690
+  },
+  "178": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100699,
+   "src_shard": "state0.zarr",
+   "src_episode": 699
+  },
+  "179": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100709,
+   "src_shard": "state0.zarr",
+   "src_episode": 709
+  },
+  "180": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100710,
+   "src_shard": "state0.zarr",
+   "src_episode": 710
+  },
+  "181": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100711,
+   "src_shard": "state0.zarr",
+   "src_episode": 711
+  },
+  "182": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100712,
+   "src_shard": "state0.zarr",
+   "src_episode": 712
+  },
+  "183": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100715,
+   "src_shard": "state0.zarr",
+   "src_episode": 715
+  },
+  "184": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100717,
+   "src_shard": "state0.zarr",
+   "src_episode": 717
+  },
+  "185": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100718,
+   "src_shard": "state0.zarr",
+   "src_episode": 718
+  },
+  "186": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100724,
+   "src_shard": "state0.zarr",
+   "src_episode": 724
+  },
+  "187": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100730,
+   "src_shard": "state0.zarr",
+   "src_episode": 730
+  },
+  "188": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100733,
+   "src_shard": "state0.zarr",
+   "src_episode": 733
+  },
+  "189": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100737,
+   "src_shard": "state0.zarr",
+   "src_episode": 737
+  },
+  "190": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100738,
+   "src_shard": "state0.zarr",
+   "src_episode": 738
+  },
+  "191": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100744,
+   "src_shard": "state0.zarr",
+   "src_episode": 744
+  },
+  "192": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100751,
+   "src_shard": "state0.zarr",
+   "src_episode": 751
+  },
+  "193": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100753,
+   "src_shard": "state0.zarr",
+   "src_episode": 753
+  },
+  "194": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100754,
+   "src_shard": "state0.zarr",
+   "src_episode": 754
+  },
+  "195": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100760,
+   "src_shard": "state0.zarr",
+   "src_episode": 760
+  },
+  "196": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100762,
+   "src_shard": "state0.zarr",
+   "src_episode": 762
+  },
+  "197": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100765,
+   "src_shard": "state0.zarr",
+   "src_episode": 765
+  },
+  "198": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100768,
+   "src_shard": "state0.zarr",
+   "src_episode": 768
+  },
+  "199": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100778,
+   "src_shard": "state0.zarr",
+   "src_episode": 778
+  },
+  "200": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100782,
+   "src_shard": "state0.zarr",
+   "src_episode": 782
+  },
+  "201": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100783,
+   "src_shard": "state0.zarr",
+   "src_episode": 783
+  },
+  "202": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100789,
+   "src_shard": "state0.zarr",
+   "src_episode": 789
+  },
+  "203": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100790,
+   "src_shard": "state0.zarr",
+   "src_episode": 790
+  },
+  "204": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100794,
+   "src_shard": "state0.zarr",
+   "src_episode": 794
+  },
+  "205": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100796,
+   "src_shard": "state0.zarr",
+   "src_episode": 796
+  },
+  "206": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100806,
+   "src_shard": "state0.zarr",
+   "src_episode": 806
+  },
+  "207": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100807,
+   "src_shard": "state0.zarr",
+   "src_episode": 807
+  },
+  "208": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100808,
+   "src_shard": "state0.zarr",
+   "src_episode": 808
+  },
+  "209": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100812,
+   "src_shard": "state0.zarr",
+   "src_episode": 812
+  },
+  "210": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100815,
+   "src_shard": "state0.zarr",
+   "src_episode": 815
+  },
+  "211": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100816,
+   "src_shard": "state0.zarr",
+   "src_episode": 816
+  },
+  "212": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100822,
+   "src_shard": "state0.zarr",
+   "src_episode": 822
+  },
+  "213": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100826,
+   "src_shard": "state0.zarr",
+   "src_episode": 826
+  },
+  "214": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100828,
+   "src_shard": "state0.zarr",
+   "src_episode": 828
+  },
+  "215": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100829,
+   "src_shard": "state0.zarr",
+   "src_episode": 829
+  },
+  "216": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100831,
+   "src_shard": "state0.zarr",
+   "src_episode": 831
+  },
+  "217": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100832,
+   "src_shard": "state0.zarr",
+   "src_episode": 832
+  },
+  "218": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100833,
+   "src_shard": "state0.zarr",
+   "src_episode": 833
+  },
+  "219": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100834,
+   "src_shard": "state0.zarr",
+   "src_episode": 834
+  },
+  "220": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100836,
+   "src_shard": "state0.zarr",
+   "src_episode": 836
+  },
+  "221": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100838,
+   "src_shard": "state0.zarr",
+   "src_episode": 838
+  },
+  "222": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100841,
+   "src_shard": "state0.zarr",
+   "src_episode": 841
+  },
+  "223": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.4694842320750467e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100847,
+   "src_shard": "state0.zarr",
+   "src_episode": 847
+  },
+  "224": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100849,
+   "src_shard": "state0.zarr",
+   "src_episode": 849
+  },
+  "225": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100851,
+   "src_shard": "state0.zarr",
+   "src_episode": 851
+  },
+  "226": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100854,
+   "src_shard": "state0.zarr",
+   "src_episode": 854
+  },
+  "227": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100858,
+   "src_shard": "state0.zarr",
+   "src_episode": 858
+  },
+  "228": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100864,
+   "src_shard": "state0.zarr",
+   "src_episode": 864
+  },
+  "229": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100866,
+   "src_shard": "state0.zarr",
+   "src_episode": 866
+  },
+  "230": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100867,
+   "src_shard": "state0.zarr",
+   "src_episode": 867
+  },
+  "231": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100871,
+   "src_shard": "state0.zarr",
+   "src_episode": 871
+  },
+  "232": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100872,
+   "src_shard": "state0.zarr",
+   "src_episode": 872
+  },
+  "233": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100884,
+   "src_shard": "state0.zarr",
+   "src_episode": 884
+  },
+  "234": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100887,
+   "src_shard": "state0.zarr",
+   "src_episode": 887
+  },
+  "235": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100889,
+   "src_shard": "state0.zarr",
+   "src_episode": 889
+  },
+  "236": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100891,
+   "src_shard": "state0.zarr",
+   "src_episode": 891
+  },
+  "237": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100903,
+   "src_shard": "state0.zarr",
+   "src_episode": 903
+  },
+  "238": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.4694842320750467e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100905,
+   "src_shard": "state0.zarr",
+   "src_episode": 905
+  },
+  "239": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100906,
+   "src_shard": "state0.zarr",
+   "src_episode": 906
+  },
+  "240": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100908,
+   "src_shard": "state0.zarr",
+   "src_episode": 908
+  },
+  "241": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100911,
+   "src_shard": "state0.zarr",
+   "src_episode": 911
+  },
+  "242": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.058370339203975e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100912,
+   "src_shard": "state0.zarr",
+   "src_episode": 912
+  },
+  "243": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100914,
+   "src_shard": "state0.zarr",
+   "src_episode": 914
+  },
+  "244": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100915,
+   "src_shard": "state0.zarr",
+   "src_episode": 915
+  },
+  "245": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100917,
+   "src_shard": "state0.zarr",
+   "src_episode": 917
+  },
+  "246": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100918,
+   "src_shard": "state0.zarr",
+   "src_episode": 918
+  },
+  "247": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100921,
+   "src_shard": "state0.zarr",
+   "src_episode": 921
+  },
+  "248": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100939,
+   "src_shard": "state0.zarr",
+   "src_episode": 939
+  },
+  "249": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 100943,
+   "src_shard": "state0.zarr",
+   "src_episode": 943
+  },
+  "250": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100944,
+   "src_shard": "state0.zarr",
+   "src_episode": 944
+  },
+  "251": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100945,
+   "src_shard": "state0.zarr",
+   "src_episode": 945
+  },
+  "252": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100953,
+   "src_shard": "state0.zarr",
+   "src_episode": 953
+  },
+  "253": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100959,
+   "src_shard": "state0.zarr",
+   "src_episode": 959
+  },
+  "254": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100962,
+   "src_shard": "state0.zarr",
+   "src_episode": 962
+  },
+  "255": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100967,
+   "src_shard": "state0.zarr",
+   "src_episode": 967
+  },
+  "256": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100971,
+   "src_shard": "state0.zarr",
+   "src_episode": 971
+  },
+  "257": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100972,
+   "src_shard": "state0.zarr",
+   "src_episode": 972
+  },
+  "258": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100977,
+   "src_shard": "state0.zarr",
+   "src_episode": 977
+  },
+  "259": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100979,
+   "src_shard": "state0.zarr",
+   "src_episode": 979
+  },
+  "260": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 100994,
+   "src_shard": "state0.zarr",
+   "src_episode": 994
+  },
+  "261": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101001,
+   "src_shard": "state1.zarr",
+   "src_episode": 1
+  },
+  "262": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101015,
+   "src_shard": "state1.zarr",
+   "src_episode": 15
+  },
+  "263": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101016,
+   "src_shard": "state1.zarr",
+   "src_episode": 16
+  },
+  "264": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101022,
+   "src_shard": "state1.zarr",
+   "src_episode": 22
+  },
+  "265": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101030,
+   "src_shard": "state1.zarr",
+   "src_episode": 30
+  },
+  "266": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101034,
+   "src_shard": "state1.zarr",
+   "src_episode": 34
+  },
+  "267": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101036,
+   "src_shard": "state1.zarr",
+   "src_episode": 36
+  },
+  "268": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101041,
+   "src_shard": "state1.zarr",
+   "src_episode": 41
+  },
+  "269": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101046,
+   "src_shard": "state1.zarr",
+   "src_episode": 46
+  },
+  "270": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101047,
+   "src_shard": "state1.zarr",
+   "src_episode": 47
+  },
+  "271": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101049,
+   "src_shard": "state1.zarr",
+   "src_episode": 49
+  },
+  "272": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101051,
+   "src_shard": "state1.zarr",
+   "src_episode": 51
+  },
+  "273": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101052,
+   "src_shard": "state1.zarr",
+   "src_episode": 52
+  },
+  "274": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101054,
+   "src_shard": "state1.zarr",
+   "src_episode": 54
+  },
+  "275": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101056,
+   "src_shard": "state1.zarr",
+   "src_episode": 56
+  },
+  "276": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101060,
+   "src_shard": "state1.zarr",
+   "src_episode": 60
+  },
+  "277": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101072,
+   "src_shard": "state1.zarr",
+   "src_episode": 72
+  },
+  "278": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101079,
+   "src_shard": "state1.zarr",
+   "src_episode": 79
+  },
+  "279": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101080,
+   "src_shard": "state1.zarr",
+   "src_episode": 80
+  },
+  "280": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101093,
+   "src_shard": "state1.zarr",
+   "src_episode": 93
+  },
+  "281": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101094,
+   "src_shard": "state1.zarr",
+   "src_episode": 94
+  },
+  "282": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101095,
+   "src_shard": "state1.zarr",
+   "src_episode": 95
+  },
+  "283": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101100,
+   "src_shard": "state1.zarr",
+   "src_episode": 100
+  },
+  "284": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101105,
+   "src_shard": "state1.zarr",
+   "src_episode": 105
+  },
+  "285": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101106,
+   "src_shard": "state1.zarr",
+   "src_episode": 106
+  },
+  "286": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101109,
+   "src_shard": "state1.zarr",
+   "src_episode": 109
+  },
+  "287": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101111,
+   "src_shard": "state1.zarr",
+   "src_episode": 111
+  },
+  "288": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101114,
+   "src_shard": "state1.zarr",
+   "src_episode": 114
+  },
+  "289": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101118,
+   "src_shard": "state1.zarr",
+   "src_episode": 118
+  },
+  "290": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101120,
+   "src_shard": "state1.zarr",
+   "src_episode": 120
+  },
+  "291": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101129,
+   "src_shard": "state1.zarr",
+   "src_episode": 129
+  },
+  "292": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101133,
+   "src_shard": "state1.zarr",
+   "src_episode": 133
+  },
+  "293": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101140,
+   "src_shard": "state1.zarr",
+   "src_episode": 140
+  },
+  "294": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101142,
+   "src_shard": "state1.zarr",
+   "src_episode": 142
+  },
+  "295": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101150,
+   "src_shard": "state1.zarr",
+   "src_episode": 150
+  },
+  "296": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101155,
+   "src_shard": "state1.zarr",
+   "src_episode": 155
+  },
+  "297": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.4694842320750467e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101159,
+   "src_shard": "state1.zarr",
+   "src_episode": 159
+  },
+  "298": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101161,
+   "src_shard": "state1.zarr",
+   "src_episode": 161
+  },
+  "299": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101170,
+   "src_shard": "state1.zarr",
+   "src_episode": 170
+  },
+  "300": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101173,
+   "src_shard": "state1.zarr",
+   "src_episode": 173
+  },
+  "301": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101181,
+   "src_shard": "state1.zarr",
+   "src_episode": 181
+  },
+  "302": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101184,
+   "src_shard": "state1.zarr",
+   "src_episode": 184
+  },
+  "303": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101186,
+   "src_shard": "state1.zarr",
+   "src_episode": 186
+  },
+  "304": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101188,
+   "src_shard": "state1.zarr",
+   "src_episode": 188
+  },
+  "305": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101190,
+   "src_shard": "state1.zarr",
+   "src_episode": 190
+  },
+  "306": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101192,
+   "src_shard": "state1.zarr",
+   "src_episode": 192
+  },
+  "307": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101194,
+   "src_shard": "state1.zarr",
+   "src_episode": 194
+  },
+  "308": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101208,
+   "src_shard": "state1.zarr",
+   "src_episode": 208
+  },
+  "309": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101211,
+   "src_shard": "state1.zarr",
+   "src_episode": 211
+  },
+  "310": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101212,
+   "src_shard": "state1.zarr",
+   "src_episode": 212
+  },
+  "311": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101213,
+   "src_shard": "state1.zarr",
+   "src_episode": 213
+  },
+  "312": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101216,
+   "src_shard": "state1.zarr",
+   "src_episode": 216
+  },
+  "313": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101225,
+   "src_shard": "state1.zarr",
+   "src_episode": 225
+  },
+  "314": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101226,
+   "src_shard": "state1.zarr",
+   "src_episode": 226
+  },
+  "315": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101227,
+   "src_shard": "state1.zarr",
+   "src_episode": 227
+  },
+  "316": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101233,
+   "src_shard": "state1.zarr",
+   "src_episode": 233
+  },
+  "317": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101239,
+   "src_shard": "state1.zarr",
+   "src_episode": 239
+  },
+  "318": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101240,
+   "src_shard": "state1.zarr",
+   "src_episode": 240
+  },
+  "319": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101242,
+   "src_shard": "state1.zarr",
+   "src_episode": 242
+  },
+  "320": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101246,
+   "src_shard": "state1.zarr",
+   "src_episode": 246
+  },
+  "321": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101251,
+   "src_shard": "state1.zarr",
+   "src_episode": 251
+  },
+  "322": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101253,
+   "src_shard": "state1.zarr",
+   "src_episode": 253
+  },
+  "323": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.3228252505068667e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101259,
+   "src_shard": "state1.zarr",
+   "src_episode": 259
+  },
+  "324": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101275,
+   "src_shard": "state1.zarr",
+   "src_episode": 275
+  },
+  "325": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101278,
+   "src_shard": "state1.zarr",
+   "src_episode": 278
+  },
+  "326": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.058370339203975e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101279,
+   "src_shard": "state1.zarr",
+   "src_episode": 279
+  },
+  "327": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101289,
+   "src_shard": "state1.zarr",
+   "src_episode": 289
+  },
+  "328": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101292,
+   "src_shard": "state1.zarr",
+   "src_episode": 292
+  },
+  "329": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101293,
+   "src_shard": "state1.zarr",
+   "src_episode": 293
+  },
+  "330": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101297,
+   "src_shard": "state1.zarr",
+   "src_episode": 297
+  },
+  "331": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101299,
+   "src_shard": "state1.zarr",
+   "src_episode": 299
+  },
+  "332": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101303,
+   "src_shard": "state1.zarr",
+   "src_episode": 303
+  },
+  "333": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.937229042909166e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101308,
+   "src_shard": "state1.zarr",
+   "src_episode": 308
+  },
+  "334": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101312,
+   "src_shard": "state1.zarr",
+   "src_episode": 312
+  },
+  "335": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101318,
+   "src_shard": "state1.zarr",
+   "src_episode": 318
+  },
+  "336": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101319,
+   "src_shard": "state1.zarr",
+   "src_episode": 319
+  },
+  "337": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101325,
+   "src_shard": "state1.zarr",
+   "src_episode": 325
+  },
+  "338": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101328,
+   "src_shard": "state1.zarr",
+   "src_episode": 328
+  },
+  "339": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101329,
+   "src_shard": "state1.zarr",
+   "src_episode": 329
+  },
+  "340": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101343,
+   "src_shard": "state1.zarr",
+   "src_episode": 343
+  },
+  "341": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101345,
+   "src_shard": "state1.zarr",
+   "src_episode": 345
+  },
+  "342": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101349,
+   "src_shard": "state1.zarr",
+   "src_episode": 349
+  },
+  "343": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.937229042909166e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101353,
+   "src_shard": "state1.zarr",
+   "src_episode": 353
+  },
+  "344": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101358,
+   "src_shard": "state1.zarr",
+   "src_episode": 358
+  },
+  "345": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101360,
+   "src_shard": "state1.zarr",
+   "src_episode": 360
+  },
+  "346": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101362,
+   "src_shard": "state1.zarr",
+   "src_episode": 362
+  },
+  "347": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101367,
+   "src_shard": "state1.zarr",
+   "src_episode": 367
+  },
+  "348": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101371,
+   "src_shard": "state1.zarr",
+   "src_episode": 371
+  },
+  "349": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101373,
+   "src_shard": "state1.zarr",
+   "src_episode": 373
+  },
+  "350": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101379,
+   "src_shard": "state1.zarr",
+   "src_episode": 379
+  },
+  "351": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101382,
+   "src_shard": "state1.zarr",
+   "src_episode": 382
+  },
+  "352": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101385,
+   "src_shard": "state1.zarr",
+   "src_episode": 385
+  },
+  "353": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101388,
+   "src_shard": "state1.zarr",
+   "src_episode": 388
+  },
+  "354": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101389,
+   "src_shard": "state1.zarr",
+   "src_episode": 389
+  },
+  "355": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101393,
+   "src_shard": "state1.zarr",
+   "src_episode": 393
+  },
+  "356": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101394,
+   "src_shard": "state1.zarr",
+   "src_episode": 394
+  },
+  "357": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101401,
+   "src_shard": "state1.zarr",
+   "src_episode": 401
+  },
+  "358": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101408,
+   "src_shard": "state1.zarr",
+   "src_episode": 408
+  },
+  "359": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101416,
+   "src_shard": "state1.zarr",
+   "src_episode": 416
+  },
+  "360": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101417,
+   "src_shard": "state1.zarr",
+   "src_episode": 417
+  },
+  "361": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101421,
+   "src_shard": "state1.zarr",
+   "src_episode": 421
+  },
+  "362": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.71216097253091e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101427,
+   "src_shard": "state1.zarr",
+   "src_episode": 427
+  },
+  "363": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101444,
+   "src_shard": "state1.zarr",
+   "src_episode": 444
+  },
+  "364": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101445,
+   "src_shard": "state1.zarr",
+   "src_episode": 445
+  },
+  "365": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101448,
+   "src_shard": "state1.zarr",
+   "src_episode": 448
+  },
+  "366": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101455,
+   "src_shard": "state1.zarr",
+   "src_episode": 455
+  },
+  "367": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101458,
+   "src_shard": "state1.zarr",
+   "src_episode": 458
+  },
+  "368": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101462,
+   "src_shard": "state1.zarr",
+   "src_episode": 462
+  },
+  "369": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101465,
+   "src_shard": "state1.zarr",
+   "src_episode": 465
+  },
+  "370": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101466,
+   "src_shard": "state1.zarr",
+   "src_episode": 466
+  },
+  "371": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101471,
+   "src_shard": "state1.zarr",
+   "src_episode": 471
+  },
+  "372": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101472,
+   "src_shard": "state1.zarr",
+   "src_episode": 472
+  },
+  "373": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101473,
+   "src_shard": "state1.zarr",
+   "src_episode": 473
+  },
+  "374": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101474,
+   "src_shard": "state1.zarr",
+   "src_episode": 474
+  },
+  "375": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101477,
+   "src_shard": "state1.zarr",
+   "src_episode": 477
+  },
+  "376": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101478,
+   "src_shard": "state1.zarr",
+   "src_episode": 478
+  },
+  "377": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101479,
+   "src_shard": "state1.zarr",
+   "src_episode": 479
+  },
+  "378": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101481,
+   "src_shard": "state1.zarr",
+   "src_episode": 481
+  },
+  "379": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101483,
+   "src_shard": "state1.zarr",
+   "src_episode": 483
+  },
+  "380": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101485,
+   "src_shard": "state1.zarr",
+   "src_episode": 485
+  },
+  "381": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101490,
+   "src_shard": "state1.zarr",
+   "src_episode": 490
+  },
+  "382": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101493,
+   "src_shard": "state1.zarr",
+   "src_episode": 493
+  },
+  "383": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101498,
+   "src_shard": "state1.zarr",
+   "src_episode": 498
+  },
+  "384": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101511,
+   "src_shard": "state1.zarr",
+   "src_episode": 511
+  },
+  "385": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101513,
+   "src_shard": "state1.zarr",
+   "src_episode": 513
+  },
+  "386": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101519,
+   "src_shard": "state1.zarr",
+   "src_episode": 519
+  },
+  "387": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101522,
+   "src_shard": "state1.zarr",
+   "src_episode": 522
+  },
+  "388": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101531,
+   "src_shard": "state1.zarr",
+   "src_episode": 531
+  },
+  "389": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101534,
+   "src_shard": "state1.zarr",
+   "src_episode": 534
+  },
+  "390": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101539,
+   "src_shard": "state1.zarr",
+   "src_episode": 539
+  },
+  "391": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101546,
+   "src_shard": "state1.zarr",
+   "src_episode": 546
+  },
+  "392": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101548,
+   "src_shard": "state1.zarr",
+   "src_episode": 548
+  },
+  "393": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101550,
+   "src_shard": "state1.zarr",
+   "src_episode": 550
+  },
+  "394": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.74678744871926e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101551,
+   "src_shard": "state1.zarr",
+   "src_episode": 551
+  },
+  "395": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101556,
+   "src_shard": "state1.zarr",
+   "src_episode": 556
+  },
+  "396": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101561,
+   "src_shard": "state1.zarr",
+   "src_episode": 561
+  },
+  "397": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 9.511097118775069e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101562,
+   "src_shard": "state1.zarr",
+   "src_episode": 562
+  },
+  "398": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.3011879218538525e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101563,
+   "src_shard": "state1.zarr",
+   "src_episode": 563
+  },
+  "399": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101569,
+   "src_shard": "state1.zarr",
+   "src_episode": 569
+  },
+  "400": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.0081161008201889e-06,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101570,
+   "src_shard": "state1.zarr",
+   "src_episode": 570
+  },
+  "401": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101572,
+   "src_shard": "state1.zarr",
+   "src_episode": 572
+  },
+  "402": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101573,
+   "src_shard": "state1.zarr",
+   "src_episode": 573
+  },
+  "403": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101576,
+   "src_shard": "state1.zarr",
+   "src_episode": 576
+  },
+  "404": {
+   "ee": 0.0,
+   "source": 4.051828000228852e-06,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.004,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101584,
+   "src_shard": "state1.zarr",
+   "src_episode": 584
+  },
+  "405": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101588,
+   "src_shard": "state1.zarr",
+   "src_episode": 588
+  },
+  "406": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101595,
+   "src_shard": "state1.zarr",
+   "src_episode": 595
+  },
+  "407": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101602,
+   "src_shard": "state1.zarr",
+   "src_episode": 602
+  },
+  "408": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101604,
+   "src_shard": "state1.zarr",
+   "src_episode": 604
+  },
+  "409": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101609,
+   "src_shard": "state1.zarr",
+   "src_episode": 609
+  },
+  "410": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101613,
+   "src_shard": "state1.zarr",
+   "src_episode": 613
+  },
+  "411": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101615,
+   "src_shard": "state1.zarr",
+   "src_episode": 615
+  },
+  "412": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101616,
+   "src_shard": "state1.zarr",
+   "src_episode": 616
+  },
+  "413": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101621,
+   "src_shard": "state1.zarr",
+   "src_episode": 621
+  },
+  "414": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101647,
+   "src_shard": "state1.zarr",
+   "src_episode": 647
+  },
+  "415": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101648,
+   "src_shard": "state1.zarr",
+   "src_episode": 648
+  },
+  "416": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101649,
+   "src_shard": "state1.zarr",
+   "src_episode": 649
+  },
+  "417": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101650,
+   "src_shard": "state1.zarr",
+   "src_episode": 650
+  },
+  "418": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.4694842320750467e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101652,
+   "src_shard": "state1.zarr",
+   "src_episode": 652
+  },
+  "419": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101654,
+   "src_shard": "state1.zarr",
+   "src_episode": 654
+  },
+  "420": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101656,
+   "src_shard": "state1.zarr",
+   "src_episode": 656
+  },
+  "421": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101660,
+   "src_shard": "state1.zarr",
+   "src_episode": 660
+  },
+  "422": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.037774772314151e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101662,
+   "src_shard": "state1.zarr",
+   "src_episode": 662
+  },
+  "423": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101666,
+   "src_shard": "state1.zarr",
+   "src_episode": 666
+  },
+  "424": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101668,
+   "src_shard": "state1.zarr",
+   "src_episode": 668
+  },
+  "425": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101675,
+   "src_shard": "state1.zarr",
+   "src_episode": 675
+  },
+  "426": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101676,
+   "src_shard": "state1.zarr",
+   "src_episode": 676
+  },
+  "427": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101677,
+   "src_shard": "state1.zarr",
+   "src_episode": 677
+  },
+  "428": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101678,
+   "src_shard": "state1.zarr",
+   "src_episode": 678
+  },
+  "429": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101683,
+   "src_shard": "state1.zarr",
+   "src_episode": 683
+  },
+  "430": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101691,
+   "src_shard": "state1.zarr",
+   "src_episode": 691
+  },
+  "431": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101694,
+   "src_shard": "state1.zarr",
+   "src_episode": 694
+  },
+  "432": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101697,
+   "src_shard": "state1.zarr",
+   "src_episode": 697
+  },
+  "433": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101699,
+   "src_shard": "state1.zarr",
+   "src_episode": 699
+  },
+  "434": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101704,
+   "src_shard": "state1.zarr",
+   "src_episode": 704
+  },
+  "435": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 3.4914538105113024e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101706,
+   "src_shard": "state1.zarr",
+   "src_episode": 706
+  },
+  "436": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101708,
+   "src_shard": "state1.zarr",
+   "src_episode": 708
+  },
+  "437": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.356080486265455e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101714,
+   "src_shard": "state1.zarr",
+   "src_episode": 714
+  },
+  "438": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101718,
+   "src_shard": "state1.zarr",
+   "src_episode": 718
+  },
+  "439": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101722,
+   "src_shard": "state1.zarr",
+   "src_episode": 722
+  },
+  "440": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101726,
+   "src_shard": "state1.zarr",
+   "src_episode": 726
+  },
+  "441": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101729,
+   "src_shard": "state1.zarr",
+   "src_episode": 729
+  },
+  "442": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101735,
+   "src_shard": "state1.zarr",
+   "src_episode": 735
+  },
+  "443": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101744,
+   "src_shard": "state1.zarr",
+   "src_episode": 744
+  },
+  "444": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101746,
+   "src_shard": "state1.zarr",
+   "src_episode": 746
+  },
+  "445": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101749,
+   "src_shard": "state1.zarr",
+   "src_episode": 749
+  },
+  "446": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101751,
+   "src_shard": "state1.zarr",
+   "src_episode": 751
+  },
+  "447": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101758,
+   "src_shard": "state1.zarr",
+   "src_episode": 758
+  },
+  "448": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101761,
+   "src_shard": "state1.zarr",
+   "src_episode": 761
+  },
+  "449": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101762,
+   "src_shard": "state1.zarr",
+   "src_episode": 762
+  },
+  "450": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101764,
+   "src_shard": "state1.zarr",
+   "src_episode": 764
+  },
+  "451": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101768,
+   "src_shard": "state1.zarr",
+   "src_episode": 768
+  },
+  "452": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101771,
+   "src_shard": "state1.zarr",
+   "src_episode": 771
+  },
+  "453": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101778,
+   "src_shard": "state1.zarr",
+   "src_episode": 778
+  },
+  "454": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101787,
+   "src_shard": "state1.zarr",
+   "src_episode": 787
+  },
+  "455": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101789,
+   "src_shard": "state1.zarr",
+   "src_episode": 789
+  },
+  "456": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.868029463978019e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101792,
+   "src_shard": "state1.zarr",
+   "src_episode": 792
+  },
+  "457": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101795,
+   "src_shard": "state1.zarr",
+   "src_episode": 795
+  },
+  "458": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101799,
+   "src_shard": "state1.zarr",
+   "src_episode": 799
+  },
+  "459": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101802,
+   "src_shard": "state1.zarr",
+   "src_episode": 802
+  },
+  "460": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101807,
+   "src_shard": "state1.zarr",
+   "src_episode": 807
+  },
+  "461": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.2219861389439757e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101811,
+   "src_shard": "state1.zarr",
+   "src_episode": 811
+  },
+  "462": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101814,
+   "src_shard": "state1.zarr",
+   "src_episode": 814
+  },
+  "463": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 7.955043201945955e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101816,
+   "src_shard": "state1.zarr",
+   "src_episode": 816
+  },
+  "464": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.212866607147589e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101823,
+   "src_shard": "state1.zarr",
+   "src_episode": 823
+  },
+  "465": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101827,
+   "src_shard": "state1.zarr",
+   "src_episode": 827
+  },
+  "466": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 6.79107245105115e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101839,
+   "src_shard": "state1.zarr",
+   "src_episode": 839
+  },
+  "467": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101841,
+   "src_shard": "state1.zarr",
+   "src_episode": 841
+  },
+  "468": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101845,
+   "src_shard": "state1.zarr",
+   "src_episode": 845
+  },
+  "469": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.5156055016850587e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101854,
+   "src_shard": "state1.zarr",
+   "src_episode": 854
+  },
+  "470": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 3.061998370412766e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101857,
+   "src_shard": "state1.zarr",
+   "src_episode": 857
+  },
+  "471": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101860,
+   "src_shard": "state1.zarr",
+   "src_episode": 860
+  },
+  "472": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101868,
+   "src_shard": "state1.zarr",
+   "src_episode": 868
+  },
+  "473": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.2861696063737327e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101869,
+   "src_shard": "state1.zarr",
+   "src_episode": 869
+  },
+  "474": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101871,
+   "src_shard": "state1.zarr",
+   "src_episode": 871
+  },
+  "475": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101880,
+   "src_shard": "state1.zarr",
+   "src_episode": 880
+  },
+  "476": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101881,
+   "src_shard": "state1.zarr",
+   "src_episode": 881
+  },
+  "477": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101885,
+   "src_shard": "state1.zarr",
+   "src_episode": 885
+  },
+  "478": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 1.0848209086589122e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101888,
+   "src_shard": "state1.zarr",
+   "src_episode": 888
+  },
+  "479": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 4.32711345865755e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101891,
+   "src_shard": "state1.zarr",
+   "src_episode": 891
+  },
+  "480": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 8.05903539458086e-08,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101892,
+   "src_shard": "state1.zarr",
+   "src_episode": 892
+  },
+  "481": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101894,
+   "src_shard": "state1.zarr",
+   "src_episode": 894
+  },
+  "482": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101899,
+   "src_shard": "state1.zarr",
+   "src_episode": 899
+  },
+  "483": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101903,
+   "src_shard": "state1.zarr",
+   "src_episode": 903
+  },
+  "484": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101905,
+   "src_shard": "state1.zarr",
+   "src_episode": 905
+  },
+  "485": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0914775689107046e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101913,
+   "src_shard": "state1.zarr",
+   "src_episode": 913
+  },
+  "486": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101916,
+   "src_shard": "state1.zarr",
+   "src_episode": 916
+  },
+  "487": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101927,
+   "src_shard": "state1.zarr",
+   "src_episode": 927
+  },
+  "488": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101928,
+   "src_shard": "state1.zarr",
+   "src_episode": 928
+  },
+  "489": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101929,
+   "src_shard": "state1.zarr",
+   "src_episode": 929
+  },
+  "490": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 2.3335903165389027e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101930,
+   "src_shard": "state1.zarr",
+   "src_episode": 930
+  },
+  "491": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 4.689132993007661e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101935,
+   "src_shard": "state1.zarr",
+   "src_episode": 935
+  },
+  "492": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101938,
+   "src_shard": "state1.zarr",
+   "src_episode": 938
+  },
+  "493": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101941,
+   "src_shard": "state1.zarr",
+   "src_episode": 941
+  },
+  "494": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101942,
+   "src_shard": "state1.zarr",
+   "src_episode": 942
+  },
+  "495": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101945,
+   "src_shard": "state1.zarr",
+   "src_episode": 945
+  },
+  "496": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101949,
+   "src_shard": "state1.zarr",
+   "src_episode": 949
+  },
+  "497": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 3.058370339203975e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101950,
+   "src_shard": "state1.zarr",
+   "src_episode": 950
+  },
+  "498": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 3.1889877050161886e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101956,
+   "src_shard": "state1.zarr",
+   "src_episode": 956
+  },
+  "499": {
+   "ee": 0.0,
+   "source": 1.3570082728620037e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101959,
+   "src_shard": "state1.zarr",
+   "src_episode": 959
+  },
+  "500": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 5.262557465357531e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101962,
+   "src_shard": "state1.zarr",
+   "src_episode": 962
+  },
+  "501": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 2.0754916363330267e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101963,
+   "src_shard": "state1.zarr",
+   "src_episode": 963
+  },
+  "502": {
+   "ee": 0.0,
+   "source": 2.3326863356487593e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101964,
+   "src_shard": "state1.zarr",
+   "src_episode": 964
+  },
+  "503": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 2.0390648103330022e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101966,
+   "src_shard": "state1.zarr",
+   "src_episode": 966
+  },
+  "504": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.1662003629453466e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101973,
+   "src_shard": "state1.zarr",
+   "src_episode": 973
+  },
+  "505": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 1.564621925354004e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101978,
+   "src_shard": "state1.zarr",
+   "src_episode": 978
+  },
+  "506": {
+   "ee": 0.0,
+   "source": 1.1795706313932897e-06,
+   "target": 0.0,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.001,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101980,
+   "src_shard": "state1.zarr",
+   "src_episode": 980
+  },
+  "507": {
+   "ee": 0.0,
+   "source": 2.9202665245975368e-06,
+   "target": 4.1147177398670465e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.003,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101987,
+   "src_shard": "state1.zarr",
+   "src_episode": 987
+  },
+  "508": {
+   "ee": 0.0,
+   "source": 0.0,
+   "target": 7.545713174295088e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.0,
+    "target": 0.001
+   },
+   "tol": 0.001,
+   "seed": 101990,
+   "src_shard": "state1.zarr",
+   "src_episode": 990
+  },
+  "509": {
+   "ee": 0.0,
+   "source": 2.1450557596836006e-06,
+   "target": 1.674309686450215e-07,
+   "scene_ok": true,
+   "ok": true,
+   "object_offset_mm": {
+    "source": 0.002,
+    "target": 0.0
+   },
+   "tol": 0.001,
+   "seed": 101997,
+   "src_shard": "state1.zarr",
+   "src_episode": 997
+  }
+ },
+ "n_ok": 510,
+ "n": 510
+}

@@ -74,6 +74,8 @@ def main() -> None:
     ap.add_argument('--episodes', type=int, nargs='*', default=None,
                     help='explicit episode indices (overrides --splits)')
     ap.add_argument('--prompt', default='v1_upstream', choices=sorted(PROMPTS))
+    ap.add_argument('--variant', default='official',
+                    help='plan_prompts.py variant applied to --prompt (the eval uses the same registry)')
     ap.add_argument('--outdir', required=True)
     ap.add_argument('--camera-file', default=None,
                     help='default: diffusion_policy/config/veritas/camera_<task>.json')
@@ -82,6 +84,20 @@ def main() -> None:
     ap.add_argument('--redraw', action='store_true', help='overlays only, no Gemini calls')
     ap.add_argument('--limit', type=int, default=None)
     a = ap.parse_args()
+    if a.variant != 'official':
+        # same hook as run_pi0_eval: rewrite the request (text and example parts) as sent
+        sys.path.insert(0, str(REPO / 'scripts/simpler/veritas_pi0'))
+        import plan_prompts
+        _generate = SimplerVeritasClient._generate
+
+        def _generate_variant(self, parts, cfg):
+            parts = plan_prompts.apply(a.variant, parts)
+            self.last_prompt = next(p for p in parts if isinstance(p, str) and plan_prompts.PLAN_MARK in p)
+            return _generate(self, parts, cfg)
+        SimplerVeritasClient._generate = _generate_variant
+        name = f'{a.prompt}+{a.variant}'
+        PROMPTS[name] = PROMPTS[a.prompt]
+        a.prompt = name
 
     import zarr
     manifest = json.loads(Path(a.split_file).read_text())

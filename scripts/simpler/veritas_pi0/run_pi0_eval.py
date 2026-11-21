@@ -47,10 +47,14 @@ from omegaconf import OmegaConf, open_dict  # noqa: E402
 from src.agent.eval import EvalAgent  # noqa: E402
 from src.agent.utils import gemini_client as _gemini_client  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plan_prompts  # noqa: E402
+
 
 # The official retry loop sleeps only on 429/quota errors; a 503 "high demand" burst gets
-# three back-to-back attempts and then silently falls back to an EMPTY plan, which would turn
-# verifier episodes into unguided ones. Wrap the raw call with exponential backoff instead.
+# three back-to-back attempts and then silently falls back to a one-waypoint plan at the image
+# centre (notes="fallback"), which would misguide verifier episodes. Wrap the raw call with
+# exponential backoff instead.
 _TRANSIENT = ("503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED",
               "500 INTERNAL", "502", "504", "DEADLINE_EXCEEDED")
 _orig_generate = _gemini_client.GeminiClient._generate
@@ -77,6 +81,9 @@ def _generate_with_backoff(self, parts, generation_config, _orig=_orig_generate,
 # to identical first frames, so every arm gets identical object lists and plans. Only
 # JSON-parseable responses are stored, so a bad reply is retried live, never replayed.
 _GEMINI_CACHE_DIR = os.environ.get("GEMINI_CACHE_DIR")
+# Prompt variant (plan_prompts.py), applied before hashing so each variant has its own cache.
+_PLAN_PROMPT = os.environ.get("PLAN_PROMPT", "official")
+assert _PLAN_PROMPT in plan_prompts.VARIANTS, _PLAN_PROMPT
 
 
 class _CachedResponse:
@@ -85,6 +92,7 @@ class _CachedResponse:
 
 
 def _generate_cached(self, parts, generation_config):
+    parts = plan_prompts.apply(_PLAN_PROMPT, parts)
     if not _GEMINI_CACHE_DIR:
         return _generate_with_backoff(self, parts, generation_config)
     h = hashlib.sha1(str(self.model_name).encode())
@@ -175,7 +183,8 @@ class LoggedEvalAgent(EvalAgent):
         config = OmegaConf.to_container(cfg, resolve=True)
         config.update(dict(
             arm=self.arm,
-            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),  # official default
+            plan_prompt=_PLAN_PROMPT,
             veritas_commit=_git_head(VERITAS_ROOT),
             n_eval_episode=self.n_eval_episode,
             seeded=self.eval_seeds is not None,
@@ -214,6 +223,8 @@ class LoggedEvalAgent(EvalAgent):
     def run(self):
         n_var = self.n_variations
         for cnt in range(self.n_eval_episode):
+            if self._done():
+                break
             if cnt in self.rows:
                 continue
             seed = None
@@ -224,9 +235,10 @@ class LoggedEvalAgent(EvalAgent):
             success = bool(self._run_episode(cnt))
             self._after_episode(cnt, seed, success)
             # plan actually used (the verifier keeps it until the next episode starts);
-            # 0 waypoints on a verifier run means Gemini fell back to an empty plan.
+            # 0 waypoints = empty reply, notes == "fallback" = Gemini failed 3 times.
             plan = getattr(getattr(self, "veritas_verifier", None), "plan", None)
             n_waypoints = len(plan.waypoints) if plan is not None and plan.waypoints else 0
+            fallback_plan = plan is not None and getattr(plan, "notes", None) == "fallback"
             row = dict(
                 episode=cnt,
                 variation=None if seed is not None else cnt % n_var,
@@ -240,6 +252,7 @@ class LoggedEvalAgent(EvalAgent):
                 verifier=bool(self.use_veritas_verifier),
                 n_samples=int(self.verifier_samples),
                 n_waypoints=n_waypoints,
+                fallback_plan=fallback_plan,
                 split=self.seed_split.get(seed) if seed is not None else None,
                 time=_dt.datetime.now().isoformat(timespec="seconds"),
             )
@@ -266,6 +279,10 @@ class LoggedEvalAgent(EvalAgent):
     def _after_episode(self, cnt: int, seed, success: bool) -> None:
         """Hook right after an episode, before its row is written (extra attempts, dumps)."""
 
+    def _done(self) -> bool:
+        """Subclasses stop the loop early (e.g. enough demos recorded)."""
+        return False
+
     def _finish(self):
         import wandb
         done = sorted(self.rows)
@@ -277,6 +294,8 @@ class LoggedEvalAgent(EvalAgent):
                        mean_steps=float(np.mean([self.rows[i]["steps"] for i in done])) if n else None,
                        n_empty_plan=(sum(1 for i in done if self.rows[i].get("n_waypoints", -1) == 0)
                                      if self.use_veritas_verifier else None),
+                       n_fallback_plan=(sum(1 for i in done if self.rows[i].get("fallback_plan"))
+                                        if self.use_veritas_verifier else None),
                        verifier=bool(self.use_veritas_verifier), n_samples=int(self.verifier_samples))
         if self.seed_split:
             for name in sorted(set(self.seed_split.values())):
