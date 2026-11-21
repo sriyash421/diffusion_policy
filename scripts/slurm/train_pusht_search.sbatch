@@ -111,6 +111,19 @@ fi
 echo "output root : $DP_OUTPUT_ROOT (${avail_g:-?}G free)"
 echo "wandb dir   : $WANDB_DIR"
 
+# TAKEOVER_JOBS=<id,id,...> (pass with --export): jobs training this same run dir elsewhere. They are
+# cancelled and this job waits until squeue no longer lists them, so two jobs never write one run;
+# the run then resumes from its last save.
+if [ -n "${TAKEOVER_JOBS:-}" ]; then
+  while :; do
+    scancel ${TAKEOVER_JOBS//,/ } 2>/dev/null || true
+    q=$(squeue -h -u "$USER" -o %i) || { sleep 30; continue; }
+    echo "$q" | grep -qxE "${TAKEOVER_JOBS//,/|}" || break
+    sleep 30
+  done
+  echo "[$(date -Is)] took over from $TAKEOVER_JOBS"
+fi
+
 # SELF-REQUEUE on the checkpoint partition, whose jobs are cut at ~9h regardless of --time
 # (a timeout is not a preemption, so --requeue alone never restarts one). Submit with
 #   --partition=ckpt-all --requeue --open-mode=append --time=9:00:00 --signal=B:USR1@600

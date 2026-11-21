@@ -25,6 +25,12 @@ function behind predict_step (the eval harness) and rollout_candidates (the trai
 Differences from maze (diffusion_policy_standalone_maze/.../dt_search_policy.py): the env is the
 live PushT gym env, so the harness supplies the per-step feedback (`fb`) and the env's `done`
 flag with the observation; actions are continuous targets (no cardinal snap); no stop head.
+
+`context_obs: state` (the rounds arm, train_pusht_dt_rounds): tokens of FINISHED attempts carry the
+low-dim state [agent xy, T xy]/512, sin/cos T theta through `state_proj` instead of the image
+features; the current attempt keeps the image. begin_attempt flags the finished attempts as context
+and rebuilds the cache; `prefill` starts a stream from stored context records (`context_records`),
+so context made by one policy can be handed to another.
 """
 from typing import Any, Dict
 
@@ -42,6 +48,9 @@ from diffusion_policy.policy.crop_scope import CropScopeMixin
 from diffusion_policy.env.pusht.pusht_step_feedback import demo_step_feedback, EpisodePlans
 
 TOKEN_KEYS = ('feat', 'prev_a', 'fb', 'prev_d', 'step')
+# context_obs=state only: the frame's low-dim state and the is-context flag
+STATE_KEYS = ('state', 'ctx')
+STATE_DIM = 6
 # keys the harness adds to the obs dict for predict_step; never normalized or encoded
 STEP_KEYS = ('fb', 'done', 'coverage', 'attention_mask')
 BACKBONES = ('gpt2', 'te')
@@ -76,6 +85,7 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
             zarr_path: str = None,
             plan_dir: str = None,
             verifier_value: str = 'wp_v3_la_tgn',
+            context_obs: str = 'image',
             **kwargs):
         super().__init__()
         action_shape = shape_meta['action']['shape']
@@ -84,7 +94,10 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         assert reward_mode in ('traj', 'step'), reward_mode
         assert backbone in BACKBONES, backbone
         assert terminal_feedback in ('value', 'coverage'), terminal_feedback
+        assert context_obs in ('image', 'state'), context_obs
         self.terminal_feedback = terminal_feedback
+        self.context_obs = context_obs
+        self.token_keys = TOKEN_KEYS + (STATE_KEYS if context_obs == 'state' else ())
         self.obs_encoder = obs_encoder
         self.horizon = horizon            # unused: attempts are variable length
         self.n_action_steps = n_action_steps
@@ -104,6 +117,8 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         self._plans = None
 
         self.obs_proj = nn.Linear(self.obs_feature_dim, n_emb)
+        if context_obs == 'state':
+            self.state_proj = nn.Linear(STATE_DIM, n_emb)
         self.act_emb = nn.Linear(self.action_dim, n_emb)
         self.fb_emb = nn.Linear(2, n_emb)
         self.done_emb = nn.Linear(1, n_emb)
@@ -140,8 +155,10 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         """Summed token embeddings (B, L, E) of a stream (or of the dict `keys` given)."""
         T = S if keys is None else keys
         B, L = T['step'].shape
-        x = (self.obs_proj(T['feat']) + self.act_emb(T['prev_a']) + self.fb_emb(T['fb'])
-             + self.done_emb(T['prev_d']))
+        x_obs = self.obs_proj(T['feat'])
+        if self.context_obs == 'state':
+            x_obs = torch.where(T['ctx'] > 0.5, self.state_proj(T['state']), x_obs)
+        x = x_obs + self.act_emb(T['prev_a']) + self.fb_emb(T['fb']) + self.done_emb(T['prev_d'])
         x = x + self.step_proj(self.pe(T['step'].reshape(-1).float()).reshape(B, L, -1))
         if self.backbone == 'te':
             x = x + self.pos_proj(self.pe(torch.arange(L, device=x.device).float()))[None]
@@ -215,7 +232,8 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
     # ------------------------------------------------------------------ stream
     def _empty_stream(self, B, Fo, Da, device):
         z = lambda *shape, dtype=torch.float32: torch.zeros((B, 0) + shape, dtype=dtype, device=device)
-        return {'feat': z(Fo), 'prev_a': z(Da), 'fb': z(2), 'prev_d': z(1), 'step': z(dtype=torch.long),
+        extra = {'state': z(STATE_DIM), 'ctx': z(1)} if self.context_obs == 'state' else {}
+        return {**extra, 'feat': z(Fo), 'prev_a': z(Da), 'fb': z(2), 'prev_d': z(1), 'step': z(dtype=torch.long),
                 'len': torch.zeros(B, dtype=torch.long, device=device), 'att_starts': [],
                 'has_prev': False, 't': None,
                 'last_a': torch.zeros(B, Da, device=device), 'last_fb': torch.zeros(B, 2, device=device),
@@ -228,7 +246,7 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         """Write one token at S['len'] for the rows in the bool mask; the others get padding."""
         if not bool(rows.any()):
             return
-        for k in TOKEN_KEYS:
+        for k in tok:
             S[k] = torch.cat([S[k], S[k].new_zeros((S[k].shape[0], 1) + tuple(S[k].shape[2:]))], dim=1)
             S[k][rows, S['len'][rows]] = tok[k][rows]
         S['len'] = S['len'] + rows.long()
@@ -238,14 +256,14 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         shift = S['att_starts'][drop]
         L = S['step'].shape[1]
         idx = (torch.arange(L, device=shift.device)[None] + shift[:, None]).clamp(max=L - 1)
-        for k in TOKEN_KEYS:
+        for k in self.token_keys:
             S[k] = torch.gather(S[k], 1, _expand_idx(idx, S[k]))
         for k in ('prev_a', 'fb', 'prev_d'):
             S[k][:, 0] = 0
         S['len'] = S['len'] - shift
         S['att_starts'] = [a - shift for a in S['att_starts'][drop:]]
         keep = int(S['len'].max())   # drop the now-stale padding columns, or the stream grows for ever
-        for k in TOKEN_KEYS:
+        for k in self.token_keys:
             S[k] = S[k][:, :keep]
         self._rebuild_cache(S)
 
@@ -263,9 +281,100 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
                 self._st = None
                 return
             self._slide(S, len(S['att_starts']) - window)
+        if self.context_obs == 'state' and not bool(S['ctx'].bool().all()):
+            # the finished attempts become context: their tokens switch to the state projection
+            S['ctx'] = torch.ones_like(S['ctx'])     # not in place: may be an inference tensor
+            with torch.no_grad():
+                self._rebuild_cache(S)
         S['has_prev'] = len(S['att_starts']) > 0
         S['att_starts'].append(S['len'].clone())
         S['t'] = None
+
+    # ------------------------------------------------------------------ stored context (context_obs=state)
+    @staticmethod
+    def _state6(agent_pos, feedback):
+        """(B, 6) [agent xy, T xy] / 512, sin / cos T theta, from the agent_pos and feedback obs."""
+        from diffusion_policy.env.pusht.feedback_util import block_pose_from_feedback
+        pose = torch.as_tensor(block_pose_from_feedback(feedback.detach().cpu().numpy()),
+                               dtype=torch.float32, device=agent_pos.device)
+        return torch.cat([agent_pos.float() / 512.0, pose[:, :2] / 512.0,
+                          torch.sin(pose[:, 2:]), torch.cos(pose[:, 2:])], dim=-1)
+
+    def context_records(self, rows=None):
+        """The attempt just settled, per row, as a stored-context record (CPU): its tokens
+        without image features, its length, and (per attempt) the last action / feedback the
+        next attempt's boundary token carries."""
+        assert self.context_obs == 'state', 'stored context needs context_obs=state'
+        S = self._st
+        start, end = S['att_starts'][-1], S['len']
+        rows = range(len(end)) if rows is None else rows
+        keys = [k for k in self.token_keys if k != 'feat']
+        return [{'tok': {k: S[k][b, int(start[b]):int(end[b])].detach().cpu() for k in keys},
+                 'att_lens': [int(end[b] - start[b])],
+                 'last_a': S['last_a'][b, None].detach().cpu(), 'last_fb': S['last_fb'][b, None].detach().cpu()}
+                for b in rows]
+
+    @staticmethod
+    def append_context(ctx, rec):
+        """A start's context (None = empty) with one more attempt record appended."""
+        if ctx is None:
+            return rec
+        return {'tok': {k: torch.cat([ctx['tok'][k], rec['tok'][k]]) for k in ctx['tok']},
+                'att_lens': ctx['att_lens'] + rec['att_lens'],
+                'last_a': torch.cat([ctx['last_a'], rec['last_a']]),
+                'last_fb': torch.cat([ctx['last_fb'], rec['last_fb']])}
+
+    @staticmethod
+    def truncate_context(ctx, w):
+        """The first `w` attempts of a context (None when w == 0)."""
+        if ctx is None or w == 0:
+            return None
+        L = sum(ctx['att_lens'][:w])
+        return {'tok': {k: v[:L] for k, v in ctx['tok'].items()}, 'att_lens': ctx['att_lens'][:w],
+                'last_a': ctx['last_a'][:w], 'last_fb': ctx['last_fb'][:w]}
+
+    def _context_stream(self, ctx_list, device):
+        """A padded stream (B rows) holding each row's stored context, or None when every row's is
+        empty. Rows may hold different numbers of attempts (None = none); `att_starts` is only
+        built when they agree, which the live stream (prefill) needs."""
+        if all(c is None for c in ctx_list):
+            return None
+        n_att = [0 if c is None else len(c['att_lens']) for c in ctx_list]
+        B, Da = len(ctx_list), self.action_dim
+        S = self._empty_stream(B, self.obs_feature_dim, Da, device)
+        lens = torch.tensor([0 if c is None else sum(c['att_lens']) for c in ctx_list],
+                            dtype=torch.long, device=device)
+        L = int(lens.max())
+        for k in self.token_keys:
+            if k == 'feat':
+                S[k] = torch.zeros(B, L, self.obs_feature_dim, device=device)
+                continue
+            S[k] = S[k].new_zeros((B, L) + tuple(S[k].shape[2:]))
+            for b, c in enumerate(ctx_list):
+                if c is not None:
+                    S[k][b, :lens[b]] = c['tok'][k].to(device=device, dtype=S[k].dtype)
+        S['ctx'] = torch.ones_like(S['ctx'])
+        S['len'] = lens
+        if len(set(n_att)) == 1:
+            starts = np.cumsum([[0] + c['att_lens'][:-1] for c in ctx_list], axis=1)
+            S['att_starts'] = [torch.as_tensor(starts[:, j], dtype=torch.long, device=device)
+                               for j in range(n_att[0])]
+        else:
+            S['att_starts'] = None
+        zero_a, zero_fb = torch.zeros(Da), torch.zeros(2)
+        S['last_a'] = torch.stack([zero_a if c is None else c['last_a'][-1] for c in ctx_list]).to(device)
+        S['last_fb'] = torch.stack([zero_fb if c is None else c['last_fb'][-1] for c in ctx_list]).to(device)
+        return S
+
+    @torch.no_grad()
+    def prefill(self, ctx_list, device=None):
+        """Start the episode stream from stored context (one entry per env row, None = empty);
+        the caller's next begin_attempt then opens the attempt that follows it."""
+        S = self._context_stream(ctx_list, device or self.device)
+        assert S is None or S['att_starts'] is not None, 'prefill needs the same number of attempts per row'
+        self._st = S
+        if S is not None:
+            self._rebuild_cache(S)
 
     @torch.inference_mode()
     def predict_step(self, obs_dict):
@@ -318,6 +427,8 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         else:
             tok = {'prev_a': S['prev_action'], 'fb': torch.stack([fb, torch.zeros_like(fb)], dim=-1), 'prev_d': zeros}
         tok.update(feat=feat, fb=self._mask_fb(tok['fb']), step=S['t'])
+        if self.context_obs == 'state':
+            tok.update(state=self._state6(obs['agent_pos'], obs['feedback']), ctx=zeros)
         if not bool(active.any()):      # every row settled: nothing to append or predict
             return torch.zeros(B, self.action_dim, device=device), active.clone()
         self._append(S, active, tok)
@@ -407,7 +518,7 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         self._st = saved
         return {'values': torch.stack(values, 1), 'success': torch.stack(success, 1),
                 'n_steps': torch.stack(n_steps, 1), 'snaps': snaps,
-                'stream': {k: S[k][:B] for k in TOKEN_KEYS}, 'n_in_stream': len(S['att_starts'])}
+                'stream': {k: S[k][:B] for k in self.token_keys}, 'n_in_stream': len(S['att_starts'])}
 
     def _init_states_and_plans(self, obs):
         """(B, 5) env reset states and the plans of the demos a whole-episode batch came from."""
@@ -439,8 +550,26 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
             out[b, :n] = demo_step_feedback(plan, agent[b, :n], feedback[b, :n])
         return torch.as_tensor(out, device=obs['agent_pos'].device)
 
-    def compute_loss(self, batch):
-        """NLL of the expert's actions, for every prefix of 0..K context attempts."""
+    def _noise_features(self, x, t, mask):
+        """Training-only noise on the expert's encoded frames (maze asteroid.noisy_obs):
+        sqrt(abar_t) x + sqrt(1 - abar_t) eps * std, abar from DDPM (T 1000, beta 1e-4 -> 0.02
+        linear), std an EMA (0.99) of the per-dimension feature std; t (B,) per sample."""
+        if getattr(self, '_abar', None) is None:
+            from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+            self._abar = DDPMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=0.02,
+                                       beta_schedule='linear').alphas_cumprod
+        with torch.no_grad():
+            sd = x[mask].std(0).clamp_min(1e-6)
+            prev = getattr(self, '_feat_std', None)
+            self._feat_std = sd if prev is None else .99 * prev + .01 * sd
+        ab = self._abar.to(x.device)[t.to(x.device)].to(x.dtype)[:, None, None]
+        return ab.sqrt() * x + (1 - ab).sqrt() * torch.randn_like(x) * self._feat_std
+
+    def compute_loss(self, batch, context=None, feat_noise_t=None):
+        """NLL of the expert's actions, for every prefix of 0..K context attempts -- or, given
+        ``context`` (one stored-context record per sample, `context_records`), after exactly
+        that context. ``feat_noise_t`` (B,): DDPM timestep of the noise on each sample's expert
+        image features (`_noise_features`); None = clean."""
         obs = batch['obs']
         nactions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = nactions.shape
@@ -448,6 +577,8 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         mask = batch.get('attention_mask', None)
         mask = torch.ones((B, T), dtype=torch.bool, device=device) if mask is None else mask.bool()
         feat = self._obs_features(obs, n_steps=T)
+        if feat_noise_t is not None:
+            feat = self._noise_features(feat, feat_noise_t, mask)
         fb_t = self._expert_feedback(obs, mask)
         # expert tokens: previous action / feedback within the attempt; the first token is the boundary.
         # token t carries the feedback measured at frame t (the state a_{t-1} produced); the
@@ -458,7 +589,7 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         prev_d = torch.zeros(B, T, 1, device=device)
         steps = torch.arange(T, device=device)[None].expand(B, -1)
 
-        K = self.max_actions - 1
+        K = 0 if context is not None else self.max_actions - 1
         cands = None
         if K > 0:
             # FRESH context by the current weights, as maze: eval() for the rollout (center crop,
@@ -471,23 +602,34 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
             self.train(was_training)
             self._last_context = {k: cands[k] for k in ('values', 'success', 'n_steps')}
 
+        expert = {'feat': feat, 'step': steps}
+        if self.context_obs == 'state':
+            # expert frames are never context: their state channel is unused
+            expert.update(state=torch.zeros(B, T, STATE_DIM, device=device),
+                          ctx=torch.zeros(B, T, 1, device=device))
         seqs, idxs = [], []
         for s in range(K + 1):
             S = self._empty_stream(B, feat.shape[-1], Da, device)
             e_prev_a, e_fb, e_prev_d = prev_a, fb, prev_d
-            if s > 0:
+            prefix = None
+            if context is not None:
+                prefix = self._context_stream(context, device)
+            elif s > 0:
                 snap = cands['snaps'][s - 1]
                 L = int(snap['len'].max())
-                for k in TOKEN_KEYS:
-                    S[k] = cands['stream'][k][:, :L].clone()
-                S['len'] = snap['len'].clone()
-                e_prev_a = torch.cat([snap['last_a'][:, None], prev_a[:, 1:]], dim=1)
-                e_fb = torch.cat([self._mask_fb(snap['last_fb'])[:, None], fb[:, 1:]], dim=1)
-                e_prev_d = torch.cat([torch.ones(B, 1, 1, device=device), prev_d[:, 1:]], dim=1)
+                prefix = {k: cands['stream'][k][:, :L].clone() for k in self.token_keys}
+                prefix.update(len=snap['len'].clone(), last_a=snap['last_a'], last_fb=snap['last_fb'])
+            if prefix is not None:
+                for k in self.token_keys + ('len',):
+                    S[k] = prefix[k]
+                has = (prefix['len'] > 0)[:, None].float()     # rows with no context keep the zeros
+                e_prev_a = torch.cat([(has * prefix['last_a'])[:, None], prev_a[:, 1:]], dim=1)
+                e_fb = torch.cat([(has * self._mask_fb(prefix['last_fb']))[:, None], fb[:, 1:]], dim=1)
+                e_prev_d = torch.cat([has[:, :, None], prev_d[:, 1:]], dim=1)
             off = S['len']
             idx = off[:, None] + steps
             Ltot = int((off + T).max())
-            for k, v in (('feat', feat), ('prev_a', e_prev_a), ('fb', e_fb), ('prev_d', e_prev_d), ('step', steps)):
+            for k, v in dict(expert, prev_a=e_prev_a, fb=e_fb, prev_d=e_prev_d).items():
                 full = torch.zeros((B, Ltot) + tuple(v.shape[2:]), dtype=v.dtype, device=device)
                 full[:, :S[k].shape[1]] = S[k]
                 S[k] = full.scatter(1, _expand_idx(idx, v), v)
@@ -496,7 +638,7 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
             idxs.append(idx)
         Lmax = max(S['step'].shape[1] for S in seqs)
         cat = {k: torch.cat([F.pad(S[k], (0, 0) * (S[k].dim() - 2) + (0, Lmax - S[k].shape[1])) for S in seqs])
-               for k in TOKEN_KEYS}
+               for k in self.token_keys}
         cat['len'] = torch.cat([S['len'] for S in seqs])
         h = self._hidden(cat)                                                        # (B*(K+1), Lmax, E)
         h = torch.gather(h, 1, _expand_idx(torch.cat(idxs), h))                      # expert positions
@@ -520,6 +662,8 @@ class PushTDTSearchPolicy(CropScopeMixin, BaseImagePolicy):
         tok = {'feat': feat[:, 0], 'prev_a': torch.zeros(B, self.action_dim, device=device),
                'fb': torch.zeros(B, 2, device=device), 'prev_d': torch.zeros(B, 1, device=device),
                'step': torch.zeros(B, dtype=torch.long, device=device)}
+        if self.context_obs == 'state':
+            tok.update(state=torch.zeros(B, STATE_DIM, device=device), ctx=torch.zeros(B, 1, device=device))
         self._append(S, torch.ones(B, dtype=torch.bool, device=device), tok)
         action = self.normalizer['action'].unnormalize(self._heads(self._hidden(S)[:, 0]).mean)
         return {'action': action[:, None], 'action_pred': action[:, None]}

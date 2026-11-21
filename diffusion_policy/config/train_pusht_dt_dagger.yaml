@@ -1,0 +1,28 @@
+# DT multi-episode DAgger (train_dt_dagger_workspace), asteroid's train_asteroid.py loop on the demos:
+# stage pi_kn re-collects n attempts by the CURRENT weights from all 50 training starts every
+# iteration, then trains on the demo after a U{0..n}-width prefix of them. Weights continue across
+# stages; AdamW + asteroid schedule restart per stage. Tokens, feedback and context_obs as the
+# rounds arm (train_pusht_dt_rounds).
+defaults:
+  - train_pusht_dt_rounds
+  - _self_
+
+name: train_pusht_dt_dagger
+_target_: diffusion_policy.workspace.train_dt_dagger_workspace.TrainDTDaggerWorkspace
+trainer: dt_dagger
+
+run_name: dt-${arch_tag}_dagger${dagger.n_stages}x${dagger.iters_per_stage}_rep${dagger.repeats}_ep${dagger.epochs}_bs${dataloader.batch_size}_ctx-state-mix_fb-${reward_mode}_tf-cov_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+dagger:
+  n_stages: 8
+  iters_per_stage: 30
+  # rollouts per training start per iteration: 50 x 3 = 150 in parallel
+  repeats: 3
+  # passes over the 150 rollouts per collection
+  epochs: 10
+  # asteroid: AdamW at torch defaults otherwise, 3% linear warmup then cosine to 0, per stage
+  lr: 1.0e-4
+  warmup_ratio: 0.03
+
+dataloader:
+  batch_size: 32

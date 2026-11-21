@@ -35,10 +35,10 @@ dataset_horizon: 300
 
 task:
   dataset:
-    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far_valpool50.json
     n_train_episodes: ${n_demos}
     n_test_episodes: 50
-    n_val_episodes: 19
+    n_val_episodes: 50
     goal_mask_noise: ${goal_mask_noise}
     transition_file: ${transition_file}
   env_runner:

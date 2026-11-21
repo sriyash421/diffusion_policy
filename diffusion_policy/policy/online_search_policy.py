@@ -289,13 +289,13 @@ class OnlineSearchPolicy(ObsCorruptionMixin, SearchProcedureMixin, BaseImagePoli
     def predict_step(self, obs_dict):
         """The eval harness's per-step call: raw obs (B, 1, ...) -> (action (B, Da), active (B,)).
 
-        Extra harness keys (`fb`, `done`, `attention_mask`) are ignored: this model reads its
+        Extra harness keys (`fb`, `done`, `coverage`, `attention_mask`) are ignored: this model reads its
         feedback from the obs and has no stop head, so every row stays active and the harness
         ends attempts on env done / its guard.
         """
         B = next(iter(obs_dict.values())).shape[0]
         _, action = self._cached_step({k: v[:, -1:] for k, v in obs_dict.items()
-                                       if k not in ('fb', 'done', 'attention_mask')})
+                                       if k not in ('fb', 'done', 'coverage', 'attention_mask')})
         return action, torch.ones(B, dtype=torch.bool, device=action.device)
 
     def _incontext_rollout_chunk(self, states_chunk: np.ndarray, n_trajs: int):

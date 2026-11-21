@@ -330,10 +330,13 @@ class TrainMLPImageWorkspace(BaseWorkspace):
           nrmse_first  candidate 0, generated with an EMPTY search context -- i.e. the
                        no-search baseline. (first - min) is the actual best-of-n gain,
                        which nrmse_min alone cannot show.
+          nrmse_last   the last candidate: (first - last) says whether later candidates,
+                       conditioned on the earlier ones, move toward the expert.
           action_value       mean verifier score over candidates.
           action_value_best  score of the candidate search would actually execute
                              (argmax) -- the value-space analogue of nrmse_min.
           action_value_first candidate 0's score, i.e. the no-search baseline.
+          action_value_last  the last candidate's score.
                              (best - first) is what says whether search is helping.
 
         Under ``selection: final_pass`` two more are added, because none of the above
@@ -351,8 +354,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         To, Ta = policy.n_obs_steps, policy.n_action_steps
         sl = slice(To - 1, To - 1 + Ta)
         action_normalizer = policy.normalizer['action']
-        mins, avgs, firsts, vals = list(), list(), list(), list()
-        vals_best, vals_first = list(), list()
+        mins, avgs, firsts, lasts, vals = list(), list(), list(), list(), list()
+        vals_best, vals_first, vals_last = list(), list(), list()
         finals, vals_final = list(), list()
         final_pass = getattr(policy, 'selection', 'argmax') == 'final_pass'
         with torch.no_grad():
@@ -374,9 +377,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                 mins.append(rmse.min(dim=1).values)                          # B
                 avgs.append(rmse.mean(dim=1))                                # B
                 firsts.append(rmse[:, 0])                                    # B
+                lasts.append(rmse[:, -1])                                    # B
                 vals.append(scores.mean(dim=1))                              # B
                 vals_best.append(scores.max(dim=1).values)                   # B
                 vals_first.append(scores[:, 0])                              # B
+                vals_last.append(scores[:, -1])                              # B
                 if final_pass:
                     # exactly what predict_action_best deploys, plus one sim to score it --
                     # same `context_capacity` bound, so the two cannot drift apart. keep may
@@ -400,9 +405,11 @@ class TrainMLPImageWorkspace(BaseWorkspace):
             'nrmse_min': torch.cat(mins).mean().item(),
             'nrmse_avg': torch.cat(avgs).mean().item(),
             'nrmse_first': torch.cat(firsts).mean().item(),
+            'nrmse_last': torch.cat(lasts).mean().item(),
             'action_value': torch.cat(vals).mean().item(),
             'action_value_best': torch.cat(vals_best).mean().item(),
             'action_value_first': torch.cat(vals_first).mean().item(),
+            'action_value_last': torch.cat(vals_last).mean().item(),
         }
         if finals:
             out['nrmse_final'] = torch.cat(finals).mean().item()
@@ -500,6 +507,7 @@ class TrainMLPImageWorkspace(BaseWorkspace):
         # separate from val_dataloader: the loss loop wants every window in order, the
         # search metrics want a fixed spread-out subset (see _make_nrmse_loader)
         nrmse_val_loader = self._make_nrmse_loader(val_dataset, cfg, collate_fn, seed=0)
+        nrmse_train_loader = self._make_nrmse_loader(dataset, cfg, collate_fn, seed=2)
 
         # optional held-out test dataloader (only for a real 3-way split, where the val
         # and test pools are distinct; with the legacy 2-way split they are the same set,
@@ -827,7 +835,8 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                     # physics-simulated, so this is not free).
                     if _is_search_policy(eval_policy):
                         nrmse_max_batches = cfg.training.get('nrmse_max_batches', None)
-                        for prefix, loader in (('val', nrmse_val_loader),
+                        for prefix, loader in (('train', nrmse_train_loader),
+                                               ('val', nrmse_val_loader),
                                                ('test', nrmse_test_loader)):
                             if loader is None:
                                 continue

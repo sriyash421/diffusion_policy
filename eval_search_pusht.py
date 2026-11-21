@@ -186,8 +186,31 @@ def load_policy(checkpoint, device, num_inference_steps=None, noise_scheduler=No
     return policy, cfg
 
 
-def get_split_states(cfg, split, run_dir=None):
+def _override_split(cfg, split, split_file, replay_buffer):
+    """`split` of another manifest, allowed only if its train AND test equal the checkpoint's.
+
+    Lets a checkpoint trained before a split's val was redrawn (far-50 val -> valpool50,
+    2026-10-29) be scored on the new val: the train episodes are identical, so the new val
+    is just as held out as the old one.
+    """
+    ends = replay_buffer.episode_ends[:]
+    own_masks = masks_from_manifest(
+        load_split_manifest(cfg.task.dataset.split_file, episode_ends=ends),
+        replay_buffer.n_episodes)
+    new_masks = masks_from_manifest(
+        load_split_manifest(split_file, episode_ends=ends), replay_buffer.n_episodes)
+    for name, own, new in zip(('train', 'test'), own_masks[::2], new_masks[::2]):
+        if not np.array_equal(own, new):
+            raise ValueError(f'{split_file} has a different {name} set than the checkpoint\'s '
+                             f'{cfg.task.dataset.split_file}; its {split} is not held out.')
+    return dict(zip(('train', 'val', 'test'), new_masks))[split]
+
+
+def get_split_states(cfg, split, run_dir=None, split_file=None):
     """Reset states for 'train', 'val' or 'test' -- the SAME split the checkpoint trained under.
+
+    `split_file` takes `split` from another manifest instead (see `_override_split`); the
+    run's splits.json then no longer describes it and is not cross-checked.
 
     'train' is here so an analysis can be run on the episodes the policy DID see, as the
     in-distribution reference for the same measurement on held-out ones. It is never a
@@ -205,10 +228,10 @@ def get_split_states(cfg, split, run_dir=None):
     ds = cfg.task.dataset
     replay_buffer = ReplayBuffer.copy_from_path(
         ds.zarr_path, keys=['agent_pos', 'block_pos'])
-    split_file = ds.get('split_file', None)
-    if split_file is not None:
+    own_file = ds.get('split_file', None)
+    if own_file is not None:
         manifest = load_split_manifest(
-            split_file,
+            own_file,
             episode_ends=replay_buffer.episode_ends[:],
             expected_counts={
                 'test': ds.get('n_test_episodes', None),
@@ -230,9 +253,11 @@ def get_split_states(cfg, split, run_dir=None):
             seed=ds.seed,
             n_train_episodes=ds.get('n_train_episodes', None))
     mask = {'train': train_mask, 'val': val_mask, 'test': test_mask}[split]
+    if split_file is not None:
+        mask = _override_split(cfg, split, split_file, replay_buffer)
     idxs = np.nonzero(mask)[0]
 
-    if run_dir is not None:
+    if run_dir is not None and split_file is None:
         recorded = pathlib.Path(run_dir).joinpath('splits.json')
         if recorded.is_file():
             try:
@@ -560,8 +585,13 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                     selection=None, selection_temperature=1.0, skip_val=False,
                     noise_scheduler=None, score_writer=None, verifier_value=None,
                     selection_index=None, corrupt_obs_eval=None, test_start_seed=None,
-                    n_test_seeds=50, plan_dir=None, terminal_scoring=False):
+                    n_test_seeds=50, plan_dir=None, terminal_scoring=False,
+                    split='test', split_file=None):
     """Sweep n_list, evaluating val and test at each n.
+
+    ``split`` / ``split_file``: score that split (of that manifest, see `_override_split`)
+    in the reported slot instead of test -- the `test_*` / unprefixed curve fields then hold
+    it, and the curve records which. Anything but test implies skip_val.
 
     ``test_start_seed``: switch the TEST split from held-out dataset episodes to fresh
     environment seeds, ``test_start_seed .. +n_test_seeds-1``. This is the ORIGINAL
@@ -625,8 +655,10 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
         test_states = [None] * len(test_idxs)
         test_env_seeds = [int(i) for i in test_idxs]
     else:
-        test_states, test_idxs = get_split_states(cfg, 'test', run_dir=run_dir)
+        test_states, test_idxs = get_split_states(cfg, split, run_dir=run_dir,
+                                                  split_file=split_file)
         test_env_seeds = None
+    skip_val = skip_val or split != 'test'
     # skip_val halves the cost: val's 10-or-30 episodes are padded out to n_envs=50, so the
     # two splits cost the SAME despite the episode counts (measured 505s vs 503s at n=32).
     # The tradeoff is that the run then has no val curve, so any checkpoint later picked
@@ -655,7 +687,7 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                 f'dataset episodes to key on.')
         if plan_dir is None:
             plan_dir = _WAYPOINT_PLAN_DIRS[wp_value]
-        test_plans = load_split_plans(plan_dir, test_idxs, 'test', wp_value)
+        test_plans = load_split_plans(plan_dir, test_idxs, split, wp_value)
         if has_val:
             val_plans = load_split_plans(plan_dir, val_idxs, 'val', wp_value)
         print(f'  waypoint plans: {plan_dir} '
@@ -728,7 +760,9 @@ def eval_checkpoint(checkpoint, device, n_list=N_LIST, n_envs=50, max_steps=300,
                               and getattr(policy, 'slot_ladder_on', False) else None),
             'ema_noise_buffers_repaired': bool(getattr(policy, 'ema_noise_buffers_repaired', False)),
             'n_generations': [int(n) + n_extra for n in done],
-            # test split: REPORTED
+            # REPORTED split: test unless overridden
+            'split': split,
+            'split_file': str(split_file) if split_file else None,
             'success_rate': [test_sr[n] for n in done],
             'success_ci': [test_ci[n] for n in done],
             'n_episodes': len(test_states),
@@ -1039,7 +1073,8 @@ def _conditional_obs_eval(run_or_ckpt):
 
 
 def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
-                corrupt_obs_eval=None, test_start_seed=None, terminal_scoring=False):
+                corrupt_obs_eval=None, test_start_seed=None, terminal_scoring=False,
+                split='test', split_file=None):
     """Output subdirectory: bon_search[_sel-<mode>][_ver-<value>][_obs-<clean|corrupt>].
 
     An override of ANY readout rule is a different experiment on the same weights, so it
@@ -1069,6 +1104,8 @@ def _bon_subdir(selection=None, verifier_value=None, selection_index=None,
         sub += '_obs-corrupt' if corrupt_obs_eval else '_obs-clean'
     if terminal_scoring:
         sub += '_terminal-success'
+    if split != 'test' or split_file:
+        sub += f'_split-{split}' + (f'-{pathlib.Path(split_file).stem}' if split_file else '')
     return sub
 
 
@@ -1335,11 +1372,16 @@ def read_curve_rows(out_root):
                    'decision (logging only) and stored as score_final.')
 @click.option('--skip-val', is_flag=True,
               help='evaluate the 50 test episodes only, skipping the val split')
+@click.option('--split', 'split', type=click.Choice(['test', 'val', 'train']), default='test',
+              help='split scored and reported in place of test (implies --skip-val)')
+@click.option('--split-file', 'split_file', default=None,
+              help='take --split from this manifest; its train and test must equal the '
+                   "checkpoint's (e.g. a far-50 run on its valpool50 val)")
 def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, max_steps,
          poll_sec, seed, num_inference_steps, noise_scheduler, idle_exit_sec, use_wandb,
          wandb_entity, wandb_project, selection, selection_temperature, skip_val,
          store_scores, verifier_value, selection_index, corrupt_obs_eval, n_list_arg,
-         test_start_seed, n_test_seeds, plan_dir, terminal_scoring):
+         test_start_seed, n_test_seeds, plan_dir, terminal_scoring, split, split_file):
     if corrupt_obs_eval is None:
         corrupt_obs_eval = _conditional_obs_eval(run_dir if watch else checkpoint)
     grid = {int(2 ** k) for k in range(31)}
@@ -1372,7 +1414,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
         # resolved through the link and landed beside the target instead of in the run dir.
         run_root = pathlib.Path(checkpoint).resolve().parent.parent
         sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
-                          test_start_seed, terminal_scoring)
+                          test_start_seed, terminal_scoring, split, split_file)
         out = pathlib.Path(output_dir) if output_dir else run_root.joinpath(sub)
         step = step_from_ckpt(checkpoint)
         # SAME per-step subdir convention as watch mode. Previously this wrote a flat
@@ -1397,7 +1439,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                 corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
                                 plan_dir=plan_dir,
-                                skip_val=skip_val,
+                                skip_val=skip_val, split=split, split_file=split_file,
                                 noise_scheduler=noise_scheduler,
                                 score_writer=_make_score_writer(
                                     step_dir, checkpoint, selection) if store_scores else None)
@@ -1409,7 +1451,7 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
     assert run_dir is not None, '--watch requires --run-dir'
     ckpt_dir = pathlib.Path(run_dir).joinpath('checkpoints')
     sub = _bon_subdir(selection, verifier_value, selection_index, corrupt_obs_eval,
-                      test_start_seed, terminal_scoring)
+                      test_start_seed, terminal_scoring, split, split_file)
     out_root = pathlib.Path(output_dir or os.path.join(run_dir, sub))
     if not ckpt_dir.is_dir():
         # Fail loudly on a wrong --run-dir. Previously a bad path was indistinguishable
@@ -1479,7 +1521,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_envs, max_n, min_n, m
                                         corrupt_obs_eval=corrupt_obs_eval,
                                 test_start_seed=test_start_seed, n_test_seeds=n_test_seeds,
                                         plan_dir=plan_dir,
-                                        skip_val=skip_val,
+                                        skip_val=skip_val, split=split,
+                                        split_file=split_file,
                                         noise_scheduler=noise_scheduler,
                                         score_writer=_make_score_writer(
                                             step_dir, str(ckpt), selection) if store_scores else None)

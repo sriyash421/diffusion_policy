@@ -194,3 +194,128 @@ def test_coverage_terminal_feedback_on_boundary_token():
     o = _obs(2, seed=1); o['fb'] = torch.tensor([-0.2, -0.3]); o['done'] = torch.tensor([True, True])
     q.predict_step(o)
     assert torch.allclose(q._st['last_fb'], torch.tensor([[-0.2, -0.2], [-0.3, -0.3]]))
+
+
+def _cov_obs(B, fb, done, cov, seed):
+    o = _obs(B, seed=seed)
+    o.update(fb=torch.as_tensor(fb, dtype=torch.float32), done=torch.as_tensor(done, dtype=torch.bool),
+             coverage=torch.as_tensor(cov, dtype=torch.float32))
+    return o
+
+
+def _state_attempt(p, lens):
+    """One attempt in which row b ends (env done) after lens[b] actions."""
+    B = len(lens)
+    p.begin_attempt()
+    for t in range(max(lens) + 1):
+        p.predict_step(_cov_obs(B, [-0.1 * (t + 1)] * B, [t >= n for n in lens], [0.1 * t] * B, seed=t))
+
+
+def test_state_context_handoff_matches_live_stream():
+    """Context records prefilled into ANOTHER policy give the same next token as the live stream
+    that made them (state tokens, boundary feedback), and the cached step equals the full forward."""
+    p = _policy(max_actions=8, backbone='gpt2', terminal_feedback='coverage', context_obs='state')
+    q = _policy(max_actions=8, backbone='gpt2', terminal_feedback='coverage', context_obs='state')
+    q.load_state_dict(p.state_dict())
+    with torch.inference_mode():
+        p.reset()
+        _state_attempt(p, [3, 2])
+        recs = p.context_records()
+        assert [r['att_lens'] for r in recs] == [[3], [2]]          # one token per action
+        p.begin_attempt()
+        assert p._st['ctx'][:, :3].bool().all()                    # the finished attempt is context now
+        q.reset(); q.prefill(recs); q.begin_attempt()
+        o = _cov_obs(2, [-0.5, -0.5], [False, False], [0.0, 0.0], seed=99)
+        p.predict_step(dict(o)); q.predict_step(dict(o))
+        assert torch.allclose(p._st['h_last'], q._st['h_last'], atol=1e-4)
+        S = q._st
+        h_full = q._hidden(S)[torch.arange(2), S['len'] - 1]
+        assert torch.allclose(h_full, S['h_last'], atol=1e-4)
+        # the boundary token carries [verifier value at the end, max coverage]
+        assert torch.allclose(S['fb'][torch.arange(2), S['att_starts'][-1]],
+                              torch.stack([r['last_fb'][-1] for r in recs]))
+    both = p.append_context(recs[0], recs[0])
+    assert both['att_lens'] == [3, 3] and both['tok']['state'].shape == (6, 6)
+
+
+def test_state_context_loss(monkeypatch):
+    p = _policy(max_actions=8, backbone='gpt2', terminal_feedback='coverage', context_obs='state')
+    with torch.inference_mode():
+        p.reset()
+        _state_attempt(p, [3, 1])
+        recs = p.context_records()
+    recs = [{**r, 'tok': {k: v.clone() for k, v in r['tok'].items()},
+             'last_a': r['last_a'].clone(), 'last_fb': r['last_fb'].clone()} for r in recs]
+    monkeypatch.setattr(p, '_expert_feedback', lambda obs, mask: -0.3 * torch.ones(mask.shape))
+    p.train()
+    B, T = 2, 5
+    batch = {'obs': _obs(B, T), 'action': torch.rand(B, T, 2) * 512,
+             'attention_mask': torch.tensor([[1] * 5, [1] * 3 + [0] * 2], dtype=torch.bool)}
+    p.eval()       # no dropout: compare the two n=0 paths exactly
+    loss0 = p.compute_loss(batch, context=[None, None])
+    p.max_actions = 1
+    assert torch.allclose(loss0, p.compute_loss(batch))
+    p.max_actions = 8
+    loss = p.compute_loss(batch, context=recs)
+    assert torch.isfinite(loss) and not torch.allclose(loss, loss0)
+    loss.backward()
+    assert p.state_proj.weight.grad is not None and p.state_proj.weight.grad.abs().sum() > 0
+
+
+def test_image_context_obs_keeps_state_dict():
+    assert not any(k.startswith('state_proj') for k in _policy(max_actions=8).state_dict())
+
+
+def test_mixed_width_context_loss(monkeypatch):
+    """A batch whose rows hold 0, 1 and 2 context attempts trains; a batch of only empty contexts
+    equals the no-context loss; truncate_context keeps the per-attempt boundary values."""
+    p = _policy(max_actions=8, backbone='gpt2', terminal_feedback='coverage', context_obs='state')
+    with torch.inference_mode():
+        p.reset()
+        _state_attempt(p, [3, 2, 2])
+        r1 = p.context_records()
+        p.begin_attempt()
+        _state_attempt(p, [1, 2, 3])
+        r2 = p.context_records()
+    clone = lambda r: {**r, 'tok': {k: v.clone() for k, v in r['tok'].items()},
+                       'last_a': r['last_a'].clone(), 'last_fb': r['last_fb'].clone()}
+    ctx = [clone(p.append_context(a, b)) for a, b in zip(r1, r2)]
+    assert ctx[0]['att_lens'] == [3, 1] and ctx[0]['last_fb'].shape == (2, 2)
+    one = p.truncate_context(ctx[1], 1)
+    assert one['att_lens'] == [2] and torch.equal(one['last_fb'], ctx[1]['last_fb'][:1])
+    assert p.truncate_context(ctx[2], 0) is None
+    monkeypatch.setattr(p, '_expert_feedback', lambda obs, mask: -0.3 * torch.ones(mask.shape))
+    B, T = 3, 4
+    batch = {'obs': _obs(B, T), 'action': torch.rand(B, T, 2) * 512,
+             'attention_mask': torch.ones(B, T, dtype=torch.bool)}
+    p.eval()
+    empty = p.compute_loss(batch, context=[None, None, None])
+    p.max_actions = 1
+    assert torch.allclose(empty, p.compute_loss(batch))
+    p.max_actions = 8
+    mixed = p.compute_loss(batch, context=[None, one, ctx[2]])
+    assert torch.isfinite(mixed) and not torch.allclose(mixed, empty)
+    mixed.backward()
+    assert p.state_proj.weight.grad.abs().sum() > 0
+    with pytest.raises(AssertionError):
+        p.prefill([None, one, ctx[2]])
+
+
+def test_feature_noise_loss(monkeypatch):
+    """feat_noise_t noises only the demo's features: t = 0 stays near clean, a large t changes the
+    loss, per-sample timesteps backprop, and the feature-std EMA is set."""
+    p = _policy(max_actions=8, backbone='gpt2', terminal_feedback='coverage', context_obs='state')
+    monkeypatch.setattr(p, '_expert_feedback', lambda obs, mask: -0.3 * torch.ones(mask.shape))
+    B, T = 3, 4
+    batch = {'obs': _obs(B, T), 'action': torch.rand(B, T, 2) * 512,
+             'attention_mask': torch.ones(B, T, dtype=torch.bool)}
+    p.eval()
+    ctx = [None] * B
+    clean = p.compute_loss(batch, context=ctx)
+    torch.manual_seed(0)
+    near = p.compute_loss(batch, context=ctx, feat_noise_t=torch.zeros(B, dtype=torch.long))
+    assert torch.allclose(clean, near, atol=1e-2)
+    noisy = p.compute_loss(batch, context=ctx, feat_noise_t=torch.tensor([600, 400, 200]))
+    assert torch.isfinite(noisy) and not torch.allclose(noisy, clean)
+    noisy.backward()
+    assert p._feat_std.shape == (p.obs_feature_dim,)

@@ -260,8 +260,11 @@ def plot_curve(rows, out_path, title):
 
 
 def eval_checkpoint(checkpoint, device, splits, n_candidates, n_envs, max_steps, seed, out_dir,
-                    plan_dir=None, max_episodes=None):
+                    plan_dir=None, max_episodes=None, split_file=None, max_actions=None):
     policy, cfg = load_eval_policy(checkpoint, device)
+    if max_actions is not None:
+        # attempts in the stream: 1 = every candidate from an empty stream (i.i.d., no context)
+        policy.max_actions = max_actions
     if not hasattr(policy, 'predict_step'):
         print(f'[load] {type(policy).__name__} is a chunk policy: wrapping it for per-step, '
               f'i.i.d. attempts (n_obs_steps={policy.n_obs_steps}, n_action_steps={policy.n_action_steps})')
@@ -275,7 +278,7 @@ def eval_checkpoint(checkpoint, device, splits, n_candidates, n_envs, max_steps,
     all_rows = []
     try:
         for split in splits:
-            states, idxs = get_split_states(cfg, split, run_dir=run_dir)
+            states, idxs = get_split_states(cfg, split, run_dir=run_dir, split_file=split_file)
             if max_episodes:
                 states, idxs = states[:max_episodes], idxs[:max_episodes]
             if len(states) == 0:
@@ -330,24 +333,29 @@ def eval_checkpoint(checkpoint, device, splits, n_candidates, n_envs, max_steps,
 @click.option('--n-envs', type=int, default=50)
 @click.option('--max-steps', type=int, default=300)
 @click.option('--seed', type=int, default=0)
-@click.option('--split', type=click.Choice(['test', 'val', 'both']), default='both')
+@click.option('--split', type=click.Choice(['test', 'val', 'train', 'both']), default='both')
 @click.option('--plan-dir', default=None)
 @click.option('--poll-sec', type=int, default=300)
 @click.option('--max-episodes', type=int, default=None, help='smoke tests: first K episodes of each split')
+@click.option('--max-actions', type=int, default=None, help="override the DT's attempt window (1 = no context)")
+@click.option('--split-file', default=None,
+              help="take the splits from this manifest (train and test must equal the checkpoint's); "
+                   'results go to bon_search/dt_eval_<manifest stem>/')
 def main(checkpoint, output_dir, watch, run_dir, device, n_candidates, n_envs, max_steps, seed,
-         split, plan_dir, poll_sec, max_episodes):
+         split, plan_dir, poll_sec, max_episodes, split_file, max_actions):
     splits = ['val', 'test'] if split == 'both' else [split]
+    sub = 'dt_eval' + (f'_{pathlib.Path(split_file).stem}' if split_file else '')
 
     def _out(ckpt):
         if output_dir is not None and not watch:
             return output_dir
         run = pathlib.Path(ckpt).resolve().parent.parent
-        return run / 'bon_search' / 'dt_eval' / f'step_{step_from_ckpt(ckpt) or 0:07d}'
+        return run / 'bon_search' / sub / f'step_{step_from_ckpt(ckpt) or 0:07d}'
 
     if not watch:
         assert checkpoint, 'checkpoint required without --watch'
         eval_checkpoint(checkpoint, device, splits, n_candidates, n_envs, max_steps, seed,
-                        _out(checkpoint), plan_dir, max_episodes)
+                        _out(checkpoint), plan_dir, max_episodes, split_file, max_actions)
         return
     assert run_dir, '--run-dir required with --watch'
     ckpt_dir = pathlib.Path(run_dir) / 'checkpoints'
@@ -359,7 +367,8 @@ def main(checkpoint, output_dir, watch, run_dir, device, n_candidates, n_envs, m
             continue
         ckpt = str(pending[0])
         print(f'[watch] evaluating {ckpt}')
-        eval_checkpoint(ckpt, device, splits, n_candidates, n_envs, max_steps, seed, _out(ckpt), plan_dir)
+        eval_checkpoint(ckpt, device, splits, n_candidates, n_envs, max_steps, seed, _out(ckpt), plan_dir,
+                        split_file=split_file)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,49 @@
+# DT in-context DAgger as the maze asteroid.py steps-per-iter schedule (train_dt_asteroid_workspace):
+# collect once per stage, aggregate D over stages, 30 iterations x (batch of 128 items, the same
+# batch for steps_per_iter steps), eval train + test starts after every iteration. Tokens,
+# feedback and context_obs as the rounds arm (train_pusht_dt_rounds).
+defaults:
+  - train_pusht_dt_rounds
+  - _self_
+
+name: train_pusht_dt_asteroid
+_target_: diffusion_policy.workspace.train_dt_asteroid_workspace.TrainDTAsteroidWorkspace
+trainer: dt_asteroid
+
+run_name: dt-${arch_tag}_asteroid${asteroid.n_stages}x${asteroid.iters_per_stage}_s${asteroid.steps_per_iter}_b${asteroid.batch}${asteroid.sched_suffix}_cps${asteroid.chains_per_start}${asteroid.ctrl_suffix}_on-${asteroid.obs_noise}${asteroid.on_suffix}_ctx-state_fb-${reward_mode}_tf-cov_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+asteroid:
+  n_stages: 8
+  iters_per_stage: 30
+  steps_per_iter: 30
+  batch: 128
+  # micro-batches per step (token-weighted gradient accumulation); 32 fits the L40S
+  micro: 32
+  # rollouts per training start per stage
+  chains_per_start: 1
+  # maze asteroid.py optimizer, fresh per stage; lr_schedule constant | cosine (linear warmup over
+  # `warmup` updates, then cosine to 0 over the stage)
+  lr: 1.0e-4
+  lr_schedule: constant
+  warmup: 0
+  # run-name tag for the schedule, set alongside lr_schedule (e.g. _cos500)
+  sched_suffix: ''
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+  grad_clip: 1.0
+  # training-only noise on the demo's image features: none | flat (obs_noise_t) | ramp
+  # (obs_noise_ramp[0] at 0 context attempts -> [1] at n_stages-1, linear)
+  obs_noise: none
+  obs_noise_t: 400
+  obs_noise_ramp: [600, 200]
+  # run-name tag for the noise level, set alongside obs_noise (e.g. 400, 600to200)
+  on_suffix: ''
+  # no-context control: collect false (D stays the demos), reset_optimizer false (one AdamW for the run);
+  # set ctrl_suffix alongside (e.g. _nocollect1opt)
+  collect: true
+  reset_optimizer: true
+  ctrl_suffix: ''
+  # train / test eval every eval_every iterations (and at the stage's end); rollouts per start
+  eval_every: 1
+  eval_seeds: 1

@@ -48,9 +48,9 @@ n_action_steps: 1
 
 task:
   dataset:
-    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far_valpool50.json
     n_test_episodes: 50
-    n_val_episodes: 19
+    n_val_episodes: 50
     # WHOLE EPISODES: one sample per episode, variable length, padded by sampler.collate_fn
     # which also emits the attention_mask the loss masks with.
     return_sequences: True

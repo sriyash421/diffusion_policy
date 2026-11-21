@@ -368,6 +368,8 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
             test_dataset = dataset.get_test_dataset()
             test_dataloader = DataLoader(
                 test_dataset, collate_fn=val_collate, **cfg.val_dataloader)
+        # sequential like val/test, so _TrackerSettingLoader can recover the indices
+        train_eval_dataloader = DataLoader(dataset, collate_fn=val_collate, **cfg.val_dataloader)
 
         # ---- loop geometry, all derived from max_gradient_steps -------------------
         max_steps = cfg.training.max_gradient_steps
@@ -655,6 +657,7 @@ class TrainSearchOuterInnerWorkspace(TrainMLPImageWorkspace):
                     if _is_search_policy(eval_policy):
                         nrmse_max_batches = cfg.training.get('nrmse_max_batches', None)
                         for prefix, loader in (
+                                ('train', _wp_loader(train_eval_dataloader, dataset)),
                                 ('val', _wp_loader(val_dataloader, val_dataset)),
                                 ('test', _wp_loader(test_dataloader, test_dataset))):
                             if loader is None:

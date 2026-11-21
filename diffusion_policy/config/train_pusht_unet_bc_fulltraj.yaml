@@ -24,9 +24,9 @@ n_action_steps: 300
 
 task:
   dataset:
-    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far.json
+    split_file: diffusion_policy/config/splits/pusht_blockquad_bottomleft_train50_far_valpool50.json
     n_test_episodes: 50
-    n_val_episodes: 19
+    n_val_episodes: 50
     emit_action_mask: True
 
 # a 300-step window is ~19x the chunk arm's; keep the batch at 32 (fits an L40S) and the budget

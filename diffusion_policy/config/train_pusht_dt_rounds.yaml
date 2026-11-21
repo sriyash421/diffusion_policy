@@ -1,0 +1,30 @@
+# DT context ROUNDS (train_dt_rounds_workspace): round n's policy, re-initialised, imitates the
+# demos given exactly the n trajectories rounds 0..n-1 made from the same start; its own rollout
+# from every start then joins that start's context. Context tokens carry the low-dim state
+# (context_obs: state), the current attempt keeps the image. Feedback as the tf-cov arm: per-step
+# verifier value, end-of-attempt [verifier value, max coverage].
+defaults:
+  - train_pusht_dt_search_cov
+  - _self_
+
+name: train_pusht_dt_rounds
+_target_: diffusion_policy.workspace.train_dt_rounds_workspace.TrainDTRoundsWorkspace
+trainer: dt_rounds
+
+run_name: dt-${arch_tag}_rounds${rounds.n_rounds}_ctx-state_fb-${reward_mode}_tf-cov_ver-${verifier_tag}${enc_suffix}_demos-${n_demos}${split_suffix}_seed-${training.seed}
+
+# asteroid procgen (WEIRDLabUW/asteroid@95eee5e): fresh model + AdamW(lr) per round, warmup_ratio
+# of the round's updates linear from ~0, cosine to 0. 30 x 128 / batch 8 = 480 updates per round.
+rounds:
+  n_rounds: 8
+  iters_per_round: 30
+  starts_per_iter: 128
+  lr: 1.0e-4
+  warmup_ratio: 0.03
+
+policy:
+  context_obs: state
+
+training:
+  # OFF: the rounds trainer never steps an EMA copy, and load_policy would prefer the untrained one
+  use_ema: False
