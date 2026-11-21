@@ -1,0 +1,6 @@
+ctx-subgoal_corrupt-False_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-subgoal_corrupt-False_seed-42	38015467
+ctx-subgoal_corrupt-True_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-subgoal_corrupt-True_seed-42	38015468
+ctx-subgoal_value_corrupt-False_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-subgoal_value_corrupt-False_seed-42	38015469
+ctx-subgoal_value_corrupt-True_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-subgoal_value_corrupt-True_seed-42	38015470
+ctx-value_corrupt-False_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-value_corrupt-False_seed-42	38015471
+ctx-value_corrupt-True_seed-42	/gscratch/robotics/harine/diffusion_policy_outputs/pusht_search/pusht_image_search/offline/ctx-value_corrupt-True_seed-42	38015472

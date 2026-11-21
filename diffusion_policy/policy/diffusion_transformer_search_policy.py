@@ -443,6 +443,17 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
         # feeds back. The raw samples are kept on `last_sampled_actions` for logging.
         self.realized_context = bool(kwargs.get('realized_context', False))
         self.stop_radius = float(kwargs.get('stop_radius', 1.0))
+        # target_mode (2026-11-02): 'demo' trains toward the dataset (A*) chunk; 'argmax_verifier' trains toward the
+        # best of the model's own context candidates under the training verifier (noisy when verifier_noise > 0).
+        # Either way target_stats records how the noisy argmax compares with the clean verifier and the A* chunk.
+        self.target_mode = kwargs.get('target_mode', 'demo')
+        if self.target_mode not in ('demo', 'argmax_verifier'):
+            raise ValueError(f"unknown target_mode: {self.target_mode}")
+        self.clean_verifier = MazeVerifier(
+            maze_path=kwargs.get('maze_path', None),
+            device=kwargs.get('device', 'cpu'),
+        )
+        self.target_stats = {}
         # snap sampled actions to unit cardinal moves before rolling them out (train and eval alike)
         self.snap_cardinal = bool(kwargs.get('snap_cardinal', False))
         # value_norm='diameter': the verifier values (-BFS steps, plus any verifier noise, which is
@@ -644,6 +655,27 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
             self.last_sampled_actions = torch.cat(sampled, dim=1)
         return all_actions, all_values
 
+    def _target_stats(self, batch, actions, values):
+        """Index of the noisy-verifier argmax among the context candidates; fills self.target_stats (batch means):
+        whether it is also clean-optimal among the candidates, its clean value vs the A* chunk's, RMSE to the A* chunk."""
+        B, K = values.shape
+        idx = torch.arange(B, device=values.device)
+        pick = values.argmax(dim=1)
+        clean = torch.stack([self.clean_verifier.get_value(batch['obs'], actions[:, k]) for k in range(K)], dim=1)
+        clean_pick = clean[idx, pick]
+        astar = self.clean_verifier.get_value(batch['obs'], batch['action'])
+        rmse = (actions[idx, pick] - batch['action']).pow(2).mean(dim=(1, 2)).sqrt()
+        self.target_stats = {
+            'target_pick_clean_best': (clean_pick >= clean.max(dim=1).values).float().mean().item(),
+            'target_pick_ge_astar': (clean_pick >= astar).float().mean().item(),
+            'target_value_pick_noisy': values[idx, pick].float().mean().item(),
+            'target_value_pick': clean_pick.float().mean().item(),
+            'target_value_best': clean.max(dim=1).values.float().mean().item(),
+            'target_value_astar': astar.float().mean().item(),
+            'target_rmse_astar': rmse.float().mean().item(),
+        }
+        return pick
+
     def compute_loss(self, batch):
         target_actions = self.normalizer['action'].normalize(batch['action'])
         B, T, Da = target_actions.shape
@@ -660,6 +692,15 @@ class DiffusionTransformerSearchPolicy(BaseImagePolicy):
                 verifier=self.verifier,
                 n_actions=self.max_actions - 1,
             )
+
+        if actions is not None:
+            with torch.no_grad():
+                pick = self._target_stats(batch, actions, values)
+            if self.target_mode == 'argmax_verifier':
+                target_actions = self.normalizer['action'].normalize(
+                    actions[torch.arange(B, device=actions.device), pick].clone())
+        elif self.target_mode == 'argmax_verifier':
+            raise ValueError("target_mode='argmax_verifier' needs context candidates (max_actions > 1)")
 
         trajectory = target_actions.unsqueeze(1).expand(
             -1,

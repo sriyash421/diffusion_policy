@@ -237,6 +237,9 @@ class TrainMLPImageWorkspace(BaseWorkspace):
                             'epoch': self.epoch,
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
+                        # ST target diagnostics (diffusion_transformer_search_policy.target_stats), logged as train_target_*
+                        step_log.update({f'train_{k}': v for k, v in
+                                         getattr(self.accelerator.unwrap_model(self.model), 'target_stats', {}).items()})
 
                         is_last_batch = (not capped) and (batch_idx == (epoch_batches-1))
                         if not is_last_batch:
