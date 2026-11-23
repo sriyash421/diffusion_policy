@@ -10,6 +10,8 @@ meta start_xy = the episode's first cell, goal_xy = its goal. Only training goal
 """
 import argparse, json, os, sys
 from pathlib import Path
+sys.path.insert(0, '/gscratch/robotics/harine/codex_audits/maze_rounds_20261103')
+import run_setting; run_setting.resolve(run_setting.tag_from_argv(sys.argv), allowed=('interp30',))   # DISCRETE only (grid BFS demos)
 os.environ.setdefault('MAZE_SETTING', 'interp30')
 sys.path.insert(0, '/gscratch/robotics/harine/codex_audits/maze_rounds_20261103')
 import numpy as np

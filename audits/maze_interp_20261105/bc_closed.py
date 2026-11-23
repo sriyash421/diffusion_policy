@@ -12,7 +12,12 @@ agent_pos, goal_pos; n_obs_steps = 1) and predicts a new chunk, of which the fir
 """
 import argparse, json, os, sys, time
 from pathlib import Path
-os.environ.setdefault('MAZE_SETTING', 'interp30')
+# the setting of the BC run: runs/interp30c/... = continuous, runs/interp30/... = discrete (an explicit MAZE_SETTING must agree)
+_run = next((sys.argv[i + 1] for i, a in enumerate(sys.argv[:-1]) if a == '--run'), '')
+_s = 'interp30c' if '/interp30c/' in _run else 'interp30'
+if os.environ.get('MAZE_SETTING', _s) != _s:
+    raise SystemExit(f'BC run {_run} is {_s}, but MAZE_SETTING={os.environ["MAZE_SETTING"]}')
+os.environ['MAZE_SETTING'] = _s
 sys.path.insert(0, '/gscratch/robotics/harine/codex_audits/maze_rounds_20261103')
 import numpy as np
 import torch

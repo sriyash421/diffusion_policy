@@ -1,0 +1,32 @@
+{
+ "chance": 0.0141,
+ "cells": 71,
+ "samples": {
+  "train": 40000,
+  "test": 10000
+ },
+ "none": {
+  "obs1": 1.0,
+  "obs1+bfs": 1.0
+ },
+ "window": {
+  "obs1": 0.2682,
+  "obs1+bfs": 0.5109
+ },
+ "ddpm200": {
+  "obs1": 0.4673,
+  "obs1+bfs": 0.491
+ },
+ "ddpm400": {
+  "obs1": 0.0376,
+  "obs1+bfs": 0.0733
+ },
+ "ddpm600": {
+  "obs1": 0.0157,
+  "obs1+bfs": 0.0435
+ },
+ "walk": {
+  "walk+bfs": 0.2662,
+  "walk+rew": 0.0289
+ }
+}

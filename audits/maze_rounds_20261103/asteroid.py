@@ -19,7 +19,9 @@ Round m's score = its attempt m+1 (exactly m of its own trajectories in context,
   python asteroid.py eval  --tag <tag> [--seeds 8 --attempts 8]
   python asteroid.py plot  --tag <tag> [--seeds 8]
 """
-import argparse, json, time
+import argparse, json, sys, time
+if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('eval', 'plot', 'evalctx'):
+    import run_setting; run_setting.resolve(run_setting.tag_from_argv(sys.argv))   # evaluate in the setting the run was trained in
 import numpy as np
 import torch
 from rounds import (HERE, make_policy, load_data, train_starts, test_episodes, build_context, slice_ctx, rollout_all,
@@ -32,7 +34,23 @@ def set_fb(mode, open_loop=False, hide_goal=False):
     import rounds
     rounds.FB_MODE = mode or 'bfs'; rounds.OBS_OPEN = bool(open_loop); rounds.HIDE_GOAL = bool(hide_goal)
     assert not (rounds.HIDE_GOAL and rounds.FB_MODE in ('bfs', 'dir', 'bfs_dir')), 'hidden goal: BFS / dx, dy feedback reveals the goal'
-    assert rounds.FB_MODE != 'reward' or rounds.SETTING in ('11br', 'interp30'), 'reward feedback assumes the 11 x 11 grid maze'
+    assert rounds.FB_MODE != 'reward' or rounds.SETTING in ('11br', 'interp30', 'interp30c', '11brc'), 'reward feedback assumes the 11 x 11 maze'
+
+
+def set_obs(mode='none', t=400):
+    """Observation mode of the policy's encoder input (rounds.OBS_MODE / OBS_T; obs_modes.py): none | window | ddpm."""
+    import rounds
+    rounds.OBS_MODE = mode or 'none'; rounds.OBS_T = int(t if t is not None else 400)
+    assert rounds.OBS_MODE in ('none', 'window', 'ddpm'), rounds.OBS_MODE
+    assert not (rounds.OBS_MODE != 'none' and rounds.HIDE_GOAL), 'obs modes already hide goal_pos; do not combine with --hide-goal'
+
+
+def apply_cfg(cfg):
+    """Re-apply a run's feedback / observation settings (eval scripts); returns True for a no-context run."""
+    set_fb(cfg.get('fb'), cfg.get('open_loop'), cfg.get('hide_goal')); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400))
+    if cfg.get('no_ctx_feedback'):
+        drop_context_feedback()
+    return bool(cfg.get('no_context'))
 
 
 def drop_context_feedback():
@@ -177,10 +195,18 @@ def train(args):
     _, te_s, te_g = test_set(free_np)
     relabel = getattr(args, 'target', 'demo') == 'relabel'
     if relabel:
-        assert getattr(args, 'obs_noise', 'none') == 'none' and not __import__('rounds').CONT, 'relabel: grid maze, no obs noise'
+        assert getattr(args, 'obs_noise', 'none') == 'none', 'relabel: no training-only feature noise (use --obs ddpm)'
     if args.steps_per_iter > 0:
         args.updates = args.iters * args.steps_per_iter; args.test_every = args.steps_per_iter
+    import rounds as _r
+    noctx = bool(getattr(args, 'no_context', False))
     config = dict(vars(args), policy=pc, train_starts=N, design='asteroid: current-policy context chains, aggregated data',
+                  setting=_r.SETTING, actions=_r.ACTIONS, obs=_r.OBS_MODE, obs_t=_r.OBS_T, no_context=noctx,
+                  feedback_leaks_goal_distance=bool(_r.FB_MODE in ('bfs', 'bfs_dir', 'dir') and (_r.OBS_MODE != 'none' or _r.HIDE_GOAL)),
+                  obs_desc={'none': 'full observation', 'window': 'ASTEROID 7x7 window around the agent (-1 outside), agent_pos, goal_pos 0',
+                            'ddpm': f'full image DDPM-noised at t={_r.OBS_T} (train and test), agent_pos, goal_pos 0'}[_r.OBS_MODE],
+                  context_desc=('NO context: every item / rollout starts an empty stream (DAgger: one student attempt, expert-labelled)'
+                                if noctx else 'own earlier attempts in context'),
                   feedback=('context: none (zeroed); current attempt: step [-BFS,0,0,0]' if getattr(args, 'no_ctx_feedback', False)
                             else 'none: step and trajectory feedback all zero' if getattr(args, 'fb', 'bfs') == 'none'
                             else 'step [0,0,dx,dy]; trajectory [0,0,dx,dy]; dx, dy = goal - cell' if getattr(args, 'fb', 'bfs') == 'dir'
@@ -210,13 +236,13 @@ def train(args):
         if n == 0 and relabel:   # ASTEROID step 0: expert rollouts (the BFS expert's own path from every training start)
             new = [(i, [], expert_rollout(free_np, S0[i], G0[i])) for i in range(N)]
         elif relabel:            # the current policy makes n+1 attempts per start; the expert relabels the last, the first n are context
-            model.eval(); new = []
+            model.eval(); new = []; k = 0 if noctx else n   # --no-context: one attempt from an empty stream, expert-labelled
             for rep in range(args.ctx_per_start):
-                mem, succ, steps = chain(model, free1, S0, G0, n + 1, n, args.chunk, device)
-                new += [(i, mem[i][:n], mem[i][n]) for i in range(N)]
+                mem, succ, steps = chain(model, free1, S0, G0, k + 1, k, args.chunk, device)
+                new += [(i, mem[i][:k], mem[i][k]) for i in range(N)]
             rec.update(collect_success_by_attempt=[round(float(v), 4) for v in succ.mean(1)],
                        collect_mean_steps=[round(float(v), 2) for v in steps.mean(1)])
-        elif n == 0:
+        elif n == 0 or noctx:
             new = [(i, []) for i in range(N)]
         else:
             model.eval(); new = []
@@ -230,12 +256,12 @@ def train(args):
         rng = np.random.default_rng(args.seed * 1000 + n); order = []; window = []; t1 = time.time()
         def test_log(u):
             if args.test_every > 0:
-                by = test_point(model, free1, te_s, te_g, n, args.test_seeds, args.chunk, device)
+                by = test_point(model, free1, te_s, te_g, 0 if noctx else n, args.test_seeds, args.chunk, device)
                 rec_t = dict(round=n, update=u, test_success=by[-1], test_by_attempt=by)
                 if args.steps_per_iter > 0:
                     rec_t['iter'] = u // args.steps_per_iter
                 if args.train_seeds > 0:
-                    bt = test_point(model, free1, S0, G0, n, args.train_seeds, args.chunk, device)
+                    bt = test_point(model, free1, S0, G0, 0 if noctx else n, args.train_seeds, args.chunk, device)
                     rec_t.update(train_success=bt[-1], train_by_attempt=bt)
                 log.write(json.dumps(rec_t) + '\n'); log.flush()
         test_log(0)
@@ -264,10 +290,8 @@ def train(args):
 
 @torch.no_grad()
 def eval_rounds(args):
-    device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text()); set_fb(cfg.get('fb'), cfg.get('open_loop'), cfg.get('hide_goal'))
-    if cfg.get('no_ctx_feedback'):
-        drop_context_feedback()
-    R = cfg['rounds']; A = args.attempts; W = R - 1 if args.window < 0 else args.window; model, pc = make_policy(R, device)
+    device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text()); noctx = apply_cfg(cfg)
+    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else R - 1 if args.window < 0 else args.window; model, pc = make_policy(R, device)
     ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer()); model.to(device).eval()
     tr_s, tr_g, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
     te, te_s, te_g = test_set(free_np)
@@ -287,6 +311,36 @@ def eval_rounds(args):
         res[f'{split}_bc_success'] = bc_eval(BC_CKPT[split], S0, G0, te if split == 'test' else None, args.seeds, device)
         print(split, 'BC success', res[f'{split}_bc_success'].mean().round(3), flush=True)
     np.savez_compressed(out / (args.out or f'eval_seeds{args.seeds}.npz'), **res)
+
+
+@torch.no_grad()
+def eval_ctx(args):
+    """Success vs candidates in context (the simple plots): the policy of each round in --eval-rounds (default: round 0 and the last)
+    makes --attempts attempts in a row per (start, goal) x seeds; attempt a sees its a-1 earlier attempts (all of them; no-context runs:
+    none, so every attempt starts an empty stream). Splits: train (the training starts), train_heldout (100 unseen pairs of TRAIN goals),
+    test (held-out goals: --test-set '' = the default test episodes, 'all' = every (start, held-out goal) pair (interp30 settings)).
+    -> runs/<tag>/eval_ctx<suffix>.npz with <split>_success (rounds, attempts, pairs, seeds)."""
+    import os, rounds
+    device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text()); noctx = apply_cfg(cfg)
+    if args.test_set:
+        os.environ['INTERP_TEST'] = args.test_set
+    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else R - 1
+    model, pc = make_policy(R, device); ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer()); model.to(device).eval()
+    tr_s, tr_g, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
+    _, te_s, te_g = test_set(free_np); th = rounds.heldout_train_episodes()
+    th_s = np.stack([e['start'] for e in th]).astype(np.float32); th_g = np.stack([e['goal'] for e in th]).astype(np.float32)
+    evr = sorted({int(x) % R for x in args.eval_rounds.split(',')}); res = dict(rounds=np.array(evr), window=W, test_set=args.test_set or 'default')
+    ts = args.eval_test_seeds or args.seeds; torch.manual_seed(20261122)
+    for split, (S0, G0, sd) in {'train': (tr_s, tr_g, args.seeds), 'train_heldout': (th_s, th_g, args.seeds), 'test': (te_s, te_g, ts)}.items():
+        if split not in args.splits.split(','):
+            continue
+        S = np.repeat(S0, sd, 0); G = np.repeat(G0, sd, 0); succ = np.zeros((len(evr), A, len(S)), bool)
+        for j, m in enumerate(evr):
+            model.load_state_dict(torch.load(out / f'round_{m}.pt', map_location='cpu', weights_only=False)['model']); model.to(device).eval()
+            _, succ[j], _ = chain(model, free1, S, G, A, W, args.chunk, device)
+            print(split, 'round', m, 'success by attempt', succ[j].mean(1).round(3).tolist(), flush=True)
+        res[f'{split}_success'] = succ.reshape(len(evr), A, len(S0), sd)
+    np.savez_compressed(out / f'eval_ctx{args.out}.npz', **res); print('saved', out / f'eval_ctx{args.out}.npz')
 
 
 def plot(args):
@@ -324,19 +378,20 @@ def plot(args):
 
 def smoke(args):
     a = argparse.Namespace(tag='asteroid_smoke', rounds=3, updates=40, warmup=10, batch=64, micro=32, lr=1e-4, seed=0, ctx_per_start=1,
-                           chunk=512, log_every=10, seeds=2, attempts=4, test_every=20, test_seeds=2, window=-1, splits='train,test', out='',
+                           chunk=512, log_every=10, seeds=2, attempts=4, test_every=20, test_seeds=2, window=-1, splits='train,train_heldout,test', out='',
                            iters=3, steps_per_iter=2, train_seeds=1, no_ctx_feedback=getattr(args, 'no_ctx_feedback', False),
                            obs_noise=getattr(args, 'obs_noise', 'none'), obs_noise_t=getattr(args, 'obs_noise_t', 400),
                            obs_noise_ramp=getattr(args, 'obs_noise_ramp', '600,200'), fb=getattr(args, 'fb', 'bfs'),
                            open_loop=getattr(args, 'open_loop', False), target=getattr(args, 'target', 'demo'),
-                           hide_goal=getattr(args, 'hide_goal', False))
+                           hide_goal=getattr(args, 'hide_goal', False), obs=getattr(args, 'obs', 'none'), obs_t=getattr(args, 'obs_t', 400),
+                           no_context=getattr(args, 'no_context', False), eval_rounds='0,-1', test_set='', eval_test_seeds=0)
     import shutil; shutil.rmtree(HERE / 'runs' / a.tag, ignore_errors=True)
-    train(a); eval_rounds(a); plot(a)
+    train(a); eval_rounds(a); plot(a); eval_ctx(a)
     print(open(HERE / 'runs' / a.tag / 'log.jsonl').read())
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('mode', choices=['smoke', 'train', 'eval', 'plot'])
+    ap = argparse.ArgumentParser(); ap.add_argument('mode', choices=['smoke', 'train', 'eval', 'plot', 'evalctx'])
     ap.add_argument('--tag', default='asteroid'); ap.add_argument('--rounds', type=int, default=8)
     ap.add_argument('--updates', type=int, default=10000); ap.add_argument('--warmup', type=int, default=500)
     ap.add_argument('--batch', type=int, default=64); ap.add_argument('--micro', type=int, default=32)
@@ -362,4 +417,13 @@ if __name__ == '__main__':
                     'prev_a and the per-step feedback still come from the rollout')
     ap.add_argument('--hide-goal', action='store_true', help='the policy never observes the goal (rounds.HIDE_GOAL); needs --fb reward or none')
     ap.add_argument('--iters', type=int, default=30); ap.add_argument('--train-seeds', type=int, default=0, help='also eval train starts')
-    a = ap.parse_args(); set_fb(a.fb, a.open_loop, a.hide_goal); {'smoke': smoke, 'train': train, 'eval': eval_rounds, 'plot': plot}[a.mode](a)
+    ap.add_argument('--obs', default='none', choices=['none', 'window', 'ddpm'], help='policy observation (obs_modes.py): window = ASTEROID 7x7 '
+                    'partial view; ddpm = full image DDPM-noised at --obs-t (train and test); both zero goal_pos')
+    ap.add_argument('--obs-t', type=int, default=400, help='DDPM timestep of --obs ddpm (0..999)')
+    ap.add_argument('--no-context', action='store_true', help='no earlier attempts in context, ever (DAgger: one student attempt per start '
+                    'and round, expert-labelled; eval: every attempt starts an empty stream)')
+    ap.add_argument('--eval-rounds', default='0,-1', help='evalctx: rounds to evaluate (negative = from the end)')
+    ap.add_argument('--test-set', default='', choices=['', 'all', 'control'], help='evalctx: held-out test pairs (interp30 settings: INTERP_TEST)')
+    ap.add_argument('--eval-test-seeds', type=int, default=0, help='evalctx: seeds for the test split (0 = --seeds)')
+    a = ap.parse_args(); set_fb(a.fb, a.open_loop, a.hide_goal); set_obs(a.obs, a.obs_t)
+    {'smoke': smoke, 'train': train, 'eval': eval_rounds, 'plot': plot, 'evalctx': eval_ctx}[a.mode](a)

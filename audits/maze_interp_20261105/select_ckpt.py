@@ -7,8 +7,8 @@ and is picked by each (max success of attempt k+1; ties -> the later update).  -
 """
 import argparse, json, os, sys
 from pathlib import Path
-os.environ.setdefault('MAZE_SETTING', 'interp30')
 sys.path.insert(0, '/gscratch/robotics/harine/codex_audits/maze_rounds_20261103')
+import run_setting; run_setting.resolve(run_setting.tag_from_argv(sys.argv))   # the setting the run was trained in (default continuous)
 import numpy as np
 import torch
 import rounds

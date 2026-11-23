@@ -14,13 +14,14 @@ INTERP_TEST=all (interp30): every (start, held-out goal) pair of bc_scan.npz -> 
 observation of the attempt being rolled out gets the DDPM noise of its slot (t = obs_noise_t for min(window, attempts in context)),
 the attempts in context are rebuilt clean, as in training; saves bon_seeds<seeds>_noisyobs.npz. BC stays clean.
 """
-import argparse, json, os
+import argparse, json, os, sys
 from collections import deque
+import run_setting; run_setting.resolve(run_setting.tag_from_argv(sys.argv) or 'ast_s30')   # the setting the run was trained in
 import numpy as np
 import torch
 from rounds import HERE, make_policy, load_data, train_starts, BC_RUN, BC_CKPT, SPEC, maze, hydra
 from rounds import BatchedRollout, snap_cardinal_torch
-from asteroid import chain, test_set, drop_context_feedback, set_fb
+from asteroid import chain, test_set, drop_context_feedback, set_fb, set_obs
 
 
 def bfs_table(free, goal):
@@ -92,7 +93,7 @@ def main(args):
     if rounds.CONT:   # interp30c: no grid BC (the continuous BC is bc_closed.py)
         args.no_bc = True
     device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text())
-    set_fb(cfg.get('fb'), cfg.get('open_loop'), cfg.get('hide_goal'))
+    set_fb(cfg.get('fb'), cfg.get('open_loop'), cfg.get('hide_goal')); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400))
     if cfg.get('no_ctx_feedback'):
         drop_context_feedback()
     R = cfg['rounds']; A = args.attempts; W = R - 1; model, pc = make_policy(R, device)

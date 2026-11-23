@@ -52,7 +52,9 @@ BC_CKPT = {'train': 6000, 'test': 7000}   # main-report BC selection: training g
 # MAZE_SETTING=interp30 (maze_interp_20261105): 30 random train goals / 41 held out, the 50 BC-failure-first test pairs,
 # the interp BC UNet at its train_heldout-selected step, and runs written to INTERP/runs (HERE is only used for runs/).
 import os
-SETTING = os.environ.get('MAZE_SETTING', '11br'); INTERP = AUD / 'maze_interp_20261105'
+# Default (2026-11-22): the CONTINUOUS maze (interp30c). The discrete grid settings (11br, interp30) must be named explicitly; eval scripts
+# take the setting from the run (run_setting.resolve). datasets.json 'actions' labels each entry discrete / continuous.
+SETTING = os.environ.get('MAZE_SETTING', 'interp30c'); INTERP = AUD / 'maze_interp_20261105'
 if SETTING == 'interp30':
     SPEC = json.loads((DELTA / 'datasets.json').read_text())['interp30']
     BC_RUN = INTERP / 'runs/interp30/bc_unet__clean/seed_0'
@@ -65,9 +67,14 @@ elif SETTING == 'interp30c':
     # continuous positions + smoothed-A* demos (maze_interp_20261105/cmaze.py): real-valued actions, no cardinal snap, the env step is
     # cmaze.cont_step_torch (|a| clipped to 1, walls block / slide); same goals, pairs and test sets as interp30; no BC here (bc_closed.py)
     SPEC = json.loads((DELTA / 'datasets.json').read_text())['interp30c']; BC_CKPT = {}; HERE = INTERP
+elif SETTING == '11brc':
+    # continuous 11br (held-out bottom-right quadrant): smoothed-A* demos of the same 800 11br episodes (make_cont_demos.py --setting 11br);
+    # test = the 100 held-out-quadrant eval episodes; runs in maze_rounds_20261103/runs; no BC here
+    SPEC = json.loads((DELTA / 'datasets.json').read_text())['11brc']; BC_CKPT = {}
 elif SETTING != '11br':
-    raise ValueError(f'MAZE_SETTING must be 11br, interp30 or interp30c; got {SETTING!r}')
-CONT = SETTING == 'interp30c'
+    raise ValueError(f'MAZE_SETTING must be 11br, interp30 (discrete) or interp30c, 11brc (continuous); got {SETTING!r}')
+CONT = SETTING in ('interp30c', '11brc')
+ACTIONS = 'continuous' if CONT else 'discrete'
 if CONT:
     sys.path.insert(0, str(INTERP)); from cmaze import cont_step_torch as STEP
 else:
@@ -81,6 +88,9 @@ FB_MODE = 'bfs'   # 'bfs': step [-BFS,0,0,0], trajectory [-BFS,-BFS,dx,dy];  'di
                   #  (dx, dy = goal - cell, / 10; step: the cell after the move, trajectory: the final cell). Set via asteroid.py --fb.
 OBS_OPEN = False  # open-loop observations (asteroid.py --open-loop): every token of an attempt carries the obs features of the attempt's
                   # START cell (image, agent_pos), not of its current cell; prev_a and the feedback channels still follow the rollout.
+OBS_MODE = 'none'  # observation mode of the encoder input (asteroid.py --obs; obs_modes.py): 'none' | 'window' (ASTEROID 7x7 partial view,
+OBS_T = 400        # goal_pos 0) | 'ddpm' (full image DDPM-noised at timestep OBS_T, train and test, goal_pos 0)
+KEEP_STREAM = False  # smoke: rollout() keeps its final stream in LAST_STREAM
 HIDE_GOAL = False # hidden goal (asteroid.py --hide-goal; ASTEROID's partially observed setting): the policy's observation encoder gets
                   # the image with the goal plane cleared and goal_pos = 0, so the goal is known only through the context / feedback.
                   # The env, the success test, the BFS expert and the best-of-n verifier still use the true goal.
@@ -125,6 +135,9 @@ class RoundsPolicy(DTSearchPolicy):
         if HIDE_GOAL:
             img = obs['image'].clone(); img[..., 1, :, :] = 0
             obs = {**obs, 'image': img, 'goal_pos': torch.zeros_like(obs['goal_pos'])}
+        if OBS_MODE != 'none':
+            from obs_modes import apply_obs
+            obs = apply_obs(obs, OBS_MODE, OBS_T)
         return super()._obs_features(obs)
 
     @staticmethod
@@ -207,8 +220,14 @@ def train_starts(ds):
 def test_episodes():
     if SETTING in ('interp30', 'interp30c'):   # interp30c: the same held-out pairs (integer cell-centre starts)
         return interp_test_episodes()
+    # 11br / 11brc: the 100 held-out-quadrant eval episodes (11brc: same pairs, integer cell-centre starts, continuous actions)
     pairs = maze.load_train_pairs(SPEC['dataset'])
     return build_episodes(SPEC['layouts'], 'eval', 0, 100, SPEC['goal_split'], 0, pairs)
+
+
+def heldout_train_episodes(n=100):
+    """train_heldout: n unseen (start, TRAIN goal) pairs (training pairs excluded), as select_ckpt.py / the BC selection."""
+    return build_episodes(SPEC['layouts'], 'train_heldout', 0, n, SPEC['goal_split'], 0, maze.load_train_pairs(SPEC['dataset']))
 
 
 def interp_test_episodes():
@@ -300,7 +319,10 @@ def rollout(model, free, start, goal, ctx):
         pos = torch.where(active[:, None], STEP(free, pos, action), pos); traj.append(pos); t += 1
         reached = active & (ds < 0) & ((pos - goal).norm(dim=-1) <= model.stop_radius)
         ds = torch.where(reached, torch.full_like(ds, t), ds)
-    n_steps = model._st['t'].cpu().numpy(); model._st = None
+    n_steps = model._st['t'].cpu().numpy()
+    if KEEP_STREAM:   # smoke checks: the stream the rollout wrote
+        globals()['LAST_STREAM'] = model._st
+    model._st = None
     traj = torch.stack(traj, 1).cpu().numpy() if CONT else torch.stack(traj, 1).round().long().cpu().numpy()
     return [traj[b, :n_steps[b] + 1].astype(np.float32 if CONT else np.int8) for b in range(B)], (ds >= 0).cpu().numpy(), n_steps
 
@@ -379,8 +401,53 @@ def expert_tables(free_np):
     return _EXPERT[key]
 
 
+_CEXP = {}
+STOP_R = 1.0   # success radius (DTSearchPolicy stop_radius of every maze run)
+
+
+LOOKAHEAD = 8   # cells of the BFS path checked for a straight segment from p (only the first waypoint is needed)
+
+
+def first_waypoint(free_np, p, cells, look=LOOKAHEAD):
+    """The first point of cmaze.smooth_path(p, cells) with the string-pulling limited to `look` cells ahead: the farthest of
+    cells[1 .. look] reachable from p by a straight segment with wall clearance (cmaze.segment_ok); p's own cell centre if none is
+    (p hugs a wall)."""
+    sys.path.insert(0, str(INTERP)); import cmaze
+    free1 = torch.as_tensor(np.asarray(free_np, bool))[None]
+    for j in range(min(len(cells) - 1, look), 0, -1):
+        if cmaze.segment_ok(free1, p, np.asarray(cells[j], np.float64)):
+            return np.asarray(cells[j], np.float64)
+    return np.asarray(cells[0], np.float64)
+
+
+def cont_expert_action(free_np, p, goal):
+    """Continuous expert (CONT settings; the demo generator of make_cont_demos.py, from any point): the BFS cell path from round(p) to the
+    goal, string-pulled from p (first_waypoint: cmaze.smooth_path's first point, LOOKAHEAD cells), and the first resampled step of it: the first straight piece
+    split into ceil(length) equal steps (<= 1). If no later cell centre is visible from p with clearance (p hugs a wall), step to the
+    centre of p's own cell first. Returns (action (2,) float32, stop flag = the step ends within STOP_R of the goal). Cached per point."""
+    free_np = np.asarray(free_np, bool); p = np.asarray(p, np.float32); goal = np.asarray(goal, np.float32)
+    key = (free_np.tobytes(), p.tobytes(), goal.tobytes())
+    if key not in _CEXP:
+        mv, dist = expert_tables(free_np); g = np.rint(goal).astype(int); c = np.rint(p).astype(int); cells = [c.copy()]
+        while dist[g[1], g[0], c[1], c[0]] > 0:
+            c = c + mv[g[1], g[0], c[1], c[0]].astype(int); cells.append(c.copy())
+        p64 = p.astype(np.float64)
+        nxt = goal.astype(np.float64) if len(cells) == 1 else first_waypoint(free_np, p64, cells)
+        seg = nxt - p64; n = max(1, int(np.ceil(np.linalg.norm(seg) - 1e-9))); a = (seg / n).astype(np.float32)
+        _CEXP[key] = (a, bool(np.linalg.norm(p64 + a - goal) <= STOP_R + 1e-6))
+    return _CEXP[key]
+
+
 def expert_rollout(free_np, start, goal):
-    """Cells (T+1, 2) int8 of the BFS expert from start until it stands on the goal (as the demos: the path ends on the goal cell)."""
+    """Cells (T+1, 2) int8 of the BFS expert from start until it stands on the goal (as the demos: the path ends on the goal cell).
+    CONT: points (T+1, 2) float32 of the continuous expert (cont_expert_action through the env step) until within STOP_R of the goal."""
+    if CONT:
+        free1 = torch.as_tensor(np.asarray(free_np, bool))[None]; p = np.asarray(start, np.float32); g = np.asarray(goal, np.float32); out = [p]
+        while (np.linalg.norm(p - g) > STOP_R or len(out) == 1) and len(out) <= 200:   # >= 1 step (a start may already be within STOP_R)
+            a, _ = cont_expert_action(free_np, p, g)
+            p = STEP(free1, torch.as_tensor(p)[None], torch.as_tensor(a)[None])[0].numpy().astype(np.float32); out.append(p)
+        assert np.linalg.norm(p - g) <= STOP_R and len(out) > 1, 'continuous expert did not reach the goal'
+        return np.stack(out)
     mv, dist = expert_tables(free_np); g = np.rint(goal).astype(int); c = np.rint(start).astype(int); out = [c.copy()]
     while dist[g[1], g[0], c[1], c[0]] > 0:
         c = c + mv[g[1], g[0], c[1], c[0]].astype(int); out.append(c.copy())
@@ -390,6 +457,9 @@ def expert_rollout(free_np, start, goal):
 
 def expert_labels(free_np, goal, cells):
     """BFS expert labels at cells (T, 2): its move (T, 2) and its stop flag (T,) = the move lands on the goal (the demos' last token)."""
+    if CONT:   # continuous expert at every point (cont_expert_action)
+        lab = [cont_expert_action(free_np, q, goal) for q in np.asarray(cells, np.float32)]
+        return np.stack([a for a, _ in lab]).astype(np.float32), np.array([st for _, st in lab])
     mv, dist = expert_tables(free_np); g = np.rint(goal).astype(int); c = np.asarray(cells).astype(int)
     d = dist[g[1], g[0], c[:, 1], c[:, 0]]; assert (d > 0).all(), 'a labelled cell is the goal'
     return mv[g[1], g[0], c[:, 1], c[:, 0]], d == 1

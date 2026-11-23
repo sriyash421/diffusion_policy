@@ -1,9 +1,11 @@
-"""Continuous (smoothed A*) demos for MAZE_SETTING=interp30c: the same 800 (start cell, goal) episodes as datasets/interp30, in the same
+"""Continuous (smoothed A*) demos. --setting interp30 (default) -> interp30c; --setting 11br -> 11brc (2026-11-22, the held-out
+bottom-right quadrant; output datasets/11brc/, entry 11brc). Below, interp30 / interp30c stand for <setting> / <setting>c.
+For MAZE_SETTING=interp30c: the same 800 (start cell, goal) episodes as datasets/interp30, in the same
 order (so the pair train/val split is identical), with a jittered real-valued start and string-pulled paths (cmaze.py). Writes
 datasets/interp30c/data.zarr (same keys as maze.make_dataset), the interp30c entry of maze_quadrants_delta_20261019/datasets.json
 (backup datasets.before_cont.json), and datasets/interp30c/checks.json. CPU only.
 """
-import json, shutil, sys
+import argparse, json, shutil, sys
 from pathlib import Path
 import numpy as np
 import torch
@@ -15,7 +17,9 @@ import cmaze
 from setup_data import maze
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 
-spec = json.loads((D / 'datasets.json').read_text())['interp30']
+ap = argparse.ArgumentParser(); ap.add_argument('--setting', default='interp30', choices=['interp30', '11br']); SRC = ap.parse_args().setting
+NAME = SRC + 'c'
+spec = json.loads((D / 'datasets.json').read_text())[SRC]
 src = zarr.open(spec['dataset'], 'r'); S = src['meta/start_xy'][:]; G = src['meta/goal_xy'][:]
 env = maze.MazeEnv(spec['layouts'], seed=0, split='train', layout_index=0, goal_split=spec['goal_split']); env.reset()
 nav = env.maze.astype(bool); free1 = torch.as_tensor(nav)[None]
@@ -37,7 +41,7 @@ for s, g in zip(S, G):
     buf.add_episode({'obs/image': img, 'obs/agent_pos': pts[:-1], 'obs/goal_pos': np.repeat(g[None].astype(np.float32), T, 0),
                      'actions': act.astype(np.float32), 'reward': rew, 'done': done, 'expert_mask': np.ones((T, 1), np.float32)})
 assert worst < 1e-3, worst
-out = I / 'datasets/interp30c/data.zarr'; shutil.rmtree(out, ignore_errors=True); out.parent.mkdir(parents=True, exist_ok=True)
+out = I / f'datasets/{NAME}/data.zarr'; shutil.rmtree(out, ignore_errors=True); out.parent.mkdir(parents=True, exist_ok=True)
 buf.save_to_path(str(out)); meta = zarr.open(str(out), 'a')['meta']
 meta.array('start_xy', S.astype(np.int32), overwrite=True); meta.array('goal_xy', G.astype(np.int32), overwrite=True)
 meta.attrs.update(dict(src['meta'].attrs)); meta.attrs.update(continuous=True, jitter=cmaze.JITTER, max_step=cmaze.MAX_STEP)
@@ -50,5 +54,6 @@ dj = D / 'datasets.json'
 if not (D / 'datasets.before_cont.json').exists():
     shutil.copy(dj, D / 'datasets.before_cont.json')
 allspec = json.loads(dj.read_text())
-allspec["interp30c"] = dict(spec, dataset=str(out), expert_max=int(max(steps)), continuous=True, jitter=cmaze.JITTER, max_step=cmaze.MAX_STEP, demo_clearance=cmaze.CLEAR)
-dj.write_text(json.dumps(allspec, indent=1)); print('datasets.json interp30c', allspec['interp30c'])
+allspec[NAME] = dict(spec, dataset=str(out), expert_max=int(max(steps)), continuous=True, actions='continuous', jitter=cmaze.JITTER,
+                     max_step=cmaze.MAX_STEP, demo_clearance=cmaze.CLEAR)
+dj.write_text(json.dumps(allspec, indent=1)); print('datasets.json', NAME, allspec[NAME])
