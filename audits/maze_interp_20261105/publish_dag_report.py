@@ -22,7 +22,9 @@ RID, TITLE = 'maze-dag-hidden-goal', 'Maze · DAgger with a hidden goal: does su
 SETS = [('interp30c', 'One maze · random split'), ('11brc', 'One maze · bottom-right quadrant held out'), ('pg', 'New mazes')]
 OBS = [('window', '7×7 window'), ('ddpm400', 'DDPM t=400')]
 want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png',
-        'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png'}
+        'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png',
+        'ns/train': R / 'dag_overview_train_ns.png', 'ns/heldout': R / 'dag_overview_heldout_ns.png',
+        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png'}
 for s, _ in SETS:
     want.update({f'{s}/pos': R / f'pos_{s}.png', f'{s}/succmap': R / f'succmap_{s}.png'})
     want.update({f'{s}/{o}': R / f'dag_{s}_{o}.png' for o, _ in OBS})
@@ -63,14 +65,15 @@ blocks = [
     md('# Overview'),
     grid(['overview/train', 'overview/heldout'], 22, {'overview/train': 'Train starts', 'overview/heldout': 'Held out'}),
     md('# Action error to the expert'),
-    md("Squared error between the policy's mean action and the expert's move, at every point the policy visited (lower is better)."),
     grid(['mse/heldout', 'mse/train'], 22, {'mse/heldout': 'Held out', 'mse/train': 'Train starts'}),
-    md('How the first attempt ends: reaches the goal, stop head fires elsewhere, or runs out of steps.'),
     grid('mse/end', 16, {'mse/end': 'How attempts end'}),
+    md('# Stop head off (retrained: attempts end at the goal or the step budget)'),
+    grid(['ns/train', 'ns/heldout'], 22, {'ns/train': 'Train starts', 'ns/heldout': 'Held out'}),
+    grid(['ns/mse_heldout', 'ns/end'], 16, {'ns/mse_heldout': 'Action error, held out', 'ns/end': 'How attempts end'}),
 ]
 for s, name in SETS:
     blocks += [md(f'# {name}'), grid([f'{s}/{o}' for o, _ in OBS], 12, {f'{s}/{o}': on for o, on in OBS}),
-               *([md('DDPM t=400 with 3 rounds: same total updates, and 3× longer.'), grid(f'{s}/sched', 18, {f'{s}/sched': 'Schedules'})]
+               *([grid(f'{s}/sched', 18, {f'{s}/sched': 'DAgger rounds, updates, context length'})]
                  if s != 'pg' else []),
                md('Train vs held-out positions, and success of the last attempt per goal cell (green = success, red = fail).'),
                grid([f'{s}/pos', f'{s}/succmap'], 16, {f'{s}/pos': 'Positions', f'{s}/succmap': 'Success by goal position'})]

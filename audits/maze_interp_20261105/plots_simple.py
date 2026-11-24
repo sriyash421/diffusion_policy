@@ -6,7 +6,7 @@ in context. x = candidates in context n = 0..7, y = success of attempt n+1 of th
   dag_summary.json          success at n=0 and n=7 (+ s.e. over pairs) per arm / split
   python plots_simple.py            (CPU job)
 """
-import json
+import json, os
 from pathlib import Path
 import numpy as np
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
@@ -23,6 +23,11 @@ ARMS = [('fbR', 'context + reward feedback', '#0072B2', 'o', '-'),
         ('noctx', 'trained without context', '#000000', None, '--')]
 REF = ('clean', 'trained without context, clean image (goal visible)', '#999999', None, ':')   # run <pre>_clean_noctx (--obs none), same in every row
 LINES = ARMS + [REF]
+VAR = os.environ.get('DAG_VARIANT', '')   # 'ns': the no-stop retrain (tags <pre>ns_*, launch_nostop.sh); figures *_ns.png
+if VAR:
+    SETTINGS = {k: (v[0] + VAR,) + v[1:] for k, v in SETTINGS.items()}
+SUF = f'_{VAR}' if VAR else ''
+TNOTE = ' · stop head off' if VAR == 'ns' else ''
 SPLIT_NAME = {'train': 'train starts', 'train_heldout': 'unseen pairs of train goals'}
 
 
@@ -54,11 +59,11 @@ def draw(ax, runs, split):
 
 def finish(fig, axs, top, title):
     for ax in np.ravel(axs):
-        ax.set_ylim(0, min(1, np.ceil((top + .05) * 10) / 10))
+        ax.set_ylim(0, min(1.02, np.ceil((top + .05) * 10) / 10))   # 1.02: a line at success 1 stays visible
     h = [plt.Line2D([], [], ls=ls, marker=mk, ms=4, color=col, lw=1.8) for _, _, col, mk, ls in LINES]
     two = fig.get_figwidth() < 11
     fig.legend(h, [a[1] for a in LINES], loc='lower center', ncol=2 if two else 3, fontsize=9, frameon=False)
-    fig.suptitle(title, fontsize=11)
+    fig.suptitle(title + TNOTE, fontsize=11)
 
 
 def overview(split_kind):
@@ -81,11 +86,18 @@ def overview(split_kind):
                 ax.set_xlabel('candidates in context')
     finish(fig, axs, top, 'Train starts: does success rise with more candidates in context?' if split_kind == 'train'
            else 'Held out: does success rise with more candidates in context?')
-    fig.tight_layout(rect=(0, .11 if len(obs_rows) < 2 else .07, 1, 1)); out = REP / f'dag_overview_{split_kind}.png'; fig.savefig(out, dpi=130); plt.close(fig)
+    fig.tight_layout(rect=(0, .11 if len(obs_rows) < 2 else .07, 1, 1)); out = REP / f'dag_overview_{split_kind}{SUF}.png'; fig.savefig(out, dpi=130); plt.close(fig)
     print('wrote', out)
 
 
-SCHED = [('ddpm400', '8 rounds · 7.2k updates'), ('ddpm400r3', '3 rounds · 7.2k updates'), ('ddpm400r3x3', '3 rounds · 21.6k updates (3× longer)')]
+SCHED = [('ddpm400', '8 rounds · 7.2k updates'), ('ddpm400r3', '3 rounds · 7.2k updates'), ('ddpm400r3x3', '3 rounds · 21.6k updates (3× longer)'),
+         ('ddpm400r8c2', '8 rounds, ≤ 2 in context · 7.2k updates')]
+
+
+class Trunc(dict):
+    """An eval_ctx npz cut to the first `a` attempts (the 8-round no-context run shown in the capped column)."""
+    def __init__(self, z, a):
+        super().__init__({k: (z[k][:, :a] if k.endswith('_success') else z[k]) for k in z.files}); self.files = list(self)
 
 
 def schedules():
@@ -93,9 +105,12 @@ def schedules():
     rows = train starts | held-out goals, cols = schedule, lines = arm (3-round runs: 0..2 candidates in context)."""
     for setting in ('interp30c', '11brc'):
         _, _, sname, test_name = SETTINGS[setting]; cols = [(k, n, {a: z for a, z in load(setting, k).items() if k == 'ddpm400' or a != 'clean'}) for k, n in SCHED]
+        for k, _, runs in cols:   # capped runs: no no-context arm of their own; the 8-round one is the same training (context unused)
+            if k == 'ddpm400r8c2' and runs and 'noctx' not in runs and 'noctx' in cols[0][2]:
+                runs['noctx'] = Trunc(cols[0][2]['noctx'], 3)
         if not any(r for k, _, r in cols if k != 'ddpm400'):
             continue
-        fig, axs = plt.subplots(2, 3, figsize=(12, 6.8), sharey=True, sharex=True, squeeze=False); top = 0
+        fig, axs = plt.subplots(2, len(cols), figsize=(4 * len(cols), 6.8), sharey=True, sharex=True, squeeze=False); top = 0
         for c, (k, name, runs) in enumerate(cols):
             for r, split in enumerate(('train', 'test')):
                 ax = axs[r, c]
@@ -108,7 +123,7 @@ def schedules():
                     ax.set_ylabel(f'{"train starts" if split == "train" else test_name}\nsuccess', fontsize=9)
                 if r == 1:
                     ax.set_xlabel('candidates in context')
-        finish(fig, axs, top, f'{sname}, DDPM t=400: fewer rounds, same updates · and 3× longer')
+        finish(fig, axs, top, f'{sname}, DDPM t=400: rounds, updates and context length')
         fig.tight_layout(rect=(0, .09, 1, 1)); out = REP / f'dag_sched_{setting}.png'; fig.savefig(out, dpi=130); plt.close(fig)
         print('wrote', out)
 
@@ -133,10 +148,12 @@ def main():
                             n0=round(float(y[0]), 3), n7=round(float(y[-1]), 3), se=round(float(se.mean()), 3), pairs=int(z[f'{split}_success'].shape[2]))
             axs[0, 0].set_ylabel('success')
             finish(fig, axs, top, f'{sname}: {obs_name}')
-            fig.tight_layout(rect=(0, .17 if len(splits) < 3 else .13, 1, 1)); out = REP / f'dag_{setting}_{obs}.png'; fig.savefig(out, dpi=130); plt.close(fig)
+            fig.tight_layout(rect=(0, .17 if len(splits) < 3 else .13, 1, 1)); out = REP / f'dag_{setting}_{obs}{SUF}.png'; fig.savefig(out, dpi=130); plt.close(fig)
             print('wrote', out)
-    overview('train'); overview('heldout'); schedules()
-    (REP / 'dag_summary.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
+    overview('train'); overview('heldout')
+    if not VAR:
+        schedules()
+    (REP / f'dag_summary{SUF}.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 
 if __name__ == '__main__':

@@ -48,6 +48,7 @@ def set_obs(mode='none', t=400):
 def apply_cfg(cfg):
     """Re-apply a run's feedback / observation settings (eval scripts); returns True for a no-context run."""
     set_fb(cfg.get('fb'), cfg.get('open_loop'), cfg.get('hide_goal')); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400))
+    import rounds; rounds.NO_STOP = bool(cfg.get('no_stop'))
     if cfg.get('no_ctx_feedback'):
         drop_context_feedback()
     return bool(cfg.get('no_context'))
@@ -183,6 +184,18 @@ def batch_loss(model, ds, collate, free1, G0, items, rows, micro, device, args=N
     return tot
 
 
+def ctx_len(args, n):
+    """Earlier attempts in context of the items round n collects (and of its test points): n, capped at --max-ctx (>= 0)."""
+    cap = getattr(args, 'max_ctx', -1)
+    return n if cap < 0 else min(n, cap)
+
+
+def eval_window(cfg):
+    """Earlier attempts an eval attempt sees: all the stream holds (R-1), or the run's --max-ctx cap."""
+    cap = cfg.get('max_ctx', -1)
+    return cfg['rounds'] - 1 if cap is None or cap < 0 else min(cfg['rounds'] - 1, cap)
+
+
 def train(args):
     device = 'cuda'; torch.manual_seed(args.seed); np.random.seed(args.seed); torch.set_num_threads(4)
     out = HERE / 'runs' / args.tag; out.mkdir(parents=True, exist_ok=True)
@@ -236,7 +249,7 @@ def train(args):
         if n == 0 and relabel:   # ASTEROID step 0: expert rollouts (the BFS expert's own path from every training start)
             new = [(i, [], expert_rollout(free_np, S0[i], G0[i])) for i in range(N)]
         elif relabel:            # the current policy makes n+1 attempts per start; the expert relabels the last, the first n are context
-            model.eval(); new = []; k = 0 if noctx else n   # --no-context: one attempt from an empty stream, expert-labelled
+            model.eval(); new = []; k = 0 if noctx else ctx_len(args, n)   # --no-context: one attempt from an empty stream, expert-labelled
             for rep in range(args.ctx_per_start):
                 mem, succ, steps = chain(model, free1, S0, G0, k + 1, k, args.chunk, device)
                 new += [(i, mem[i][:k], mem[i][k]) for i in range(N)]
@@ -256,12 +269,12 @@ def train(args):
         rng = np.random.default_rng(args.seed * 1000 + n); order = []; window = []; t1 = time.time()
         def test_log(u):
             if args.test_every > 0:
-                by = test_point(model, free1, te_s, te_g, 0 if noctx else n, args.test_seeds, args.chunk, device)
+                by = test_point(model, free1, te_s, te_g, 0 if noctx else ctx_len(args, n), args.test_seeds, args.chunk, device)
                 rec_t = dict(round=n, update=u, test_success=by[-1], test_by_attempt=by)
                 if args.steps_per_iter > 0:
                     rec_t['iter'] = u // args.steps_per_iter
                 if args.train_seeds > 0:
-                    bt = test_point(model, free1, S0, G0, 0 if noctx else n, args.train_seeds, args.chunk, device)
+                    bt = test_point(model, free1, S0, G0, 0 if noctx else ctx_len(args, n), args.train_seeds, args.chunk, device)
                     rec_t.update(train_success=bt[-1], train_by_attempt=bt)
                 log.write(json.dumps(rec_t) + '\n'); log.flush()
         test_log(0)
@@ -291,7 +304,7 @@ def train(args):
 @torch.no_grad()
 def eval_rounds(args):
     device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text()); noctx = apply_cfg(cfg)
-    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else R - 1 if args.window < 0 else args.window; model, pc = make_policy(R, device)
+    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else eval_window(cfg) if args.window < 0 else args.window; model, pc = make_policy(R, device)
     ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer()); model.to(device).eval()
     tr_s, tr_g, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
     te, te_s, te_g = test_set(free_np)
@@ -324,7 +337,7 @@ def eval_ctx(args):
     device = 'cuda'; out = HERE / 'runs' / args.tag; cfg = json.loads((out / 'config.json').read_text()); noctx = apply_cfg(cfg)
     if args.test_set:
         os.environ['INTERP_TEST'] = args.test_set
-    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else R - 1
+    R = cfg['rounds']; A = args.attempts; W = 0 if noctx else eval_window(cfg)
     model, pc = make_policy(R, device); ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer()); model.to(device).eval()
     tr_s, tr_g, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
     _, te_s, te_g = test_set(free_np); th = rounds.heldout_train_episodes()
@@ -422,8 +435,13 @@ if __name__ == '__main__':
     ap.add_argument('--obs-t', type=int, default=400, help='DDPM timestep of --obs ddpm (0..999)')
     ap.add_argument('--no-context', action='store_true', help='no earlier attempts in context, ever (DAgger: one student attempt per start '
                     'and round, expert-labelled; eval: every attempt starts an empty stream)')
+    ap.add_argument('--max-ctx', type=int, default=-1, help='cap on earlier attempts in context: round n collects chains of '
+                    'min(n, cap) + 1 attempts (expert labels the last); evals use the same window. -1 = no cap (round n: n)')
+    ap.add_argument('--no-stop', action='store_true', help='the stop head is not trained and never ends an attempt (rounds.NO_STOP): '
+                    'attempts end at the goal radius or the step budget')
     ap.add_argument('--eval-rounds', default='0,-1', help='evalctx: rounds to evaluate (negative = from the end)')
     ap.add_argument('--test-set', default='', choices=['', 'all', 'control'], help='evalctx: held-out test pairs (interp30 settings: INTERP_TEST)')
     ap.add_argument('--eval-test-seeds', type=int, default=0, help='evalctx: seeds for the test split (0 = --seeds)')
     a = ap.parse_args(); set_fb(a.fb, a.open_loop, a.hide_goal); set_obs(a.obs, a.obs_t)
+    import rounds; rounds.NO_STOP = a.no_stop
     {'smoke': smoke, 'train': train, 'eval': eval_rounds, 'plot': plot, 'evalctx': eval_ctx}[a.mode](a)

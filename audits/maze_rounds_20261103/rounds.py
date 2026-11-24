@@ -90,6 +90,8 @@ OBS_OPEN = False  # open-loop observations (asteroid.py --open-loop): every toke
                   # START cell (image, agent_pos), not of its current cell; prev_a and the feedback channels still follow the rollout.
 OBS_MODE = 'none'  # observation mode of the encoder input (asteroid.py --obs; obs_modes.py): 'none' | 'window' (ASTEROID 7x7 partial view,
 OBS_T = 400        # goal_pos 0) | 'ddpm' (full image DDPM-noised at timestep OBS_T, train and test, goal_pos 0)
+NO_STOP = False      # asteroid.py --no-stop (2026-11-23): the stop head is not trained and never ends an attempt; attempts end at
+                     # the goal radius (success) or the step budget. Re-applied by eval scripts from config['no_stop'].
 KEEP_STREAM = False  # smoke: rollout() keeps its final stream in LAST_STREAM
 HIDE_GOAL = False # hidden goal (asteroid.py --hide-goal; ASTEROID's partially observed setting): the policy's observation encoder gets
                   # the image with the goal plane cleared and goal_pos = 0, so the goal is known only through the context / feedback.
@@ -187,7 +189,7 @@ class RoundsPolicy(DTSearchPolicy):
         if self.snap_cardinal:
             action = snap_cardinal_torch(action)
         action = torch.where(active[:, None], action, torch.zeros_like(action))
-        S['stop'] = torch.sigmoid(stop_logit) > 0.5
+        S['stop'] = torch.zeros_like(stop_logit, dtype=torch.bool) if NO_STOP else torch.sigmoid(stop_logit) > 0.5
         S['t'] = S['t'] + active.long()
         return action, active.clone()
 
@@ -376,7 +378,7 @@ def loss_with_context(model, batch, ctx):
     m = mask.float()
     nll = -(dist.log_prob(nactions).sum(-1) * m).sum() / m.sum().clamp_min(1.)
     bce = (F.binary_cross_entropy_with_logits(stop_logit, stop_target.float(), reduction='none') * m).sum() / m.sum().clamp_min(1.)
-    return nll + bce
+    return nll if NO_STOP else nll + bce
 
 
 # ---------------------------------------------------------------- BFS expert relabeling (asteroid.py --target relabel)
@@ -487,7 +489,7 @@ def loss_relabel(model, free, goal, ctxs, labs):
     na = model.normalizer['action'].normalize(torch.as_tensor(act, device=dev)); mm = torch.as_tensor(m, device=dev)
     nll = -(dist.log_prob(na).sum(-1) * mm).sum() / mm.sum()
     bce = (F.binary_cross_entropy_with_logits(stop_logit, torch.as_tensor(stop, device=dev), reduction='none') * mm).sum() / mm.sum()
-    return nll + bce, int(m.sum())
+    return (nll if NO_STOP else nll + bce), int(m.sum())
 
 
 # ---------------------------------------------------------------- train

@@ -7,7 +7,7 @@
 """
 import numpy as np
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-from plots_simple import SETTINGS, OBS, LINES, REP
+from plots_simple import SETTINGS, OBS, LINES, REP, SUF, TNOTE
 
 OBS_ROWS = {k: v for k, v in OBS.items() if k in ('window', 'ddpm400')}
 SHORT_OBS = {'window': 'window', 'ddpm400': 'DDPM'}
@@ -44,8 +44,8 @@ def overview(split):
     axs[0, 0].set_ylim(0, top * 1.1)
     h = [plt.Line2D([], [], ls=ls, marker=mk, ms=4, color=col, lw=1.8) for _, _, col, mk, ls in LINES]
     fig.legend(h, [a[1] for a in LINES], loc='lower center', ncol=3, fontsize=9, frameon=False)
-    fig.suptitle(('Held out' if split == 'test' else 'Train starts') + ': action error to the expert (lower is better) vs candidates in context', fontsize=11)
-    fig.tight_layout(rect=(0, .07, 1, 1)); out = REP / f'dag_mse_overview_{"heldout" if split == "test" else "train"}.png'
+    fig.suptitle(('Held out' if split == 'test' else 'Train starts') + ': action error to the expert (lower is better) vs candidates in context' + TNOTE, fontsize=11)
+    fig.tight_layout(rect=(0, .07, 1, 1)); out = REP / f'dag_mse_overview_{"heldout" if split == "test" else "train"}{SUF}.png'
     fig.savefig(out, dpi=130); plt.close(fig); print('wrote', out)
 
 
@@ -71,8 +71,8 @@ def ends():
             ax.set_title(f'{SETTINGS[setting][2]}\n{"train starts" if split == "train" else SETTINGS[setting][3]}', fontsize=9)
     axs[0, 0].set_ylabel('first attempt'); axs[1, 0].set_ylabel('first attempt')
     fig.legend([plt.Rectangle((0, 0), 1, 1, color=k) for k in cols], names, loc='lower center', ncol=3, fontsize=9, frameon=False)
-    fig.suptitle('How the first attempt ends', fontsize=11)
-    fig.tight_layout(rect=(0, .05, 1, 1)); out = REP / 'dag_end.png'; fig.savefig(out, dpi=130); plt.close(fig); print('wrote', out)
+    fig.suptitle('How the first attempt ends' + TNOTE, fontsize=11)
+    fig.tight_layout(rect=(0, .05, 1, 1)); out = REP / f'dag_end{SUF}.png'; fig.savefig(out, dpi=130); plt.close(fig); print('wrote', out)
 
 
 if __name__ == '__main__':

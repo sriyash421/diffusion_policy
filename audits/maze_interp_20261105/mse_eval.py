@@ -6,7 +6,7 @@ loss and the policy's MEAN action at every visited point p_t is compared with th
   stop = fraction of points where the stop head (sigmoid > .5) agrees with the expert's stop flag
   end  = 0 success (came within 1 of the goal) | 1 stopped elsewhere (stop head) | 2 ran out of steps (budget = free cells)
 Splits: train and test (held out: held-out goals / quadrant / mazes), --pairs random pairs (levels) each, --seeds seeds.
--> runs/<tag>/mse_eval.npz  {split}_{mse,stop,end,steps} (A, pairs*seeds)
+-> runs/<tag>/mse_eval.npz  {split}_{mse,stop,end,steps,success} (A, pairs*seeds), {split}_exp_steps (pairs*seeds)
   one maze:  python mse_eval.py --tags c_dag_window_fbR,c_dag_window_fbB,...   (all tags of ONE setting; MAZE_SETTING from the runs)
   new mazes: python mse_eval.py --pg --tags pg_dag_window_fbR,...
 """
@@ -94,7 +94,7 @@ def main():
         cfg = json.loads((out / 'config.json').read_text()); R = cfg['rounds']; A = min(8, R)
         res = dict(attempts=A)
         if args.pg:
-            P.set_fb(cfg['fb']); P.set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400)); noctx = bool(cfg['no_context'])
+            P.set_fb(cfg['fb']); P.set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400)); noctx = bool(cfg['no_context']); rounds.NO_STOP = bool(cfg.get('no_stop'))
             model, pc = P.make_policy(R, dev); ds = P.load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer())
         else:
             noctx = asteroid.apply_cfg(cfg); model, pc = make_policy(R, dev); ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer())
@@ -102,7 +102,9 @@ def main():
             te_s = np.stack([e['start'] for e in te]).astype(np.float32); te_g = np.stack([e['goal'] for e in te]).astype(np.float32)
             pick = {s: np.sort(np.random.default_rng(0).choice(len(v), min(args.pairs, len(v)), replace=False)) for s, v in (('train', tr_s), ('test', te_s))}
         model.load_state_dict(torch.load(out / f'round_{R - 1}.pt', map_location='cpu', weights_only=False)['model']); model.to(dev).eval()
-        W = 0 if noctx else R - 1; torch.manual_seed(20261123)
+        W = 0 if noctx else asteroid.eval_window(cfg) if not args.pg else R - 1; torch.manual_seed(20261123)
+        if cfg.get('max_ctx', -1) is not None and cfg.get('max_ctx', -1) >= 0:
+            A = res['attempts'] = min(A, cfg['max_ctx'] + 1)
         for split in ('train', 'test'):
             if args.pg:
                 lv = np.repeat(splits[split], args.seeds); frees = [L['nav'][i].astype(bool) for i in lv]; fr = nav_all[lv]
@@ -112,6 +114,8 @@ def main():
                 idx = np.repeat(pick[split], args.seeds); S = (tr_s if split == 'train' else te_s)[idx]; G = (tr_g if split == 'train' else te_g)[idx]
                 frees = [free_np] * len(idx); fr = torch.as_tensor(free_np, device=dev)[None].repeat(len(idx), 1, 1); guard = int(free_np.sum())
                 rounds.expert_tables(free_np); res[f'{split}_pairs'] = pick[split]
+            ER = P.expert_rollout if args.pg else rounds.expert_rollout   # expert path length per row: success within k x it (no-stop runs)
+            res[f'{split}_exp_steps'] = np.array([len(ER(f_, s_, g_)) - 1 for f_, s_, g_ in zip(frees, S, G)])
             r = evaluate(model, frees, fr, S, G, A, W, guard)
             for k, v in r.items():
                 res[f'{split}_{k}'] = v

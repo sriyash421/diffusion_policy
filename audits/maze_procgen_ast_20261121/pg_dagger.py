@@ -141,7 +141,7 @@ def loss_relabel(model, free, goal, ctxs, labs, navs):
     na = model.normalizer['action'].normalize(torch.as_tensor(act, device=dev)); mm = torch.as_tensor(m, device=dev)
     nll = -(dist.log_prob(na).sum(-1) * mm).sum() / mm.sum()
     bce = (F.binary_cross_entropy_with_logits(stop_logit, torch.as_tensor(stop, device=dev), reduction='none') * mm).sum() / mm.sum()
-    return nll + bce, int(m.sum())
+    return (nll if rounds.NO_STOP else nll + bce), int(m.sum())
 
 
 def batch_loss(model, L, tr, nav_all, items, rows, micro, device):
@@ -227,7 +227,7 @@ def eval_ctx(args):
     """Rounds 0 and the last make --attempts attempts in a row (attempt a sees its a-1 earlier attempts; no-context runs: none) on a fixed
     subset of train levels (every 5th: 640) and all 1000 test levels (held-out mazes), --seeds seeds."""
     device = 'cuda'; out = RUNS / args.tag; cfg = json.loads((out / 'config.json').read_text())
-    set_fb(cfg['fb']); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400)); args.rounds = cfg['rounds']; args.max_levels = cfg.get('max_levels', 0)
+    set_fb(cfg['fb']); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400)); rounds.NO_STOP = bool(cfg.get('no_stop')); args.rounds = cfg['rounds']; args.max_levels = cfg.get('max_levels', 0)
     L, tr, te, model, pc, nav_all = setup(args, device); model.eval(); R = cfg['rounds']; W = 0 if cfg['no_context'] else R - 1
     evr = sorted({int(x) % R for x in args.eval_rounds.split(',')}); res = dict(rounds=np.array(evr), window=W); torch.manual_seed(20261122)
     for split, lv in (('train', tr[::5]), ('test', te)):
@@ -264,7 +264,8 @@ if __name__ == '__main__':
     ap.add_argument('--iters', type=int, default=30); ap.add_argument('--steps-per-iter', type=int, default=30); ap.add_argument('--chunk', type=int, default=512)
     ap.add_argument('--fb', default='reward', choices=['reward', 'bfs', 'none']); ap.add_argument('--obs', default='window', choices=['none', 'window', 'ddpm'])
     ap.add_argument('--obs-t', type=int, default=400); ap.add_argument('--no-context', action='store_true')
+    ap.add_argument('--no-stop', action='store_true', help='stop head not trained, never ends an attempt (rounds.NO_STOP)')
     ap.add_argument('--max-levels', type=int, default=0, help='smoke: use only the first N train / test levels')
     ap.add_argument('--eval-rounds', default='0,-1'); ap.add_argument('--attempts', type=int, default=8); ap.add_argument('--seeds', type=int, default=3)
-    a = ap.parse_args(); set_fb(a.fb); set_obs(a.obs, a.obs_t)
+    a = ap.parse_args(); set_fb(a.fb); set_obs(a.obs, a.obs_t); rounds.NO_STOP = a.no_stop
     {'smoke': smoke, 'train': train, 'evalctx': eval_ctx, 'levels': lambda _: print({k: v.shape for k, v in levels().items()})}[a.mode](a)
