@@ -120,6 +120,44 @@ def capped():
     print('wrote', out)
 
 
+def capped16():
+    """The <=2-in-context runs (r8c2) making 16 attempts in a row, each seeing the last 2 (sliding window); no-context and clean runs make 16
+    attempts from an empty stream (eval_n16.sbatch -> eval_ctx_n16.npz). -> dag_r8c2_n16.png: success of attempt n (left two columns) and
+    solved within n attempts (right two columns); rows = train starts | held-out goals."""
+    cols = [s for s in ('interp30c', '11brc')]
+    def get(setting):
+        pre, root, *_ = SETTINGS[setting]
+        tags = {a: f'{pre}_ddpm400r8c2_{a}' for a in ('fbR', 'fbB', 'nofb')} | {'noctx': f'{pre}_ddpm400_noctx', 'clean': f'{pre}_clean_noctx'}
+        return {a: np.load(root / t / 'eval_ctx_n16.npz') for a, t in tags.items() if (root / t / 'eval_ctx_n16.npz').exists()}
+    data = {s: get(s) for s in cols}
+    if not any(data.values()):
+        return
+    fig, axs = plt.subplots(2, 4, figsize=(16, 6.8), sharex=True, sharey=True, squeeze=False)
+    for k, (kind, kname) in enumerate((('perf', 'success of attempt n'), ('best', 'solved within n attempts'))):
+        for c, setting in enumerate(cols):
+            _, _, sname, test_name = SETTINGS[setting]; runs = data[setting]
+            for r, split in enumerate(('train', 'test')):
+                ax = axs[r, 2 * k + c]
+                if not runs:
+                    ax.text(.5, .5, 'running', ha='center', va='center', transform=ax.transAxes, color='.5')
+                for a, label, col, mk, ls in LINES:
+                    if a in runs and f'{split}_success' in runs[a].files:
+                        s = runs[a][f'{split}_success'][-1].astype(float)          # (attempts, pairs, seeds)
+                        if kind == 'best':
+                            s = np.maximum.accumulate(s, axis=0)
+                        y = s.mean((1, 2)); ax.plot(np.arange(1, len(y) + 1), y, ls=ls, marker=mk, ms=3, color=col, lw=1.8)
+                ax.set_xticks([1, 4, 8, 12, 16]); ax.grid(alpha=.3)
+                if r == 0:
+                    ax.set_title(f'{kname}\n{sname}', fontsize=10)
+                if 2 * k + c == 0:
+                    ax.set_ylabel(f'{"train starts" if split == "train" else "held-out goals"}\nsuccess', fontsize=9)
+                if r == 1:
+                    ax.set_xlabel('attempt n')
+    finish(fig, axs, 0.95, '8 DAgger rounds, ≤ 2 earlier attempts in context · 16 attempts, each sees the last 2 · DDPM t=400')
+    fig.tight_layout(rect=(0, .08, 1, 1)); out = REP / 'dag_r8c2_n16.png'; fig.savefig(out, dpi=130); plt.close(fig)
+    print('wrote', out)
+
+
 def main():
     summary = {}
     for setting, (pre, root, sname, test_name) in SETTINGS.items():
@@ -144,7 +182,7 @@ def main():
             print('wrote', out)
     overview('train'); overview('heldout')
     if not VAR:
-        capped()
+        capped(); capped16()
     (REP / f'dag_summary{SUF}.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 
