@@ -96,66 +96,64 @@ class Trunc(dict):
         super().__init__({k: (z[k][:, :a] if k.endswith('_success') else z[k]) for k in z.files}); self.files = list(self)
 
 
-def capped():
-    """8 DAgger rounds with at most 2 earlier attempts in context (tags <pre>_ddpm400r8c2_<arm>), DDPM t=400, one maze -> dag_r8c2.png.
-    rows = train starts | held-out goals, cols = setting; no-context / clean lines = the 8-round runs cut to 3 attempts."""
-    cols = [s for s in ('interp30c', '11brc') if load(s, 'ddpm400r8c2')]
-    if not cols:
+# Columns of the <=2-in-context figures: (setting, column title, r8c2 tag part, no-context tag, clean tag)
+CAP_COLS = [('interp30c', 'one maze, random split', 'ddpm400r8c2', 'ddpm400_noctx', 'clean_noctx'),
+            ('interp30c', 'one maze, random split, 160 train pairs', 'ddpm400d160r8c2', 'ddpm400d160_noctx', 'cleand160_noctx'),
+            ('11brc', 'one maze, bottom-right quadrant held out', 'ddpm400r8c2', 'ddpm400_noctx', 'clean_noctx'),
+            ('pg', 'new mazes (800 train layouts)', 'ddpm400r8c2', 'ddpm400_noctx', 'clean_noctx')]
+CAP_TEST = {'interp30c': 'held-out goals', '11brc': 'held-out quadrant goals', 'pg': 'held-out mazes'}
+
+
+def cap_runs(col, fname, cut=None):
+    """eval npz per arm for one CAP_COLS column; cut = attempts kept (the 3-attempt figure cuts the 8-attempt reference evals)."""
+    setting, _, part, nc, cl = col; pre, root, *_ = SETTINGS[setting]
+    tags = {a: f'{pre}_{part}_{a}' for a in ('fbR', 'fbB', 'nofb')} | {'noctx': f'{pre}_{nc}', 'clean': f'{pre}_{cl}'}
+    runs = {a: np.load(root / t / fname) for a, t in tags.items() if (root / t / fname).exists()}
+    if not any(a in runs for a in ('fbR', 'fbB', 'nofb')):
+        return {}
+    return {a: (Trunc(z, cut) if cut and z['train_success'].shape[1] > cut else z) for a, z in runs.items()}
+
+
+def cap_figure(fname, kind, out_name, title, cut=None):
+    """rows = train starts | held out, cols = CAP_COLS; kind 'perf' = success of attempt n, 'best' = solved within n attempts."""
+    cols = [(c, cap_runs(c, fname, cut)) for c in CAP_COLS]
+    if not any(r for _, r in cols):
         return
-    fig, axs = plt.subplots(2, len(cols), figsize=(4.6 * len(cols), 6.6), sharex=True, squeeze=False); top = 0
-    for c, setting in enumerate(cols):
-        _, _, sname, test_name = SETTINGS[setting]; base = load(setting, 'ddpm400')
-        runs = {a: z for a, z in load(setting, 'ddpm400r8c2').items() if a not in ('noctx', 'clean')}
-        runs.update({a: Trunc(base[a], 3) for a in ('noctx', 'clean') if a in base})
+    fig, axs = plt.subplots(2, len(cols), figsize=(4.2 * len(cols), 6.6), sharey=True, squeeze=False)
+    for c, (col, runs) in enumerate(cols):
         for r, split in enumerate(('train', 'test')):
-            ax = axs[r, c]; top = max(top, draw(ax, runs, split)); ax.set_xticks(range(3)); ax.set_xlim(-.25, 2.25)
+            ax = axs[r, c]
+            if not runs:
+                ax.text(.5, .5, 'running', ha='center', va='center', transform=ax.transAxes, color='.5')
+            A = 0
+            for a, label, colr, mk, ls in LINES:
+                if a in runs and f'{split}_success' in runs[a].files:
+                    v = runs[a][f'{split}_success'][-1].astype(float)          # (attempts, pairs, seeds)
+                    if kind == 'best':
+                        v = np.maximum.accumulate(v, axis=0)
+                    y = v.mean((1, 2)); A = max(A, len(y)); ax.plot(np.arange(1, len(y) + 1), y, ls=ls, marker=mk, ms=3, color=colr, lw=1.8)
+            A = A or cut or 16; ax.set_xticks([1, 2, 3] if A <= 3 else [1, 4, 8, 12, 16]); ax.set_xlim(.7, A + .3); ax.grid(alpha=.3)
             if r == 0:
-                ax.set_title(sname, fontsize=10)
-            if c == 0 or r == 1:
-                ax.set_ylabel(f'{"train starts" if split == "train" else test_name}\nsuccess', fontsize=9)
+                ax.set_title(col[1], fontsize=10)
+            if c == 0:
+                ax.set_ylabel(f'{"train starts" if split == "train" else "held out"}\n{"success" if kind == "perf" else "solved within n"}', fontsize=9)
+            else:
+                ax.set_ylabel('' if split == 'train' else CAP_TEST[col[0]], fontsize=9)
             if r == 1:
-                ax.set_xlabel('candidates in context')
-    finish(fig, axs, top, '8 DAgger rounds, ≤ 2 earlier attempts in context · DDPM t=400')
-    fig.tight_layout(rect=(0, .1, 1, 1)); out = REP / 'dag_r8c2.png'; fig.savefig(out, dpi=130); plt.close(fig)
+                ax.set_xlabel('attempt n')
+    finish(fig, axs, .95, title)
+    fig.tight_layout(rect=(0, .09, 1, 1)); out = REP / out_name; fig.savefig(out, dpi=130); plt.close(fig)
     print('wrote', out)
 
 
-def capped16():
-    """The <=2-in-context runs (r8c2) making 16 attempts in a row, each seeing the last 2 (sliding window); no-context and clean runs make 16
-    attempts from an empty stream (eval_n16.sbatch -> eval_ctx_n16.npz). -> dag_r8c2_n16.png: success of attempt n (left two columns) and
-    solved within n attempts (right two columns); rows = train starts | held-out goals."""
-    cols = [s for s in ('interp30c', '11brc')]
-    def get(setting):
-        pre, root, *_ = SETTINGS[setting]
-        tags = {a: f'{pre}_ddpm400r8c2_{a}' for a in ('fbR', 'fbB', 'nofb')} | {'noctx': f'{pre}_ddpm400_noctx', 'clean': f'{pre}_clean_noctx'}
-        return {a: np.load(root / t / 'eval_ctx_n16.npz') for a, t in tags.items() if (root / t / 'eval_ctx_n16.npz').exists()}
-    data = {s: get(s) for s in cols}
-    if not any(data.values()):
-        return
-    fig, axs = plt.subplots(2, 4, figsize=(16, 6.8), sharex=True, sharey=True, squeeze=False)
-    for k, (kind, kname) in enumerate((('perf', 'success of attempt n'), ('best', 'solved within n attempts'))):
-        for c, setting in enumerate(cols):
-            _, _, sname, test_name = SETTINGS[setting]; runs = data[setting]
-            for r, split in enumerate(('train', 'test')):
-                ax = axs[r, 2 * k + c]
-                if not runs:
-                    ax.text(.5, .5, 'running', ha='center', va='center', transform=ax.transAxes, color='.5')
-                for a, label, col, mk, ls in LINES:
-                    if a in runs and f'{split}_success' in runs[a].files:
-                        s = runs[a][f'{split}_success'][-1].astype(float)          # (attempts, pairs, seeds)
-                        if kind == 'best':
-                            s = np.maximum.accumulate(s, axis=0)
-                        y = s.mean((1, 2)); ax.plot(np.arange(1, len(y) + 1), y, ls=ls, marker=mk, ms=3, color=col, lw=1.8)
-                ax.set_xticks([1, 4, 8, 12, 16]); ax.grid(alpha=.3)
-                if r == 0:
-                    ax.set_title(f'{kname}\n{sname}', fontsize=10)
-                if 2 * k + c == 0:
-                    ax.set_ylabel(f'{"train starts" if split == "train" else "held-out goals"}\nsuccess', fontsize=9)
-                if r == 1:
-                    ax.set_xlabel('attempt n')
-    finish(fig, axs, 0.95, '8 DAgger rounds, ≤ 2 earlier attempts in context · 16 attempts, each sees the last 2 · DDPM t=400')
-    fig.tight_layout(rect=(0, .08, 1, 1)); out = REP / 'dag_r8c2_n16.png'; fig.savefig(out, dpi=130); plt.close(fig)
-    print('wrote', out)
+def capped():
+    """8 DAgger rounds, at most 2 earlier attempts in context, DDPM t=400 (tags <pre>_ddpm400r8c2_<arm>; 160 train pairs: ddpm400d160r8c2):
+    dag_r8c2.png = 3 attempts (eval_ctx.npz; references cut to 3); dag_r8c2_n16.png = 16 attempts, each seeing the last 2 (eval_ctx_n16.npz);
+    dag_r8c2_n16_within.png (appendix) = solved within n of those 16 attempts."""
+    T = '8 DAgger rounds, ≤ 2 earlier attempts in context · DDPM t=400'
+    cap_figure('eval_ctx.npz', 'perf', 'dag_r8c2.png', T, cut=3)
+    cap_figure('eval_ctx_n16.npz', 'perf', 'dag_r8c2_n16.png', T + ' · 16 attempts, each sees the last 2')
+    cap_figure('eval_ctx_n16.npz', 'best', 'dag_r8c2_n16_within.png', T + ' · 16 attempts: solved within n')
 
 
 def main():
@@ -182,7 +180,7 @@ def main():
             print('wrote', out)
     overview('train'); overview('heldout')
     if not VAR:
-        capped(); capped16()
+        capped()
     (REP / f'dag_summary{SUF}.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 

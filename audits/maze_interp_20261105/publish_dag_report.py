@@ -24,7 +24,7 @@ OBS = [('window', '7×7 window'), ('ddpm400', 'DDPM t=400')]
 want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png',
         'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png',
         'ns/train': R / 'dag_overview_train_ns.png', 'ns/heldout': R / 'dag_overview_heldout_ns.png',
-        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png', 'r8c2': R / 'dag_r8c2.png', 'r8c2_n16': R / 'dag_r8c2_n16.png'}
+        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png', 'r8c2': R / 'dag_r8c2.png', 'r8c2_n16': R / 'dag_r8c2_n16.png', 'r8c2_within': R / 'dag_r8c2_n16_within.png'}
 for s, _ in SETS:
     want.update({f'{s}/pos': R / f'pos_{s}.png', f'{s}/succmap': R / f'succmap_{s}.png'})
     want.update({f'{s}/{o}': R / f'dag_{s}_{o}.png' for o, _ in OBS})
@@ -70,7 +70,7 @@ blocks = [
     grid(['ns/train', 'ns/heldout'], 22, {'ns/train': 'Train starts', 'ns/heldout': 'Held out'}),
     grid(['ns/mse_heldout', 'ns/end'], 16, {'ns/mse_heldout': 'Action error, held out', 'ns/end': 'How attempts end'}),
     md('# 8 rounds, at most 2 earlier attempts in context'),
-    grid('r8c2', 18, {'r8c2': 'DDPM t=400'}),
+    grid('r8c2', 18, {'r8c2': '3 attempts'}),
     grid('r8c2_n16', 18, {'r8c2_n16': '16 attempts, context = last 2'}),
 ]
 for s, name in SETS:
@@ -83,6 +83,7 @@ report = (api.load_report('l2sml/maze_reports/reports/' + idf.read_text().strip(
           else wr.Report(project='maze_reports', entity='l2sml', title=TITLE, blocks=[md('Building…')]).save())
 if not idf.exists():
     idf.write_text(report.id)
+blocks += [md('# Appendix'), grid('r8c2_within', 18, {'r8c2_within': '≤ 2 in context, 16 attempts: solved within n'})]
 report.title = TITLE; report.blocks = blocks; report.save()
 saved = api.load_report('l2sml/maze_reports/reports/' + idf.read_text().strip()); assert len(saved.blocks) == len(blocks)
 url = saved.url.replace('https://wandb.ai/', 'https://forge.coreweave.com/wandb/').replace('wandb//', 'wandb/')

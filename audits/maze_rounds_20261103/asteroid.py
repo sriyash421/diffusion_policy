@@ -196,6 +196,12 @@ def eval_window(cfg):
     return cfg['rounds'] - 1 if cap is None or cap < 0 else min(cfg['rounds'] - 1, cap)
 
 
+def demo_subset(n, k):
+    """--n-demos k: the fixed random subset (seed 0) of the n training (start, goal) pairs that DAgger collects on (round 0 = their
+    expert paths; later rounds = the student's attempts from them). k <= 0: all of them. Evals use the same subset as 'train'."""
+    return np.arange(n) if not k or k <= 0 or k >= n else np.sort(np.random.default_rng(0).choice(n, k, replace=False))
+
+
 def train(args):
     device = 'cuda'; torch.manual_seed(args.seed); np.random.seed(args.seed); torch.set_num_threads(4)
     out = HERE / 'runs' / args.tag; out.mkdir(parents=True, exist_ok=True)
@@ -207,6 +213,10 @@ def train(args):
     S0, G0, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
     _, te_s, te_g = test_set(free_np)
     relabel = getattr(args, 'target', 'demo') == 'relabel'
+    sub = demo_subset(N, getattr(args, 'n_demos', 0))
+    if len(sub) < N:
+        assert relabel, '--n-demos: relabel (DAgger) only'
+        S0, G0, N = S0[sub], G0[sub], len(sub)
     if relabel:
         assert getattr(args, 'obs_noise', 'none') == 'none', 'relabel: no training-only feature noise (use --obs ddpm)'
     if args.steps_per_iter > 0:
@@ -341,6 +351,7 @@ def eval_ctx(args):
     model, pc = make_policy(R, device); ds = load_data(pc['shape_meta']); model.set_normalizer(ds.get_normalizer()); model.to(device).eval()
     tr_s, tr_g, free_np = train_starts(ds); free1 = torch.as_tensor(free_np, device=device)[None]
     _, te_s, te_g = test_set(free_np); th = rounds.heldout_train_episodes()
+    sub = demo_subset(len(tr_s), cfg.get('n_demos', 0)); tr_s, tr_g = tr_s[sub], tr_g[sub]
     th_s = np.stack([e['start'] for e in th]).astype(np.float32); th_g = np.stack([e['goal'] for e in th]).astype(np.float32)
     evr = sorted({int(x) % R for x in args.eval_rounds.split(',')}); res = dict(rounds=np.array(evr), window=W, test_set=args.test_set or 'default')
     ts = args.eval_test_seeds or args.seeds; torch.manual_seed(20261122)
@@ -435,6 +446,7 @@ if __name__ == '__main__':
     ap.add_argument('--obs-t', type=int, default=400, help='DDPM timestep of --obs ddpm (0..999)')
     ap.add_argument('--no-context', action='store_true', help='no earlier attempts in context, ever (DAgger: one student attempt per start '
                     'and round, expert-labelled; eval: every attempt starts an empty stream)')
+    ap.add_argument('--n-demos', type=int, default=0, help='DAgger on a fixed random subset (seed 0) of this many training pairs (0 = all)')
     ap.add_argument('--max-ctx', type=int, default=-1, help='cap on earlier attempts in context: round n collects chains of '
                     'min(n, cap) + 1 attempts (expert labels the last); evals use the same window. -1 = no cap (round n: n)')
     ap.add_argument('--no-stop', action='store_true', help='the stop head is not trained and never ends an attempt (rounds.NO_STOP): '

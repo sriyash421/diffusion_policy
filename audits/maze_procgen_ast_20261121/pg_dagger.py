@@ -189,7 +189,7 @@ def train(args):
         (out / 'config.json').write_text(json.dumps(config, indent=1))
     log = (out / 'log.jsonl').open('a')
     for n in range(first, args.rounds):
-        t0 = time.time(); rec = dict(round=n); k = 0 if noctx else n
+        t0 = time.time(); rec = dict(round=n); k = 0 if noctx else n if args.max_ctx < 0 else min(n, args.max_ctx)   # --max-ctx caps the context
         if n == 0:
             new = [(i, [], expert_rollout(L['nav'][tr[i]], S0[i], G0[i])) for i in range(N)]
         else:
@@ -228,7 +228,7 @@ def eval_ctx(args):
     subset of train levels (every 5th: 640) and all 1000 test levels (held-out mazes), --seeds seeds."""
     device = 'cuda'; out = RUNS / args.tag; cfg = json.loads((out / 'config.json').read_text())
     set_fb(cfg['fb']); set_obs(cfg.get('obs', 'none'), cfg.get('obs_t', 400)); rounds.NO_STOP = bool(cfg.get('no_stop')); args.rounds = cfg['rounds']; args.max_levels = cfg.get('max_levels', 0)
-    L, tr, te, model, pc, nav_all = setup(args, device); model.eval(); R = cfg['rounds']; W = 0 if cfg['no_context'] else R - 1
+    L, tr, te, model, pc, nav_all = setup(args, device); model.eval(); R = cfg['rounds']; W = 0 if cfg['no_context'] else R - 1 if cfg.get('max_ctx', -1) < 0 else min(R - 1, cfg['max_ctx'])
     evr = sorted({int(x) % R for x in args.eval_rounds.split(',')}); res = dict(rounds=np.array(evr), window=W); torch.manual_seed(20261122)
     for split, lv in (('train', tr[::5]), ('test', te)):
         lvr = np.repeat(lv, args.seeds); succ = np.zeros((len(evr), args.attempts, len(lvr)), bool)
@@ -237,7 +237,7 @@ def eval_ctx(args):
             _, succ[j], _ = chain(model, nav_all[lvr], L['start'][lvr], L['goal'][lvr], args.attempts, W, args.chunk, device)
             print(split, 'round', m, 'success by attempt', succ[j].mean(1).round(3).tolist(), flush=True)
         res[f'{split}_success'] = succ.reshape(len(evr), args.attempts, len(lv), args.seeds); res[f'{split}_levels'] = lv
-    np.savez_compressed(out / 'eval_ctx.npz', **res); print('saved', out / 'eval_ctx.npz')
+    np.savez_compressed(out / f'eval_ctx{args.out}.npz', **res); print('saved', out / f'eval_ctx{args.out}.npz')
 
 
 def smoke(args):
@@ -264,6 +264,8 @@ if __name__ == '__main__':
     ap.add_argument('--iters', type=int, default=30); ap.add_argument('--steps-per-iter', type=int, default=30); ap.add_argument('--chunk', type=int, default=512)
     ap.add_argument('--fb', default='reward', choices=['reward', 'bfs', 'none']); ap.add_argument('--obs', default='window', choices=['none', 'window', 'ddpm'])
     ap.add_argument('--obs-t', type=int, default=400); ap.add_argument('--no-context', action='store_true')
+    ap.add_argument('--max-ctx', type=int, default=-1, help='cap on earlier attempts in context (train chains and eval window); -1 = none')
+    ap.add_argument('--out', default='', help='evalctx: suffix of eval_ctx<out>.npz')
     ap.add_argument('--no-stop', action='store_true', help='stop head not trained, never ends an attempt (rounds.NO_STOP)')
     ap.add_argument('--max-levels', type=int, default=0, help='smoke: use only the first N train / test levels')
     ap.add_argument('--eval-rounds', default='0,-1'); ap.add_argument('--attempts', type=int, default=8); ap.add_argument('--seeds', type=int, default=3)
