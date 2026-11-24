@@ -85,6 +85,34 @@ def overview(split_kind):
     print('wrote', out)
 
 
+SCHED = [('ddpm400', '8 rounds · 7.2k updates'), ('ddpm400r3', '3 rounds · 7.2k updates'), ('ddpm400r3x3', '3 rounds · 21.6k updates (3× longer)')]
+
+
+def schedules():
+    """DDPM t=400, one maze: the 8-round runs vs 3 rounds (same total updates) vs 3 rounds trained 3x longer -> dag_sched_<setting>.png.
+    rows = train starts | held-out goals, cols = schedule, lines = arm (3-round runs: 0..2 candidates in context)."""
+    for setting in ('interp30c', '11brc'):
+        _, _, sname, test_name = SETTINGS[setting]; cols = [(k, n, {a: z for a, z in load(setting, k).items() if k == 'ddpm400' or a != 'clean'}) for k, n in SCHED]
+        if not any(r for k, _, r in cols if k != 'ddpm400'):
+            continue
+        fig, axs = plt.subplots(2, 3, figsize=(12, 6.8), sharey=True, sharex=True, squeeze=False); top = 0
+        for c, (k, name, runs) in enumerate(cols):
+            for r, split in enumerate(('train', 'test')):
+                ax = axs[r, c]
+                if not runs:
+                    ax.text(.5, .5, 'running', ha='center', va='center', transform=ax.transAxes, color='.5')
+                top = max(top, draw(ax, runs, split))
+                if r == 0:
+                    ax.set_title(name, fontsize=10)
+                if c == 0:
+                    ax.set_ylabel(f'{"train starts" if split == "train" else test_name}\nsuccess', fontsize=9)
+                if r == 1:
+                    ax.set_xlabel('candidates in context')
+        finish(fig, axs, top, f'{sname}, DDPM t=400: fewer rounds, same updates · and 3× longer')
+        fig.tight_layout(rect=(0, .09, 1, 1)); out = REP / f'dag_sched_{setting}.png'; fig.savefig(out, dpi=130); plt.close(fig)
+        print('wrote', out)
+
+
 def main():
     summary = {}
     for setting, (pre, root, sname, test_name) in SETTINGS.items():
@@ -107,7 +135,7 @@ def main():
             finish(fig, axs, top, f'{sname}: {obs_name}')
             fig.tight_layout(rect=(0, .17 if len(splits) < 3 else .13, 1, 1)); out = REP / f'dag_{setting}_{obs}.png'; fig.savefig(out, dpi=130); plt.close(fig)
             print('wrote', out)
-    overview('train'); overview('heldout')
+    overview('train'); overview('heldout'); schedules()
     (REP / 'dag_summary.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 

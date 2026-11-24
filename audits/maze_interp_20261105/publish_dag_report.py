@@ -21,10 +21,12 @@ import wandb.apis.reports as wr
 RID, TITLE = 'maze-dag-hidden-goal', 'Maze · DAgger with a hidden goal: does success rise with more attempts in context?'
 SETS = [('interp30c', 'One maze · random split'), ('11brc', 'One maze · bottom-right quadrant held out'), ('pg', 'New mazes')]
 OBS = [('window', '7×7 window'), ('ddpm400', 'DDPM t=400')]
-want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png'}
+want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png',
+        'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png'}
 for s, _ in SETS:
     want.update({f'{s}/pos': R / f'pos_{s}.png', f'{s}/succmap': R / f'succmap_{s}.png'})
     want.update({f'{s}/{o}': R / f'dag_{s}_{o}.png' for o, _ in OBS})
+    want[f'{s}/sched'] = R / f'dag_sched_{s}.png'
 images = {k: p for k, p in want.items() if p.exists()}
 print('skipped (not rendered yet):', sorted(set(want) - set(images)))
 
@@ -55,13 +57,21 @@ blocks = [
        "**Arms:** context + reward feedback · context + BFS + goal offset (leaks the goal: positive control) · context, no feedback · "
        "trained without context · trained without context on the clean image (goal visible)."),
     md("**Takeaway.** Only the leak arm improves with more attempts in context. Reward feedback and no feedback do not beat training "
-       "without context. Even with the goal visible (grey dotted) success stays well below 1, and on the held-out quadrant it is "
-       "no better than with the goal hidden. Panels marked *running* fill in as runs finish."),
+       "without context. With the goal visible (grey dotted), every train failure is the stop head firing one step short of the "
+       "goal: with the stop head off it solves every train start. On the held-out quadrant it stays low either way (wrong moves). "
+       "Panels marked *running* fill in as runs finish."),
     md('# Overview'),
     grid(['overview/train', 'overview/heldout'], 22, {'overview/train': 'Train starts', 'overview/heldout': 'Held out'}),
+    md('# Action error to the expert'),
+    md("Squared error between the policy's mean action and the expert's move, at every point the policy visited (lower is better)."),
+    grid(['mse/heldout', 'mse/train'], 22, {'mse/heldout': 'Held out', 'mse/train': 'Train starts'}),
+    md('How the first attempt ends: reaches the goal, stop head fires elsewhere, or runs out of steps.'),
+    grid('mse/end', 16, {'mse/end': 'How attempts end'}),
 ]
 for s, name in SETS:
     blocks += [md(f'# {name}'), grid([f'{s}/{o}' for o, _ in OBS], 12, {f'{s}/{o}': on for o, on in OBS}),
+               *([md('DDPM t=400 with 3 rounds: same total updates, and 3× longer.'), grid(f'{s}/sched', 18, {f'{s}/sched': 'Schedules'})]
+                 if s != 'pg' else []),
                md('Train vs held-out positions, and success of the last attempt per goal cell (green = success, red = fail).'),
                grid([f'{s}/pos', f'{s}/succmap'], 16, {f'{s}/pos': 'Positions', f'{s}/succmap': 'Success by goal position'})]
 
