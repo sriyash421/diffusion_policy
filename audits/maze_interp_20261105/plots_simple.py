@@ -90,42 +90,34 @@ def overview(split_kind):
     print('wrote', out)
 
 
-SCHED = [('ddpm400', '8 rounds · 7.2k updates'), ('ddpm400r3', '3 rounds · 7.2k updates'), ('ddpm400r3x3', '3 rounds · 21.6k updates (3× longer)'),
-         ('ddpm400r8c2', '8 rounds, ≤ 2 in context · 7.2k updates')]
-
-
 class Trunc(dict):
-    """An eval_ctx npz cut to the first `a` attempts (the 8-round no-context run shown in the capped column)."""
+    """An eval_ctx npz cut to the first `a` attempts (8-round no-context / clean runs drawn next to the capped-context runs)."""
     def __init__(self, z, a):
         super().__init__({k: (z[k][:, :a] if k.endswith('_success') else z[k]) for k in z.files}); self.files = list(self)
 
 
-def schedules():
-    """DDPM t=400, one maze: the 8-round runs vs 3 rounds (same total updates) vs 3 rounds trained 3x longer -> dag_sched_<setting>.png.
-    rows = train starts | held-out goals, cols = schedule, lines = arm (3-round runs: 0..2 candidates in context)."""
-    for setting in ('interp30c', '11brc'):
-        _, _, sname, test_name = SETTINGS[setting]; cols = [(k, n, {a: z for a, z in load(setting, k).items() if k == 'ddpm400' or a != 'clean'}) for k, n in SCHED]
-        for k, _, runs in cols:   # capped runs: no no-context arm of their own; the 8-round one is the same training (context unused)
-            if k == 'ddpm400r8c2' and runs and 'noctx' not in runs and 'noctx' in cols[0][2]:
-                runs['noctx'] = Trunc(cols[0][2]['noctx'], 3)
-        if not any(r for k, _, r in cols if k != 'ddpm400'):
-            continue
-        fig, axs = plt.subplots(2, len(cols), figsize=(4 * len(cols), 6.8), sharey=True, sharex=True, squeeze=False); top = 0
-        for c, (k, name, runs) in enumerate(cols):
-            for r, split in enumerate(('train', 'test')):
-                ax = axs[r, c]
-                if not runs:
-                    ax.text(.5, .5, 'running', ha='center', va='center', transform=ax.transAxes, color='.5')
-                top = max(top, draw(ax, runs, split))
-                if r == 0:
-                    ax.set_title(name, fontsize=10)
-                if c == 0:
-                    ax.set_ylabel(f'{"train starts" if split == "train" else test_name}\nsuccess', fontsize=9)
-                if r == 1:
-                    ax.set_xlabel('candidates in context')
-        finish(fig, axs, top, f'{sname}, DDPM t=400: rounds, updates and context length')
-        fig.tight_layout(rect=(0, .09, 1, 1)); out = REP / f'dag_sched_{setting}.png'; fig.savefig(out, dpi=130); plt.close(fig)
-        print('wrote', out)
+def capped():
+    """8 DAgger rounds with at most 2 earlier attempts in context (tags <pre>_ddpm400r8c2_<arm>), DDPM t=400, one maze -> dag_r8c2.png.
+    rows = train starts | held-out goals, cols = setting; no-context / clean lines = the 8-round runs cut to 3 attempts."""
+    cols = [s for s in ('interp30c', '11brc') if load(s, 'ddpm400r8c2')]
+    if not cols:
+        return
+    fig, axs = plt.subplots(2, len(cols), figsize=(4.6 * len(cols), 6.6), sharex=True, squeeze=False); top = 0
+    for c, setting in enumerate(cols):
+        _, _, sname, test_name = SETTINGS[setting]; base = load(setting, 'ddpm400')
+        runs = {a: z for a, z in load(setting, 'ddpm400r8c2').items() if a not in ('noctx', 'clean')}
+        runs.update({a: Trunc(base[a], 3) for a in ('noctx', 'clean') if a in base})
+        for r, split in enumerate(('train', 'test')):
+            ax = axs[r, c]; top = max(top, draw(ax, runs, split)); ax.set_xticks(range(3)); ax.set_xlim(-.25, 2.25)
+            if r == 0:
+                ax.set_title(sname, fontsize=10)
+            if c == 0 or r == 1:
+                ax.set_ylabel(f'{"train starts" if split == "train" else test_name}\nsuccess', fontsize=9)
+            if r == 1:
+                ax.set_xlabel('candidates in context')
+    finish(fig, axs, top, '8 DAgger rounds, ≤ 2 earlier attempts in context · DDPM t=400')
+    fig.tight_layout(rect=(0, .1, 1, 1)); out = REP / 'dag_r8c2.png'; fig.savefig(out, dpi=130); plt.close(fig)
+    print('wrote', out)
 
 
 def main():
@@ -152,7 +144,7 @@ def main():
             print('wrote', out)
     overview('train'); overview('heldout')
     if not VAR:
-        schedules()
+        capped()
     (REP / f'dag_summary{SUF}.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 

@@ -24,11 +24,10 @@ OBS = [('window', '7×7 window'), ('ddpm400', 'DDPM t=400')]
 want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png',
         'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png',
         'ns/train': R / 'dag_overview_train_ns.png', 'ns/heldout': R / 'dag_overview_heldout_ns.png',
-        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png'}
+        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png', 'r8c2': R / 'dag_r8c2.png'}
 for s, _ in SETS:
     want.update({f'{s}/pos': R / f'pos_{s}.png', f'{s}/succmap': R / f'succmap_{s}.png'})
     want.update({f'{s}/{o}': R / f'dag_{s}_{o}.png' for o, _ in OBS})
-    want[f'{s}/sched'] = R / f'dag_sched_{s}.png'
 images = {k: p for k, p in want.items() if p.exists()}
 print('skipped (not rendered yet):', sorted(set(want) - set(images)))
 
@@ -70,11 +69,11 @@ blocks = [
     md('# Stop head off (retrained: attempts end at the goal or the step budget)'),
     grid(['ns/train', 'ns/heldout'], 22, {'ns/train': 'Train starts', 'ns/heldout': 'Held out'}),
     grid(['ns/mse_heldout', 'ns/end'], 16, {'ns/mse_heldout': 'Action error, held out', 'ns/end': 'How attempts end'}),
+    md('# 8 rounds, at most 2 earlier attempts in context'),
+    grid('r8c2', 18, {'r8c2': 'DDPM t=400'}),
 ]
 for s, name in SETS:
     blocks += [md(f'# {name}'), grid([f'{s}/{o}' for o, _ in OBS], 12, {f'{s}/{o}': on for o, on in OBS}),
-               *([grid(f'{s}/sched', 18, {f'{s}/sched': 'DAgger rounds, updates, context length'})]
-                 if s != 'pg' else []),
                md('Train vs held-out positions, and success of the last attempt per goal cell (green = success, red = fail).'),
                grid([f'{s}/pos', f'{s}/succmap'], 16, {f'{s}/pos': 'Positions', f'{s}/succmap': 'Success by goal position'})]
 
