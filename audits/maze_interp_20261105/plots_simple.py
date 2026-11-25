@@ -156,6 +156,44 @@ def capped():
     cap_figure('eval_ctx_n16.npz', 'best', 'dag_r8c2_n16_within.png', T + ' · 16 attempts: solved within n')
 
 
+def cap_vs_full():
+    """dag_r8c2_vs_full.png: the same 8 DAgger rounds (DDPM t=400) with every earlier attempt in context (solid, <pre>_ddpm400_<arm>,
+    eval_ctx.npz) vs only the last 2 (dashed, <pre>_ddpm400r8c2_<arm>, first 8 of the 16 attempts in eval_ctx_n16.npz).
+    rows = train starts | held out, cols = random split, quadrant held out, new mazes; colour = arm."""
+    cols = [s for s in ('interp30c', '11brc', 'pg')]
+    fig, axs = plt.subplots(2, 3, figsize=(12.6, 6.6), sharey=True, sharex=True)
+    for c, setting in enumerate(cols):
+        pre, root, sname, _ = SETTINGS[setting]
+        for r, split in enumerate(('train', 'test')):
+            ax = axs[r, c]
+            for a, _, colr, mk, _ in ARMS:
+                for part, f, ls, m in (('ddpm400', 'eval_ctx.npz', '-', mk), ('ddpm400r8c2', 'eval_ctx_n16.npz', '--', None)):
+                    if a == 'noctx' and part != 'ddpm400':
+                        continue
+                    pth = root / f'{pre}_{part}_{a}' / f
+                    if not pth.exists():
+                        continue
+                    y = np.load(pth)[f'{split}_success'][-1].astype(float).mean((1, 2))[:8]
+                    ax.plot(np.arange(1, len(y) + 1), y, ls=':' if a == 'noctx' else ls, marker=m, ms=3, color=colr, lw=1.8 if a != 'noctx' else 1.4)
+            ax.set_xticks(range(1, 9)); ax.set_xlim(.7, 8.3); ax.set_ylim(0, .6); ax.grid(alpha=.3)
+            if r == 0:
+                ax.set_title(sname, fontsize=10)
+            else:
+                ax.set_xlabel('attempt n')
+            if c == 0:
+                ax.set_ylabel(f'{"train starts" if split == "train" else "held out"}\nsuccess', fontsize=9)
+            elif split == 'test':
+                ax.set_ylabel(CAP_TEST[setting], fontsize=9)
+    h = [plt.Line2D([], [], color=colr, lw=1.8, ls=':' if a == 'noctx' else '-', marker=mk, ms=4) for a, _, colr, mk, _ in ARMS]
+    lab = [l for _, l, *_ in ARMS]
+    h += [plt.Line2D([], [], color='.3', lw=1.8, ls='-'), plt.Line2D([], [], color='.3', lw=1.8, ls='--')]
+    lab += ['solid: all earlier attempts in context', 'dashed: only the last 2 in context']
+    fig.legend(h, lab, loc='lower center', ncol=3, fontsize=9, frameon=False)
+    fig.suptitle('8 DAgger rounds · DDPM t=400 · all earlier attempts vs the last 2 in context', fontsize=11)
+    fig.tight_layout(rect=(0, .1, 1, 1)); out = REP / 'dag_r8c2_vs_full.png'; fig.savefig(out, dpi=130); plt.close(fig)
+    print('wrote', out)
+
+
 def main():
     summary = {}
     for setting, (pre, root, sname, test_name) in SETTINGS.items():
@@ -180,7 +218,7 @@ def main():
             print('wrote', out)
     overview('train'); overview('heldout')
     if not VAR:
-        capped()
+        capped(); cap_vs_full()
     (REP / f'dag_summary{SUF}.json').write_text(json.dumps(summary, indent=1)); print(json.dumps(summary, indent=1))
 
 

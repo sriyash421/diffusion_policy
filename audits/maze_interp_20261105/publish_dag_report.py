@@ -24,7 +24,7 @@ OBS = [('window', '7×7 window'), ('ddpm400', 'DDPM t=400')]
 want = {'overview/train': R / 'dag_overview_train.png', 'overview/heldout': R / 'dag_overview_heldout.png',
         'mse/heldout': R / 'dag_mse_overview_heldout.png', 'mse/train': R / 'dag_mse_overview_train.png', 'mse/end': R / 'dag_end.png',
         'ns/train': R / 'dag_overview_train_ns.png', 'ns/heldout': R / 'dag_overview_heldout_ns.png',
-        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png', 'r8c2': R / 'dag_r8c2.png', 'r8c2_n16': R / 'dag_r8c2_n16.png', 'r8c2_within': R / 'dag_r8c2_n16_within.png'}
+        'ns/mse_heldout': R / 'dag_mse_overview_heldout_ns.png', 'ns/end': R / 'dag_end_ns.png', 'r8c2': R / 'dag_r8c2.png', 'r8c2_n16': R / 'dag_r8c2_n16.png', 'r8c2_within': R / 'dag_r8c2_n16_within.png', 'r8c2_vs_full': R / 'dag_r8c2_vs_full.png'}
 for s, _ in SETS:
     want.update({f'{s}/pos': R / f'pos_{s}.png', f'{s}/succmap': R / f'succmap_{s}.png'})
     want.update({f'{s}/{o}': R / f'dag_{s}_{o}.png' for o, _ in OBS})
@@ -63,6 +63,7 @@ blocks = [
     md('# 8 rounds, at most 2 earlier attempts in context'),
     grid('r8c2', 18, {'r8c2': '3 attempts'}),
     grid('r8c2_n16', 18, {'r8c2_n16': '16 attempts, context = last 2'}),
+    grid('r8c2_vs_full', 18, {'r8c2_vs_full': 'All earlier attempts vs the last 2 in context'}),
 ]
 for s, name in SETS:
     blocks += [md(f'# {name}'), grid([f'{s}/{o}' for o, _ in OBS], 12, {f'{s}/{o}': on for o, on in OBS}),
