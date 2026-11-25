@@ -52,15 +52,6 @@ def grid(keys, h, titles=None):
 
 md = wr.MarkdownBlock
 blocks = [
-    md("**Setup.** Continuous maze, goal hidden from the policy (7×7 window around the agent, or the whole image DDPM-noised). "
-       "ST transformer trained with DAgger: the student makes attempts, the expert labels every point it visited. "
-       "**x** = earlier attempts in context, **y** = success of the next attempt, final-round policy.  \n"
-       "**Arms:** context + reward feedback · context + BFS + goal offset (leaks the goal: positive control) · context, no feedback · "
-       "trained without context · trained without context on the clean image (goal visible)."),
-    md("**Takeaway.** Only the leak arm improves with more attempts in context. Reward feedback and no feedback do not beat training "
-       "without context. With the goal visible (grey dotted), every train failure is the stop head firing one step short of the "
-       "goal: with the stop head off it solves every train start. On the held-out quadrant it stays low either way (wrong moves). "
-       "Panels marked *running* fill in as runs finish."),
     md('# Overview'),
     grid(['overview/train', 'overview/heldout'], 22, {'overview/train': 'Train starts', 'overview/heldout': 'Held out'}),
     md('# Action error to the expert'),
